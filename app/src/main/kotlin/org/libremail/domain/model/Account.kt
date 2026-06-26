@@ -15,4 +15,18 @@ data class Account(
     val email: String,
     val displayName: String,
     val authType: AuthType,
-)
+    val imap: ServerConfig,
+    val smtp: ServerConfig,
+) {
+    companion object {
+        /** A Gmail account with Google's standard IMAP/SMTP endpoints. */
+        fun gmail(email: String, displayName: String = email): Account = Account(
+            id = "gmail:$email",
+            email = email,
+            displayName = displayName.ifBlank { email },
+            authType = AuthType.OAUTH_GMAIL,
+            imap = ServerConfig("imap.gmail.com", 993, MailSecurity.SSL_TLS),
+            smtp = ServerConfig("smtp.gmail.com", 465, MailSecurity.SSL_TLS),
+        )
+    }
+}

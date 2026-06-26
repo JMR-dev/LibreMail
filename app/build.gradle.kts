@@ -18,6 +18,15 @@ val secrets = Properties().apply {
 }
 val gmailOAuthClientId: String = secrets.getProperty("GMAIL_OAUTH_CLIENT_ID", "")
 
+// For a Google installed-app OAuth client, AppAuth's redirect is the reversed client
+// id as a custom URI scheme. Fall back to a placeholder so the manifest stays valid
+// until a real client id is set in secrets.properties.
+val gmailRedirectScheme: String = if (gmailOAuthClientId.endsWith(".apps.googleusercontent.com")) {
+    "com.googleusercontent.apps." + gmailOAuthClientId.removeSuffix(".apps.googleusercontent.com")
+} else {
+    "org.libremail.oauth"
+}
+
 android {
     namespace = "org.libremail"
     compileSdk = 37
@@ -32,8 +41,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "GMAIL_OAUTH_CLIENT_ID", "\"$gmailOAuthClientId\"")
-        // AppAuth redirect scheme (consumed when OAuth is wired up in a later increment).
-        manifestPlaceholders["appAuthRedirectScheme"] = "org.libremail.app"
+        buildConfigField("String", "GMAIL_OAUTH_REDIRECT_URI", "\"$gmailRedirectScheme:/oauth2redirect\"")
+        // AppAuth captures the OAuth redirect via this custom scheme.
+        manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
     }
 
     buildTypes {
@@ -74,6 +84,10 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
 
+    // Email transport (IMAP/SMTP) + OAuth
+    implementation(libs.angus.mail)
+    implementation(libs.appauth)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -96,6 +110,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
+    testImplementation(libs.greenmail)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

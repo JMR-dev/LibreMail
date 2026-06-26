@@ -31,8 +31,26 @@
     <string name="account_setup_gmail">Sign in with Google</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose how you want to connect your mailbox.</string>
+    <string name="account_gmail_needs_client_id">Add your Google OAuth client ID first — see the README</string>
+
+    <!-- Manual IMAP/SMTP setup -->
+    <string name="manual_setup_title">IMAP / SMTP</string>
+    <string name="manual_email">Email address</string>
+    <string name="manual_password">Password or app password</string>
+    <string name="manual_incoming">Incoming mail (IMAP)</string>
+    <string name="manual_outgoing">Outgoing mail (SMTP)</string>
+    <string name="manual_imap_server">IMAP server</string>
+    <string name="manual_smtp_server">SMTP server</string>
+    <string name="manual_imap_port">IMAP port</string>
+    <string name="manual_smtp_port">SMTP port</string>
+    <string name="manual_imap_security">IMAP security</string>
+    <string name="manual_smtp_security">SMTP security</string>
+    <string name="manual_test_and_add">Test &amp; add account</string>
 
     <!-- Settings -->
+    <string name="settings_accounts">Accounts</string>
+    <string name="settings_no_accounts">No accounts yet</string>
+    <string name="account_remove">Remove</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_dynamic_color">Use wallpaper colors</string>
     <string name="settings_dynamic_color_summary">Material You dynamic theming (Android 12+)</string>

@@ -5,9 +5,11 @@ A free and open-source email client for Android, built with Kotlin, Jetpack
 Compose and Material 3 (Material You). LibreMail aims for a friendly default
 experience with power-user features tucked under an **Advanced Settings** group.
 
-> Status: **early scaffold.** The app builds and runs with a themed, navigable
-> shell and the full architecture skeleton in place. Account sign-in, IMAP/SMTP
-> sync and sending are implemented in subsequent increments.
+> Status: **in development.** The app builds and runs with a Material You shell,
+> and **account setup is implemented** — Gmail OAuth (AppAuth, PKCE) and generic
+> IMAP/SMTP, each with a live "test connection" that logs in and lists folders,
+> and credentials encrypted via the Android Keystore. IMAP sync and sending land
+> in upcoming increments.
 
 ## Features (target MVP)
 

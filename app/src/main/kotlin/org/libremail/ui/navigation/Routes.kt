@@ -7,6 +7,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val COMPOSE = "compose"
     const val ACCOUNT_SETUP = "account_setup"
+    const val MANUAL_SETUP = "manual_setup"
 
     const val READER_ARG_ID = "messageId"
     const val READER_PATTERN = "reader/{$READER_ARG_ID}"

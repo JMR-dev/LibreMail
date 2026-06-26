@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +44,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
         bottomBar = { LibreMailBottomBar(current = TopDest.SETTINGS, onSelect = onSelectTab) },
@@ -53,6 +55,22 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            SectionHeader(stringResource(R.string.settings_accounts))
+            if (accounts.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.settings_no_accounts),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else {
+                accounts.forEach { account ->
+                    AccountRow(email = account.email, onRemove = { viewModel.removeAccount(account.id) })
+                }
+            }
+            ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
+            HorizontalDivider()
+
             SectionHeader(stringResource(R.string.settings_appearance))
             SwitchRow(
                 title = stringResource(R.string.settings_dynamic_color),
@@ -60,8 +78,8 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::setDynamicColor,
                 subtitle = stringResource(R.string.settings_dynamic_color_summary),
             )
-            ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
             HorizontalDivider()
+
             AdvancedHeader(expanded = state.advancedExpanded, onToggle = viewModel::toggleAdvanced)
             AnimatedVisibility(visible = state.advancedExpanded) {
                 Column {
@@ -83,6 +101,19 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AccountRow(email: String, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(email, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRemove) { Text(stringResource(R.string.account_remove)) }
     }
 }
 

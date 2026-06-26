@@ -2,12 +2,18 @@
 package org.libremail.ui.settings
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import org.libremail.domain.model.Account
+import org.libremail.domain.repository.AccountRepository
 
 data class SettingsUiState(
     val dynamicColor: Boolean = true,
@@ -18,9 +24,19 @@ data class SettingsUiState(
 )
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val accountRepository: AccountRepository,
+) : ViewModel() {
+
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
+
+    val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun removeAccount(id: String) {
+        viewModelScope.launch { accountRepository.deleteAccount(id) }
+    }
 
     fun setDynamicColor(value: Boolean) = _state.update { it.copy(dynamicColor = value) }
     fun toggleAdvanced() = _state.update { it.copy(advancedExpanded = !it.advancedExpanded) }

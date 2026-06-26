@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import org.libremail.R
 import org.libremail.ui.accountsetup.AccountSetupScreen
+import org.libremail.ui.accountsetup.ManualSetupScreen
 import org.libremail.ui.compose.ComposeScreen
 import org.libremail.ui.mailbox.MailboxScreen
 import org.libremail.ui.navigation.Routes
@@ -63,7 +64,25 @@ fun LibreMailApp() {
             )
         }
         composable(Routes.ACCOUNT_SETUP) {
-            AccountSetupScreen(onBack = navController::popBackStack)
+            AccountSetupScreen(
+                onBack = navController::popBackStack,
+                onManualSetup = { navController.navigate(Routes.MANUAL_SETUP) },
+                onAccountAdded = {
+                    navController.navigate(Routes.MAILBOX) {
+                        popUpTo(Routes.MAILBOX) { inclusive = true }
+                    }
+                },
+            )
+        }
+        composable(Routes.MANUAL_SETUP) {
+            ManualSetupScreen(
+                onBack = navController::popBackStack,
+                onAccountAdded = {
+                    navController.navigate(Routes.MAILBOX) {
+                        popUpTo(Routes.MAILBOX) { inclusive = true }
+                    }
+                },
+            )
         }
     }
 }
