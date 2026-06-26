@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+package org.libremail.di
+
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+import org.libremail.data.repository.MailRepositoryImpl
+import org.libremail.domain.repository.MailRepository
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepositoryModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindMailRepository(impl: MailRepositoryImpl): MailRepository
+}

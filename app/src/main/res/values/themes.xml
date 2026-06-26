@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  Compose draws the entire UI and supplies the Material 3 color scheme, so this
+  framework theme is only the borderless window shell shown before the first frame.
+  enableEdgeToEdge() makes the system bars transparent; the night variant lives in
+  res/values-night/themes.xml.
+-->
+<resources>
+    <style name="Theme.LibreMail" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">?android:attr/colorBackground</item>
+    </style>
+</resources>

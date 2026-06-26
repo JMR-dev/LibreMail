@@ -1,0 +1,19 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Envelope body (white, within the adaptive-icon safe zone) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,42 L78,42 A4,4 0 0 1 82,46 L82,66 A4,4 0 0 1 78,70 L30,70 A4,4 0 0 1 26,66 L26,46 A4,4 0 0 1 30,42 Z" />
+    <!-- Flap -->
+    <path
+        android:strokeColor="#0B57D0"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
+        android:pathData="M28,46 L54,62 L80,46" />
+</vector>
