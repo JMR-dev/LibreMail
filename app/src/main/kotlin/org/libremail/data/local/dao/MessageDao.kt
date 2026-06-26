@@ -5,17 +5,28 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import org.libremail.data.local.entity.MessageEntity
 
 @Dao
-interface MessageDao {
+abstract class MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestampMillis DESC")
-    fun observeAll(): Flow<List<MessageEntity>>
+    abstract fun observeAll(): Flow<List<MessageEntity>>
 
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
-    suspend fun getById(id: String): MessageEntity?
+    abstract suspend fun getById(id: String): MessageEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(messages: List<MessageEntity>)
+    abstract suspend fun upsertAll(messages: List<MessageEntity>)
+
+    @Query("DELETE FROM messages WHERE accountId = :accountId")
+    abstract suspend fun deleteByAccount(accountId: String)
+
+    /** Replace an account's cached messages with a freshly fetched set, atomically. */
+    @Transaction
+    open suspend fun replaceAccountMessages(accountId: String, messages: List<MessageEntity>) {
+        deleteByAccount(accountId)
+        upsertAll(messages)
+    }
 }

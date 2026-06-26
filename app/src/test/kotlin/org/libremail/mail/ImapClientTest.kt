@@ -2,7 +2,9 @@
 package org.libremail.mail
 
 import com.icegreen.greenmail.util.GreenMail
+import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
@@ -19,7 +21,7 @@ class ImapClientTest {
 
     @Before
     fun setUp() {
-        greenMail = GreenMail(ServerSetupTest.IMAP)
+        greenMail = GreenMail(ServerSetupTest.SMTP_IMAP)
         greenMail.start()
         greenMail.setUser("alice@example.org", "secret")
     }
@@ -29,7 +31,7 @@ class ImapClientTest {
         greenMail.stop()
     }
 
-    private fun params(secret: String) = ImapConnectionParams(
+    private fun params(secret: String = "secret") = ImapConnectionParams(
         host = "127.0.0.1",
         port = greenMail.imap.port,
         security = MailSecurity.NONE,
@@ -40,14 +42,25 @@ class ImapClientTest {
 
     @Test
     fun `listFolders returns INBOX for a valid login`() = runTest {
-        val folders = client.listFolders(params(secret = "secret"))
-        assertTrue(folders.any { it.equals("INBOX", ignoreCase = true) }, "folders=$folders")
+        assertTrue(client.listFolders(params()).any { it.equals("INBOX", ignoreCase = true) })
     }
 
     @Test
     fun `listFolders fails for a wrong password`() = runTest {
-        assertFailsWith<Exception> {
-            client.listFolders(params(secret = "wrong-password"))
-        }
+        assertFailsWith<Exception> { client.listFolders(params(secret = "wrong-password")) }
+    }
+
+    @Test
+    fun `fetchRecentInbox returns delivered messages newest first`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "First subject", "Body one")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "carol@example.org", "Second subject", "Body two")
+        greenMail.waitForIncomingEmail(2)
+
+        val messages = client.fetchRecentInbox(params(), limit = 50)
+
+        assertEquals(2, messages.size)
+        assertEquals("Second subject", messages.first().subject)
+        assertEquals(setOf("First subject", "Second subject"), messages.map { it.subject }.toSet())
+        assertEquals("bob@example.org", messages.first { it.subject == "First subject" }.senderEmail)
     }
 }

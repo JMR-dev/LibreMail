@@ -11,25 +11,22 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.entity.MessageEntity
-import org.libremail.data.sample.SampleData
 
 class MailRepositoryImplTest {
 
     private val messageDao = mockk<MessageDao>()
 
     @Test
-    fun `observeMessages emits sample data when cache is empty`() = runTest {
+    fun `observeMessages is empty when the cache is empty`() = runTest {
         every { messageDao.observeAll() } returns flowOf(emptyList())
-        val repository = MailRepositoryImpl(messageDao)
-
-        repository.observeMessages().test {
-            assertEquals(SampleData.messages, awaitItem())
+        MailRepositoryImpl(messageDao).observeMessages().test {
+            assertTrue(awaitItem().isEmpty())
             awaitComplete()
         }
     }
 
     @Test
-    fun `observeMessages maps cached entities when present`() = runTest {
+    fun `observeMessages maps cached entities`() = runTest {
         val entity = MessageEntity(
             id = "1",
             accountId = "a",
@@ -43,9 +40,7 @@ class MailRepositoryImplTest {
             isStarred = false,
         )
         every { messageDao.observeAll() } returns flowOf(listOf(entity))
-        val repository = MailRepositoryImpl(messageDao)
-
-        repository.observeMessages().test {
+        MailRepositoryImpl(messageDao).observeMessages().test {
             val items = awaitItem()
             assertEquals(1, items.size)
             assertEquals("Ada", items.first().sender)

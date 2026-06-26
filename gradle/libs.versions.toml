@@ -21,6 +21,7 @@ espresso = "3.6.1"
 turbine = "1.2.1"
 mockk = "1.14.11"
 greenmail = "2.1.9"
+errorprone = "2.50.0"
 
 [libraries]
 # AndroidX core / lifecycle / activity / navigation
@@ -44,8 +45,12 @@ androidx-compose-material-icons-core = { group = "androidx.compose.material", na
 
 # Hilt (DI)
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+# Pulled onto the compile classpath because Hilt/Dagger generated code references it.
+error-prone-annotations = { group = "com.google.errorprone", name = "error_prone_annotations", version.ref = "errorprone" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+androidx-hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltNavigationCompose" }
+androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltNavigationCompose" }
 
 # Room (local cache)
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }

@@ -79,6 +79,26 @@ class GmailAuthManager @Inject constructor(
         }
     }
 
+    /** Refreshes the access token if needed (using the stored AuthState) for IMAP/SMTP XOAUTH2. */
+    suspend fun freshAccessToken(authStateJson: String): FreshToken {
+        val authState = AuthState.jsonDeserialize(authStateJson)
+        val service = AuthorizationService(context)
+        try {
+            val accessToken = suspendCancellableCoroutine { continuation ->
+                authState.performActionWithFreshTokens(service) { token, _, error ->
+                    if (token != null) {
+                        continuation.resume(token)
+                    } else {
+                        continuation.resumeWithException(error ?: IllegalStateException("Token refresh failed"))
+                    }
+                }
+            }
+            return FreshToken(accessToken = accessToken, authStateJson = authState.jsonSerializeString())
+        } finally {
+            service.dispose()
+        }
+    }
+
     private fun emailFromIdToken(idToken: String?): String? {
         if (idToken.isNullOrBlank()) return null
         return runCatching {

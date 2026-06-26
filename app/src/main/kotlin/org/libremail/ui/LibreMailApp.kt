@@ -45,6 +45,7 @@ fun LibreMailApp() {
             MailboxScreen(
                 onOpenMessage = { id -> navController.navigate(Routes.reader(id)) },
                 onCompose = { navController.navigate(Routes.COMPOSE) },
+                onAddAccount = { navController.navigate(Routes.ACCOUNT_SETUP) },
                 onSelectTab = navController::navigateTab,
             )
         }

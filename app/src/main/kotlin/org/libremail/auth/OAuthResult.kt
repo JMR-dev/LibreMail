@@ -8,3 +8,9 @@ data class OAuthResult(
     /** Serialized [net.openid.appauth.AuthState], stored encrypted for later token refresh. */
     val authStateJson: String,
 )
+
+/** A freshly-refreshed access token plus the (possibly updated) AuthState to persist. */
+data class FreshToken(
+    val accessToken: String,
+    val authStateJson: String,
+)
