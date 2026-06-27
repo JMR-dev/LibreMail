@@ -3,6 +3,7 @@ package org.libremail.ui.compose
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -52,6 +53,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collect
 import org.libremail.R
 import org.libremail.domain.model.Account
 
@@ -75,7 +77,8 @@ fun ComposeScreen(
             PackageManager.PERMISSION_GRANTED
         if (granted) viewModel.onContactsPermission(true) else permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
     }
-    LaunchedEffect(state.sent) { if (state.sent) onBack() }
+    LaunchedEffect(Unit) { viewModel.finished.collect { onBack() } }
+    BackHandler { viewModel.onExit() }
     LaunchedEffect(state.error) {
         state.error?.let {
             snackbarHostState.showSnackbar(it)
@@ -88,7 +91,7 @@ fun ComposeScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.title_compose)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = viewModel::onExit) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },

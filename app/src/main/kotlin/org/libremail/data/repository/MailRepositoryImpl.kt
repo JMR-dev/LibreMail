@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
+import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.OutboxEntity
@@ -21,6 +22,7 @@ import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
@@ -34,6 +36,7 @@ class MailRepositoryImpl @Inject constructor(
     private val accountDao: AccountDao,
     private val attachmentDao: AttachmentDao,
     private val outboxDao: OutboxDao,
+    private val draftDao: DraftDao,
     private val imapClient: ImapClient,
     private val connectionFactory: MailConnectionFactory,
     private val sendScheduler: SendScheduler,
@@ -103,6 +106,15 @@ class MailRepositoryImpl @Inject constructor(
         )
         sendScheduler.sendNow()
     }
+
+    override fun observeDrafts(): Flow<List<Draft>> =
+        draftDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun getDraft(id: String): Draft? = draftDao.getById(id)?.toDomain()
+
+    override suspend fun saveDraft(draft: Draft) = draftDao.upsert(draft.toEntity())
+
+    override suspend fun deleteDraft(id: String) = draftDao.delete(id)
 
     /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
     private fun saveToCache(attachment: DownloadedAttachment): File {

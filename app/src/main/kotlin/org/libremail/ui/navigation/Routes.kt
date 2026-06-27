@@ -9,6 +9,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val ACCOUNT_SETUP = "account_setup"
     const val MANUAL_SETUP = "manual_setup"
+    const val DRAFTS = "drafts"
 
     const val READER_ARG_ID = "messageId"
     const val READER_PATTERN = "reader/{$READER_ARG_ID}"
@@ -17,7 +18,10 @@ object Routes {
     const val COMPOSE_ARG_TO = "to"
     const val COMPOSE_ARG_SUBJECT = "subject"
     const val COMPOSE_ARG_FROM = "from"
-    const val COMPOSE_PATTERN = "compose?to={$COMPOSE_ARG_TO}&subject={$COMPOSE_ARG_SUBJECT}&from={$COMPOSE_ARG_FROM}"
+    const val COMPOSE_ARG_DRAFT = "draft"
+    const val COMPOSE_PATTERN =
+        "compose?to={$COMPOSE_ARG_TO}&subject={$COMPOSE_ARG_SUBJECT}&from={$COMPOSE_ARG_FROM}&draft={$COMPOSE_ARG_DRAFT}"
     fun compose(to: String = "", subject: String = "", from: String = ""): String =
         "compose?to=${Uri.encode(to)}&subject=${Uri.encode(subject)}&from=${Uri.encode(from)}"
+    fun composeDraft(draftId: String): String = "compose?draft=${Uri.encode(draftId)}"
 }

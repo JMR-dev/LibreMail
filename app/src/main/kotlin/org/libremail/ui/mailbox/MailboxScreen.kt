@@ -66,6 +66,7 @@ import org.libremail.domain.model.Message
 fun MailboxScreen(
     onOpenMessage: (String) -> Unit,
     onCompose: () -> Unit,
+    onOpenDrafts: () -> Unit,
     onAddAccount: () -> Unit,
     onSelectTab: (org.libremail.ui.TopDest) -> Unit,
     viewModel: MailboxViewModel = hiltViewModel(),
@@ -74,6 +75,7 @@ fun MailboxScreen(
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
+    val draftCount by viewModel.draftCount.collectAsStateWithLifecycle()
     val searchActive by viewModel.searchActive.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
@@ -144,6 +146,10 @@ fun MailboxScreen(
                             onSelect = viewModel::selectAccount,
                         )
                     }
+                    if (draftCount > 0 && !searchActive) {
+                        DraftsEntry(count = draftCount, onClick = onOpenDrafts)
+                        HorizontalDivider()
+                    }
                     PullToRefreshBox(
                         isRefreshing = isRefreshing,
                         onRefresh = viewModel::refresh,
@@ -198,6 +204,25 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
         },
     )
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+}
+
+@Composable
+private fun DraftsEntry(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(16.dp))
+        Text(
+            text = stringResource(R.string.drafts_count, count),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 @Composable

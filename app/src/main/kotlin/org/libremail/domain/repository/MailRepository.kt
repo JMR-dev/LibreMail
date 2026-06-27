@@ -4,6 +4,7 @@ package org.libremail.domain.repository
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutgoingMessage
 
@@ -30,4 +31,10 @@ interface MailRepository {
     suspend fun deleteMessage(id: String): Result<Unit>
 
     suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit>
+
+    /** Drafts: composed-but-unsent messages saved for later. */
+    fun observeDrafts(): Flow<List<Draft>>
+    suspend fun getDraft(id: String): Draft?
+    suspend fun saveDraft(draft: Draft)
+    suspend fun deleteDraft(id: String)
 }

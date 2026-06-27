@@ -5,18 +5,22 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.contacts.ContactSuggestion
 import org.libremail.contacts.ContactsRepository
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.Draft
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
@@ -31,7 +35,6 @@ data class ComposeUiState(
     val suggestions: List<ContactSuggestion> = emptyList(),
     val contactsAllowed: Boolean = false,
     val sending: Boolean = false,
-    val sent: Boolean = false,
     val error: String? = null,
 )
 
@@ -42,6 +45,9 @@ class ComposeViewModel @Inject constructor(
     accountRepository: AccountRepository,
     private val contactsRepository: ContactsRepository,
 ) : ViewModel() {
+
+    private val draftId: String? =
+        savedStateHandle.get<String>(Routes.COMPOSE_ARG_DRAFT)?.takeIf { it.isNotBlank() }
 
     private val _state = MutableStateFlow(
         ComposeUiState(
@@ -55,7 +61,29 @@ class ComposeViewModel @Inject constructor(
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Emitted when the screen should close — after the draft is saved/deleted, or after sending. */
+    private val _finished = Channel<Unit>(Channel.BUFFERED)
+    val finished = _finished.receiveAsFlow()
+
     private var searchJob: Job? = null
+
+    init {
+        if (draftId != null) {
+            viewModelScope.launch {
+                mailRepository.getDraft(draftId)?.let { draft ->
+                    _state.update {
+                        it.copy(
+                            to = draft.to,
+                            cc = draft.cc,
+                            subject = draft.subject,
+                            body = draft.body,
+                            fromAccountId = draft.accountId ?: it.fromAccountId,
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     fun onToChange(value: String) {
         _state.update { it.copy(to = value) }
@@ -89,6 +117,33 @@ class ComposeViewModel @Inject constructor(
         }
     }
 
+    /** Leaving the screen: keep a draft if there's anything worth keeping, then close. */
+    fun onExit() {
+        viewModelScope.launch {
+            saveOrDeleteDraft()
+            _finished.send(Unit)
+        }
+    }
+
+    private suspend fun saveOrDeleteDraft() {
+        val s = _state.value
+        val hasContent = s.to.isNotBlank() || s.cc.isNotBlank() || s.subject.isNotBlank() || s.body.isNotBlank()
+        when {
+            hasContent -> mailRepository.saveDraft(
+                Draft(
+                    id = draftId ?: UUID.randomUUID().toString(),
+                    accountId = s.fromAccountId,
+                    to = s.to,
+                    cc = s.cc,
+                    subject = s.subject,
+                    body = s.body,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+            draftId != null -> mailRepository.deleteDraft(draftId) // an existing draft was emptied out
+        }
+    }
+
     fun send() {
         val s = _state.value
         val account = accounts.value.firstOrNull { it.id == s.fromAccountId } ?: accounts.value.firstOrNull()
@@ -100,7 +155,11 @@ class ComposeViewModel @Inject constructor(
                 mailRepository.sendMessage(
                     OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body),
                 ).fold(
-                    onSuccess = { _state.update { it.copy(sending = false, sent = true) } },
+                    onSuccess = {
+                        draftId?.let { mailRepository.deleteDraft(it) }
+                        _state.update { it.copy(sending = false) }
+                        _finished.send(Unit)
+                    },
                     onFailure = { e -> _state.update { it.copy(sending = false, error = e.message ?: "Could not send") } },
                 )
             }

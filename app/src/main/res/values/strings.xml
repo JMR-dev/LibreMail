@@ -41,6 +41,14 @@
     <string name="compose_body">Message</string>
     <string name="compose_no_account">Add an account before composing</string>
 
+    <!-- Drafts -->
+    <string name="drafts_title">Drafts</string>
+    <string name="drafts_empty">No drafts</string>
+    <string name="drafts_count">Drafts (%1$d)</string>
+    <string name="draft_no_subject">(no subject)</string>
+    <string name="draft_no_recipient">(no recipient)</string>
+    <string name="draft_delete">Delete draft</string>
+
     <!-- Reader -->
     <string name="reader_reply">Reply</string>
     <string name="attachments_title">Attachments</string>

@@ -3,10 +3,12 @@ package org.libremail.data.local
 
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AttachmentEntity
+import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.Draft
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
@@ -96,6 +98,26 @@ internal fun AttachmentPart.toEntity(messageId: String): AttachmentEntity = Atta
     filename = filename,
     mimeType = mimeType,
     sizeBytes = sizeBytes,
+)
+
+internal fun DraftEntity.toDomain(): Draft = Draft(
+    id = id,
+    accountId = accountId,
+    to = toAddresses,
+    cc = ccAddresses,
+    subject = subject,
+    body = body,
+    updatedAt = updatedAt,
+)
+
+internal fun Draft.toEntity(): DraftEntity = DraftEntity(
+    id = id,
+    accountId = accountId,
+    toAddresses = to,
+    ccAddresses = cc,
+    subject = subject,
+    body = body,
+    updatedAt = updatedAt,
 )
 
 private fun String.toMailSecurity(): MailSecurity =

@@ -21,6 +21,7 @@ class MailRepositoryImplTest {
         accountDao = mockk(),
         attachmentDao = mockk(),
         outboxDao = mockk(),
+        draftDao = mockk(),
         imapClient = mockk(),
         connectionFactory = mockk(),
         sendScheduler = mockk(),

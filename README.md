@@ -12,7 +12,7 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > rendered in a hardened WebView (JavaScript off, remote images blocked by default),
 > with mark-read, star, and delete; and **composing** — a compose screen with device-
 > contacts autocomplete that sends via a reliable background **outbox** (WorkManager-queued
-> and retried), plus reply; **on-device new-mail
+> and retried), plus reply and **drafts** saved for later; **on-device new-mail
 > notifications** (no push service) with persisted settings; **instant push** via a
 > foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
 > system viewer; **multiple accounts** — a unified inbox with per-account filtering; and
