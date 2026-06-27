@@ -25,3 +25,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         )
     }
 }
+
+/** v4 -> v5: add the outbox table for queued outgoing mail (preserves existing data). */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `outbox` (" +
+                "`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `toAddresses` TEXT NOT NULL, " +
+                "`ccAddresses` TEXT NOT NULL, `subject` TEXT NOT NULL, `body` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`id`))",
+        )
+    }
+}

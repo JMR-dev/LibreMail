@@ -12,10 +12,12 @@ import javax.inject.Singleton
 import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
+import org.libremail.data.local.MIGRATION_4_5
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.MessageDao
+import org.libremail.data.local.dao.OutboxDao
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -25,7 +27,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): LibreMailDatabase =
         Room.databaseBuilder(context, LibreMailDatabase::class.java, "libremail.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             // Safety net for unforeseen schema jumps during early development.
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
@@ -41,4 +43,7 @@ object DatabaseModule {
 
     @Provides
     fun provideAttachmentDao(database: LibreMailDatabase): AttachmentDao = database.attachmentDao()
+
+    @Provides
+    fun provideOutboxDao(database: LibreMailDatabase): OutboxDao = database.outboxDao()
 }

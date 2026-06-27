@@ -20,9 +20,10 @@ class MailRepositoryImplTest {
         messageDao = messageDao,
         accountDao = mockk(),
         attachmentDao = mockk(),
+        outboxDao = mockk(),
         imapClient = mockk(),
-        smtpSender = mockk(),
         connectionFactory = mockk(),
+        sendScheduler = mockk(),
     )
 
     @Test

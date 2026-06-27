@@ -5,6 +5,7 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
 import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -12,9 +13,12 @@ import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.MessageDao
+import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.sync.MailConnectionFactory
+import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
@@ -22,7 +26,6 @@ import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.DownloadedAttachment
 import org.libremail.mail.ImapClient
-import org.libremail.mail.SmtpSender
 
 @Singleton
 class MailRepositoryImpl @Inject constructor(
@@ -30,9 +33,10 @@ class MailRepositoryImpl @Inject constructor(
     private val messageDao: MessageDao,
     private val accountDao: AccountDao,
     private val attachmentDao: AttachmentDao,
+    private val outboxDao: OutboxDao,
     private val imapClient: ImapClient,
-    private val smtpSender: SmtpSender,
     private val connectionFactory: MailConnectionFactory,
+    private val sendScheduler: SendScheduler,
 ) : MailRepository {
 
     override fun observeMessages(): Flow<List<Message>> =
@@ -83,9 +87,21 @@ class MailRepositoryImpl @Inject constructor(
         Unit
     }
 
+    /** Queues the message in the outbox and triggers the send worker; delivery happens in the background. */
     override suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit> = runCatching {
-        val account = accountDao.getById(outgoing.accountId)?.toDomain() ?: error("Account not found")
-        smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = outgoing)
+        requireNotNull(accountDao.getById(outgoing.accountId)) { "Account not found" }
+        outboxDao.insert(
+            OutboxEntity(
+                id = UUID.randomUUID().toString(),
+                accountId = outgoing.accountId,
+                toAddresses = outgoing.to,
+                ccAddresses = outgoing.cc,
+                subject = outgoing.subject,
+                body = outgoing.body,
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        sendScheduler.sendNow()
     }
 
     /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
