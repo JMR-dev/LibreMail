@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -21,7 +24,7 @@ import org.libremail.domain.repository.MailRepository
 
 @HiltViewModel
 class MailboxViewModel @Inject constructor(
-    mailRepository: MailRepository,
+    private val mailRepository: MailRepository,
     accountRepository: AccountRepository,
     private val mailSyncer: MailSyncer,
 ) : ViewModel() {
@@ -73,6 +76,15 @@ class MailboxViewModel @Inject constructor(
                 val selected = _selectedAccountId.value
                 if (selected != null && list.none { it.id == selected }) _selectedAccountId.value = null
             }
+        }
+        // Server-side search: fetch matches into the cache; the list filter then surfaces them.
+        viewModelScope.launch {
+            _searchQuery
+                .debounce(400L)
+                .map { it.trim() }
+                .filter { it.length >= 2 }
+                .distinctUntilChanged()
+                .collect { query -> mailRepository.searchServer(query) }
         }
     }
 

@@ -5,6 +5,7 @@ import android.util.Log
 import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
+import jakarta.mail.Message
 import jakarta.mail.Multipart
 import jakarta.mail.Part
 import jakarta.mail.Session
@@ -15,6 +16,10 @@ import jakarta.mail.event.MessageCountEvent
 import jakarta.mail.internet.ContentType
 import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeUtility
+import jakarta.mail.search.BodyTerm
+import jakarta.mail.search.FromStringTerm
+import jakarta.mail.search.OrTerm
+import jakarta.mail.search.SubjectTerm
 import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,19 +99,34 @@ class ImapClient @Inject constructor() {
                         },
                     )
                     val uidFolder = inbox as UIDFolder
-                    messages.reversed().map { message ->
-                        val from = message.from?.firstOrNull() as? InternetAddress
-                        FetchedMessage(
-                            uid = uidFolder.getUID(message).toString(),
-                            sender = from?.personal ?: from?.address ?: "(unknown sender)",
-                            senderEmail = from?.address.orEmpty(),
-                            subject = message.subject ?: "(no subject)",
-                            timestampMillis = (message.sentDate ?: message.receivedDate)?.time
-                                ?: System.currentTimeMillis(),
-                            isRead = message.isSet(Flags.Flag.SEEN),
-                            isFlagged = message.isSet(Flags.Flag.FLAGGED),
-                        )
-                    }
+                    messages.reversed().map { it.toFetchedMessage(uidFolder) }
+                } finally {
+                    runCatching { inbox.close(false) }
+                }
+            }
+        }
+
+    /** Runs an IMAP SEARCH over the whole INBOX (subject/from/body) and returns matching headers. */
+    suspend fun search(params: ImapConnectionParams, query: String, limit: Int): List<FetchedMessage> =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val inbox = store.getFolder("INBOX")
+                inbox.open(Folder.READ_ONLY)
+                try {
+                    val term = OrTerm(arrayOf(SubjectTerm(query), FromStringTerm(query), BodyTerm(query)))
+                    val matches = inbox.search(term).toList()
+                    if (matches.isEmpty()) return@withStore emptyList()
+                    val recent = if (matches.size > limit) matches.takeLast(limit) else matches
+                    inbox.fetch(
+                        recent.toTypedArray(),
+                        FetchProfile().apply {
+                            add(FetchProfile.Item.ENVELOPE)
+                            add(FetchProfile.Item.FLAGS)
+                            add(UIDFolder.FetchProfileItem.UID)
+                        },
+                    )
+                    val uidFolder = inbox as UIDFolder
+                    recent.reversed().map { it.toFetchedMessage(uidFolder) }
                 } finally {
                     runCatching { inbox.close(false) }
                 }
@@ -291,6 +311,19 @@ class ImapClient @Inject constructor() {
 
     private fun baseType(part: Part): String =
         runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream")
+
+    private fun Message.toFetchedMessage(uidFolder: UIDFolder): FetchedMessage {
+        val from = from?.firstOrNull() as? InternetAddress
+        return FetchedMessage(
+            uid = uidFolder.getUID(this).toString(),
+            sender = from?.personal ?: from?.address ?: "(unknown sender)",
+            senderEmail = from?.address.orEmpty(),
+            subject = subject ?: "(no subject)",
+            timestampMillis = (sentDate ?: receivedDate)?.time ?: System.currentTimeMillis(),
+            isRead = isSet(Flags.Flag.SEEN),
+            isFlagged = isSet(Flags.Flag.FLAGGED),
+        )
+    }
 
     private inline fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"

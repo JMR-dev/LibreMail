@@ -145,6 +145,28 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun retryOutbox() = sendScheduler.sendNow()
 
+    override suspend fun searchServer(query: String) {
+        accountDao.getAll().forEach { entity ->
+            val account = entity.toDomain()
+            runCatching {
+                val results = imapClient.search(connectionFactory.imapParamsFor(account), query, SEARCH_LIMIT)
+                val entities = results.map { it.toEntity(account.id) }
+                messageDao.insertNew(entities)
+                entities.forEach {
+                    messageDao.updateHeader(
+                        id = it.id,
+                        sender = it.sender,
+                        senderEmail = it.senderEmail,
+                        subject = it.subject,
+                        timestampMillis = it.timestampMillis,
+                        isRead = it.isRead,
+                        isStarred = it.isStarred,
+                    )
+                }
+            }
+        }
+    }
+
     /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
     private fun saveToCache(attachment: DownloadedAttachment): File {
         val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
@@ -159,6 +181,8 @@ class MailRepositoryImpl @Inject constructor(
         return accountDao.getById(entity.accountId)?.toDomain()
     }
 }
+
+private const val SEARCH_LIMIT = 50
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')

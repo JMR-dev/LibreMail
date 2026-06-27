@@ -75,4 +75,16 @@ class ImapClientTest {
         assertTrue(content.body.contains("quick brown fox"), "body=${content.body}")
         assertTrue(client.fetchRecentInbox(params(), limit = 50).first().isRead, "should be marked read")
     }
+
+    @Test
+    fun `search returns only messages matching the query`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Vacation plans", "Beach trip")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "carol@example.org", "Invoice 42", "Payment due")
+        greenMail.waitForIncomingEmail(2)
+
+        val results = client.search(params(), query = "Vacation", limit = 50)
+
+        assertEquals(1, results.size)
+        assertEquals("Vacation plans", results.first().subject)
+    }
 }

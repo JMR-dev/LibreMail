@@ -43,4 +43,7 @@ interface MailRepository {
     fun observeOutbox(): Flow<List<OutboxMessage>>
     suspend fun cancelOutboxMessage(id: String)
     suspend fun retryOutbox()
+
+    /** Fetches server-side search matches into the cache so the message list can surface them. */
+    suspend fun searchServer(query: String)
 }

@@ -18,7 +18,7 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
 > system viewer, and attach files when composing; **multiple accounts** — a unified inbox
 > with per-account filtering; and
-> **search** across cached mail. Outlook Graph send is upcoming.
+> **search** across cached mail and the server (IMAP SEARCH). Outlook Graph send is upcoming.
 
 ## Features (target MVP)
 
