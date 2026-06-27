@@ -7,9 +7,10 @@ experience with power-user features tucked under an **Advanced Settings** group.
 
 > Status: **in development.** Material You shell; **account setup** (Gmail OAuth via
 > AppAuth/PKCE and generic IMAP/SMTP, with a live connection test and Keystore-
-> encrypted credentials); and **IMAP receive** — background sync (WorkManager) that
-> fetches your inbox headers into a local Room cache, shown with pull-to-refresh.
-> Reading message bodies and sending land in upcoming increments.
+> encrypted credentials); **IMAP receive** — background sync (WorkManager) into a local
+> Room cache with pull-to-refresh; and **reading** — message bodies fetched on open and
+> rendered in a hardened WebView (JavaScript off, remote images blocked by default),
+> with mark-read, star, and delete. Composing and sending land next.
 
 ## Features (target MVP)
 

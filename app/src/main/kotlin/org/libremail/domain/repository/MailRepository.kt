@@ -12,4 +12,11 @@ interface MailRepository {
     fun observeMessages(): Flow<List<Message>>
 
     suspend fun getMessage(id: String): Message?
+
+    /** Loads a message for reading: fetches+caches the body if missing, and marks it read. */
+    suspend fun openMessage(id: String): Result<Message>
+
+    suspend fun setStarred(id: String, starred: Boolean): Result<Unit>
+
+    suspend fun deleteMessage(id: String): Result<Unit>
 }

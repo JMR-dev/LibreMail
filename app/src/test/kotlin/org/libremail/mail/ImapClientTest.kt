@@ -63,4 +63,16 @@ class ImapClientTest {
         assertEquals(setOf("First subject", "Second subject"), messages.map { it.subject }.toSet())
         assertEquals("bob@example.org", messages.first { it.subject == "First subject" }.senderEmail)
     }
+
+    @Test
+    fun `fetchBodyMarkingSeen returns the body and marks the message read`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Hello", "The quick brown fox.")
+        greenMail.waitForIncomingEmail(1)
+        val uid = client.fetchRecentInbox(params(), limit = 50).first().uid
+
+        val content = client.fetchBodyMarkingSeen(params(), uid)
+
+        assertTrue(content.body.contains("quick brown fox"), "body=${content.body}")
+        assertTrue(client.fetchRecentInbox(params(), limit = 50).first().isRead, "should be marked read")
+    }
 }

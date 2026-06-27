@@ -10,6 +10,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.MessageDao
@@ -22,7 +23,8 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): LibreMailDatabase =
         Room.databaseBuilder(context, LibreMailDatabase::class.java, "libremail.db")
-            // MVP: no user data worth migrating yet.
+            .addMigrations(MIGRATION_2_3)
+            // Safety net for unforeseen schema jumps during early development.
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

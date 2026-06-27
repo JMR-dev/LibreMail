@@ -15,11 +15,17 @@ import org.libremail.data.local.entity.MessageEntity
 class MailRepositoryImplTest {
 
     private val messageDao = mockk<MessageDao>()
+    private val repository = MailRepositoryImpl(
+        messageDao = messageDao,
+        accountDao = mockk(),
+        imapClient = mockk(),
+        connectionFactory = mockk(),
+    )
 
     @Test
     fun `observeMessages is empty when the cache is empty`() = runTest {
         every { messageDao.observeAll() } returns flowOf(emptyList())
-        MailRepositoryImpl(messageDao).observeMessages().test {
+        repository.observeMessages().test {
             assertTrue(awaitItem().isEmpty())
             awaitComplete()
         }
@@ -40,7 +46,7 @@ class MailRepositoryImplTest {
             isStarred = false,
         )
         every { messageDao.observeAll() } returns flowOf(listOf(entity))
-        MailRepositoryImpl(messageDao).observeMessages().test {
+        repository.observeMessages().test {
             val items = awaitItem()
             assertEquals(1, items.size)
             assertEquals("Ada", items.first().sender)

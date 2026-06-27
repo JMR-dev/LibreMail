@@ -9,6 +9,7 @@ data class Message(
     val subject: String,
     val snippet: String,
     val body: String,
+    val isHtml: Boolean,
     val timestampMillis: Long,
     val isRead: Boolean,
     val isStarred: Boolean,

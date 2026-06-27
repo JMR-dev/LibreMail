@@ -12,7 +12,7 @@ import org.libremail.data.local.entity.MessageEntity
 
 @Database(
     entities = [AccountEntity::class, MessageEntity::class, CredentialEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class LibreMailDatabase : RoomDatabase() {

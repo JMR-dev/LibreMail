@@ -4,6 +4,8 @@ package org.libremail.mail
 import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
+import jakarta.mail.Multipart
+import jakarta.mail.Part
 import jakarta.mail.Session
 import jakarta.mail.Store
 import jakarta.mail.UIDFolder
@@ -25,6 +27,12 @@ data class FetchedMessage(
     val timestampMillis: Long,
     val isRead: Boolean,
     val isFlagged: Boolean,
+)
+
+/** A message body extracted from the server. */
+data class MessageContent(
+    val body: String,
+    val isHtml: Boolean,
 )
 
 /** Thin IMAP client over Jakarta/Angus Mail. Supports password and XOAUTH2 auth. */
@@ -76,6 +84,70 @@ class ImapClient @Inject constructor() {
                 }
             }
         }
+
+    /** Fetches a message body by UID and marks it \Seen on the server. */
+    suspend fun fetchBodyMarkingSeen(params: ImapConnectionParams, uid: String): MessageContent =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val inbox = store.getFolder("INBOX")
+                inbox.open(Folder.READ_WRITE)
+                try {
+                    val message = (inbox as UIDFolder).getMessageByUID(uid.toLong())
+                        ?: error("Message $uid not found")
+                    val content = extractBody(message) ?: MessageContent("", isHtml = false)
+                    message.setFlag(Flags.Flag.SEEN, true)
+                    content
+                } finally {
+                    runCatching { inbox.close(false) }
+                }
+            }
+        }
+
+    suspend fun setFlag(params: ImapConnectionParams, uid: String, flag: Flags.Flag, value: Boolean) =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val inbox = store.getFolder("INBOX")
+                inbox.open(Folder.READ_WRITE)
+                try {
+                    (inbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(flag, value)
+                } finally {
+                    runCatching { inbox.close(false) }
+                }
+            }
+        }
+
+    suspend fun deleteMessage(params: ImapConnectionParams, uid: String) =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val inbox = store.getFolder("INBOX")
+                inbox.open(Folder.READ_WRITE)
+                try {
+                    (inbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
+                    inbox.expunge()
+                } finally {
+                    runCatching { inbox.close(false) }
+                }
+            }
+        }
+
+    /** Recursively finds the best body part: HTML preferred, plain text otherwise. */
+    private fun extractBody(part: Part): MessageContent? {
+        if (part.isMimeType("text/html")) return MessageContent(part.content.toString(), isHtml = true)
+        if (part.isMimeType("text/plain")) return MessageContent(part.content.toString(), isHtml = false)
+        if (part.isMimeType("multipart/*")) {
+            val multipart = part.content as? Multipart ?: return null
+            var plain: MessageContent? = null
+            for (i in 0 until multipart.count) {
+                val child = multipart.getBodyPart(i)
+                if (Part.ATTACHMENT.equals(child.disposition, ignoreCase = true)) continue
+                val result = extractBody(child) ?: continue
+                if (result.isHtml) return result
+                if (plain == null) plain = result
+            }
+            return plain
+        }
+        return null
+    }
 
     private inline fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"

@@ -6,6 +6,11 @@
     <!-- Destinations -->
     <string name="title_mailbox">Inbox</string>
     <string name="title_reader">Message</string>
+    <string name="reader_star">Star</string>
+    <string name="reader_delete">Delete</string>
+    <string name="reader_empty">This message has no text content</string>
+    <string name="reader_images_blocked">Remote images are blocked</string>
+    <string name="reader_show_images">Show images</string>
     <string name="title_compose">Compose</string>
     <string name="title_settings">Settings</string>
     <string name="title_account_setup">Add account</string>

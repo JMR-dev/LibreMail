@@ -17,6 +17,7 @@ data class MessageEntity(
     val subject: String,
     val snippet: String,
     val body: String,
+    val isHtml: Boolean = false,
     val timestampMillis: Long,
     val isRead: Boolean,
     val isStarred: Boolean,
