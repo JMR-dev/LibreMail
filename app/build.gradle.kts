@@ -48,11 +48,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Sign release builds with the debug key so they're installable for testing.
+            // A public release would configure a dedicated upload/release keystore here.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
