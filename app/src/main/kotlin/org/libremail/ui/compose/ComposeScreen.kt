@@ -2,7 +2,11 @@
 package org.libremail.ui.compose
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,7 +24,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -28,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -56,6 +63,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collect
 import org.libremail.R
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.OutgoingAttachment
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +79,19 @@ fun ComposeScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> viewModel.onContactsPermission(granted) }
+
+    val attachmentPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        viewModel.addAttachments(
+            uris.map { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                OutgoingAttachment(uri.toString(), queryFileName(context, uri))
+            },
+        )
+    }
 
     LaunchedEffect(Unit) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
@@ -141,6 +162,11 @@ fun ComposeScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                AttachmentsSection(
+                    attachments = state.attachments,
+                    onAttach = { attachmentPicker.launch(arrayOf("*/*")) },
+                    onRemove = viewModel::removeAttachment,
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = state.body,
@@ -195,6 +221,39 @@ private fun FromRow(accounts: List<Account>, selectedId: String?, onSelect: (Str
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AttachmentsSection(
+    attachments: List<OutgoingAttachment>,
+    onAttach: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick = onAttach) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Spacer(Modifier.width(4.dp))
+            Text(stringResource(R.string.compose_attach))
+        }
+        attachments.forEach { attachment ->
+            InputChip(
+                selected = false,
+                onClick = { onRemove(attachment.uri) },
+                label = { Text(attachment.name, maxLines = 1) },
+                trailingIcon = {
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.compose_attachment_remove))
+                },
+            )
+        }
+    }
+}
+
+private fun queryFileName(context: Context, uri: Uri): String {
+    val name = context.contentResolver
+        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    return name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
 }
 
 @Composable

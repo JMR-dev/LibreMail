@@ -40,6 +40,8 @@
     <string name="compose_subject">Subject</string>
     <string name="compose_body">Message</string>
     <string name="compose_no_account">Add an account before composing</string>
+    <string name="compose_attach">Attach file</string>
+    <string name="compose_attachment_remove">Remove attachment</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>

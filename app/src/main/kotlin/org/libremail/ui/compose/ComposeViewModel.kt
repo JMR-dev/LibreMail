@@ -21,6 +21,7 @@ import org.libremail.contacts.ContactSuggestion
 import org.libremail.contacts.ContactsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Draft
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
@@ -32,6 +33,7 @@ data class ComposeUiState(
     val subject: String = "",
     val body: String = "",
     val fromAccountId: String? = null,
+    val attachments: List<OutgoingAttachment> = emptyList(),
     val suggestions: List<ContactSuggestion> = emptyList(),
     val contactsAllowed: Boolean = false,
     val sending: Boolean = false,
@@ -94,6 +96,10 @@ class ComposeViewModel @Inject constructor(
     fun onSubjectChange(value: String) = _state.update { it.copy(subject = value) }
     fun onBodyChange(value: String) = _state.update { it.copy(body = value) }
     fun selectFrom(accountId: String) = _state.update { it.copy(fromAccountId = accountId) }
+    fun addAttachments(items: List<OutgoingAttachment>) =
+        _state.update { it.copy(attachments = it.attachments + items) }
+    fun removeAttachment(uri: String) =
+        _state.update { it.copy(attachments = it.attachments.filterNot { a -> a.uri == uri }) }
     fun consumeError() = _state.update { it.copy(error = null) }
     fun onContactsPermission(granted: Boolean) = _state.update { it.copy(contactsAllowed = granted) }
 
@@ -153,7 +159,7 @@ class ComposeViewModel @Inject constructor(
             else -> viewModelScope.launch {
                 _state.update { it.copy(sending = true, error = null) }
                 mailRepository.sendMessage(
-                    OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body),
+                    OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body, s.attachments),
                 ).fold(
                     onSuccess = {
                         draftId?.let { mailRepository.deleteDraft(it) }

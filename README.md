@@ -16,7 +16,8 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > later; **on-device new-mail
 > notifications** (no push service) with persisted settings; **instant push** via a
 > foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
-> system viewer; **multiple accounts** — a unified inbox with per-account filtering; and
+> system viewer, and attach files when composing; **multiple accounts** — a unified inbox
+> with per-account filtering; and
 > **search** across cached mail. Outlook Graph send is upcoming.
 
 ## Features (target MVP)

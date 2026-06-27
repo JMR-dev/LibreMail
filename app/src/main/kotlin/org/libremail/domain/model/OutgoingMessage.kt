@@ -8,4 +8,11 @@ data class OutgoingMessage(
     val cc: String = "",
     val subject: String,
     val body: String,
+    val attachments: List<OutgoingAttachment> = emptyList(),
+)
+
+/** A file the user attached, referenced by its content-URI string until it is sent. */
+data class OutgoingAttachment(
+    val uri: String,
+    val name: String,
 )

@@ -4,7 +4,10 @@ package org.libremail.mail
 import jakarta.mail.Message
 import jakarta.mail.Session
 import jakarta.mail.internet.InternetAddress
+import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
+import jakarta.mail.internet.MimeMultipart
+import java.io.File
 import java.util.Date
 import java.util.Properties
 import javax.inject.Inject
@@ -19,7 +22,12 @@ import org.libremail.domain.model.SmtpParams
 @Singleton
 class SmtpSender @Inject constructor() {
 
-    suspend fun send(params: SmtpParams, from: String, message: OutgoingMessage) =
+    suspend fun send(
+        params: SmtpParams,
+        from: String,
+        message: OutgoingMessage,
+        attachments: List<File> = emptyList(),
+    ) =
         withContext(Dispatchers.IO) {
             val protocol = if (params.security == MailSecurity.SSL_TLS) "smtps" else "smtp"
             val props = Properties().apply {
@@ -50,8 +58,17 @@ class SmtpSender @Inject constructor() {
                     setRecipients(Message.RecipientType.CC, InternetAddress.parse(message.cc))
                 }
                 subject = message.subject
-                setText(message.body, "UTF-8")
                 sentDate = Date()
+            }
+            if (attachments.isEmpty()) {
+                mime.setText(message.body, "UTF-8")
+            } else {
+                val multipart = MimeMultipart()
+                multipart.addBodyPart(MimeBodyPart().apply { setText(message.body, "UTF-8") })
+                attachments.forEach { file ->
+                    multipart.addBodyPart(MimeBodyPart().apply { attachFile(file) })
+                }
+                mime.setContent(multipart)
             }
 
             val transport = session.getTransport(protocol)

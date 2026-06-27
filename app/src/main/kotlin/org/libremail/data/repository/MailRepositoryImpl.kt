@@ -2,6 +2,7 @@
 package org.libremail.data.repository
 
 import android.content.Context
+import android.net.Uri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
 import java.io.File
@@ -25,6 +26,7 @@ import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.DownloadedAttachment
@@ -94,9 +96,11 @@ class MailRepositoryImpl @Inject constructor(
     /** Queues the message in the outbox and triggers the send worker; delivery happens in the background. */
     override suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit> = runCatching {
         requireNotNull(accountDao.getById(outgoing.accountId)) { "Account not found" }
+        val outboxId = UUID.randomUUID().toString()
+        copyAttachments(outboxId, outgoing.attachments)
         outboxDao.insert(
             OutboxEntity(
-                id = UUID.randomUUID().toString(),
+                id = outboxId,
                 accountId = outgoing.accountId,
                 toAddresses = outgoing.to,
                 ccAddresses = outgoing.cc,
@@ -106,6 +110,20 @@ class MailRepositoryImpl @Inject constructor(
             ),
         )
         sendScheduler.sendNow()
+    }
+
+    /** Copies the picked attachment URIs into the outbox message's own directory for the worker. */
+    private fun copyAttachments(outboxId: String, attachments: List<OutgoingAttachment>) {
+        if (attachments.isEmpty()) return
+        val dir = File(context.cacheDir, "outbox/$outboxId").apply { mkdirs() }
+        attachments.forEach { attachment ->
+            val safeName = attachment.name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { input ->
+                    File(dir, safeName).outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        }
     }
 
     override fun observeDrafts(): Flow<List<Draft>> =
@@ -120,7 +138,10 @@ class MailRepositoryImpl @Inject constructor(
     override fun observeOutbox(): Flow<List<OutboxMessage>> =
         outboxDao.observeAll().map { rows -> rows.map { it.toDomain() } }
 
-    override suspend fun cancelOutboxMessage(id: String) = outboxDao.delete(id)
+    override suspend fun cancelOutboxMessage(id: String) {
+        outboxDao.delete(id)
+        File(context.cacheDir, "outbox/$id").deleteRecursively()
+    }
 
     override suspend fun retryOutbox() = sendScheduler.sendNow()
 

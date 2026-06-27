@@ -7,6 +7,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import java.io.File
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.toDomain
@@ -30,9 +31,11 @@ class SendWorker @AssistedInject constructor(
 
         var anyFailed = false
         for (entity in pending) {
+            val attachmentDir = File(applicationContext.cacheDir, "outbox/${entity.id}")
             val account = accountDao.getById(entity.accountId)?.toDomain()
             if (account == null) {
                 outboxDao.delete(entity.id) // account removed — drop the queued message
+                attachmentDir.deleteRecursively()
                 continue
             }
             runCatching {
@@ -46,9 +49,13 @@ class SendWorker @AssistedInject constructor(
                         subject = entity.subject,
                         body = entity.body,
                     ),
+                    attachments = attachmentDir.listFiles()?.toList().orEmpty(),
                 )
             }.fold(
-                onSuccess = { outboxDao.delete(entity.id) },
+                onSuccess = {
+                    outboxDao.delete(entity.id)
+                    attachmentDir.deleteRecursively()
+                },
                 onFailure = { e ->
                     outboxDao.setError(entity.id, e.message)
                     anyFailed = true
