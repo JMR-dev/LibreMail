@@ -3,6 +3,7 @@ package org.libremail.domain.repository
 
 import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutgoingMessage
 
 /**
  * Abstraction over the local message cache (and, in later increments, network sync).
@@ -19,4 +20,6 @@ interface MailRepository {
     suspend fun setStarred(id: String, starred: Boolean): Result<Unit>
 
     suspend fun deleteMessage(id: String): Result<Unit>
+
+    suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit>
 }

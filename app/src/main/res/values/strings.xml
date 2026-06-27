@@ -29,10 +29,15 @@
     <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>
 
     <!-- Compose -->
+    <string name="compose_from">From</string>
     <string name="compose_to">To</string>
+    <string name="compose_cc">Cc</string>
     <string name="compose_subject">Subject</string>
     <string name="compose_body">Message</string>
-    <string name="compose_not_implemented">Sending is not available yet</string>
+    <string name="compose_no_account">Add an account before composing</string>
+
+    <!-- Reader -->
+    <string name="reader_reply">Reply</string>
 
     <!-- Account setup -->
     <string name="account_setup_gmail">Sign in with Google</string>

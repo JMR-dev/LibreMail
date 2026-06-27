@@ -10,7 +10,9 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > encrypted credentials); **IMAP receive** — background sync (WorkManager) into a local
 > Room cache with pull-to-refresh; and **reading** — message bodies fetched on open and
 > rendered in a hardened WebView (JavaScript off, remote images blocked by default),
-> with mark-read, star, and delete. Composing and sending land next.
+> with mark-read, star, and delete; and **composing** — a compose screen with device-
+> contacts autocomplete that sends over SMTP, plus reply. Outlook Graph send, push
+> notifications, and multi-account polish are upcoming.
 
 ## Features (target MVP)
 

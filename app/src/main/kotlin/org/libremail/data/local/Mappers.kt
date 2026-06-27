@@ -10,6 +10,7 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ServerConfig
+import org.libremail.domain.model.SmtpParams
 import org.libremail.mail.FetchedMessage
 
 internal fun AccountEntity.toDomain(): Account = Account(
@@ -35,6 +36,16 @@ internal fun Account.toImapParams(secret: String, useXoauth2: Boolean): ImapConn
         host = imap.host,
         port = imap.port,
         security = imap.security,
+        username = email,
+        secret = secret,
+        useXoauth2 = useXoauth2,
+    )
+
+internal fun Account.toSmtpParams(secret: String, useXoauth2: Boolean): SmtpParams =
+    SmtpParams(
+        host = smtp.host,
+        port = smtp.port,
+        security = smtp.security,
         username = email,
         secret = secret,
         useXoauth2 = useXoauth2,

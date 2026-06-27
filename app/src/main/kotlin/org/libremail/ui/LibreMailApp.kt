@@ -44,7 +44,7 @@ fun LibreMailApp() {
         composable(Routes.MAILBOX) {
             MailboxScreen(
                 onOpenMessage = { id -> navController.navigate(Routes.reader(id)) },
-                onCompose = { navController.navigate(Routes.COMPOSE) },
+                onCompose = { navController.navigate(Routes.compose()) },
                 onAddAccount = { navController.navigate(Routes.ACCOUNT_SETUP) },
                 onSelectTab = navController::navigateTab,
             )
@@ -53,9 +53,18 @@ fun LibreMailApp() {
             route = Routes.READER_PATTERN,
             arguments = listOf(navArgument(Routes.READER_ARG_ID) { type = NavType.StringType }),
         ) {
-            ReaderScreen(onBack = navController::popBackStack)
+            ReaderScreen(
+                onBack = navController::popBackStack,
+                onReply = { to, subject -> navController.navigate(Routes.compose(to, subject)) },
+            )
         }
-        composable(Routes.COMPOSE) {
+        composable(
+            route = Routes.COMPOSE_PATTERN,
+            arguments = listOf(
+                navArgument(Routes.COMPOSE_ARG_TO) { type = NavType.StringType; defaultValue = "" },
+                navArgument(Routes.COMPOSE_ARG_SUBJECT) { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) {
             ComposeScreen(onBack = navController::popBackStack)
         }
         composable(Routes.SETTINGS) {

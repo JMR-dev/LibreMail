@@ -48,6 +48,7 @@ import org.libremail.domain.model.Message
 @Composable
 fun ReaderScreen(
     onBack: () -> Unit,
+    onReply: (to: String, subject: String) -> Unit,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -68,6 +69,9 @@ fun ReaderScreen(
                 actions = {
                     val message = state.message
                     if (message != null) {
+                        TextButton(onClick = { onReply(message.senderEmail, "Re: ${message.subject}") }) {
+                            Text(stringResource(R.string.reader_reply))
+                        }
                         IconButton(onClick = viewModel::toggleStar) {
                             Icon(
                                 Icons.Filled.Star,

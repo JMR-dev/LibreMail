@@ -36,7 +36,7 @@ class MailSyncer @Inject constructor(
     }
 
     private suspend fun syncAccount(account: Account): Result<Int> = runCatching {
-        val params = connectionFactory.paramsFor(account)
+        val params = connectionFactory.imapParamsFor(account)
         val fetched = imapClient.fetchRecentInbox(params, INBOX_LIMIT)
         val entities = fetched.map { it.toEntity(account.id) }
         if (entities.isEmpty()) {

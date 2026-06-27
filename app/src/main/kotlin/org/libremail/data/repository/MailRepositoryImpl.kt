@@ -12,14 +12,17 @@ import org.libremail.data.local.toDomain
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import org.libremail.mail.SmtpSender
 
 @Singleton
 class MailRepositoryImpl @Inject constructor(
     private val messageDao: MessageDao,
     private val accountDao: AccountDao,
     private val imapClient: ImapClient,
+    private val smtpSender: SmtpSender,
     private val connectionFactory: MailConnectionFactory,
 ) : MailRepository {
 
@@ -32,7 +35,7 @@ class MailRepositoryImpl @Inject constructor(
         val entity = messageDao.getById(id) ?: error("Message not found")
         val account = accountDao.getById(entity.accountId)?.toDomain()
         if (account != null) {
-            val params = connectionFactory.paramsFor(account)
+            val params = connectionFactory.imapParamsFor(account)
             if (entity.body.isBlank()) {
                 val content = imapClient.fetchBodyMarkingSeen(params, uidOf(id))
                 messageDao.updateBody(id, content.body, content.isHtml, snippetOf(content.body))
@@ -48,7 +51,7 @@ class MailRepositoryImpl @Inject constructor(
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = runCatching {
         messageDao.setStarred(id, starred) // optimistic; next sync reconciles on failure
         accountFor(id)?.let { account ->
-            imapClient.setFlag(connectionFactory.paramsFor(account), uidOf(id), Flags.Flag.FLAGGED, starred)
+            imapClient.setFlag(connectionFactory.imapParamsFor(account), uidOf(id), Flags.Flag.FLAGGED, starred)
         }
         Unit
     }
@@ -56,8 +59,13 @@ class MailRepositoryImpl @Inject constructor(
     override suspend fun deleteMessage(id: String): Result<Unit> = runCatching {
         val account = accountFor(id)
         messageDao.deleteById(id) // optimistic; reappears on next sync if the server delete failed
-        account?.let { imapClient.deleteMessage(connectionFactory.paramsFor(it), uidOf(id)) }
+        account?.let { imapClient.deleteMessage(connectionFactory.imapParamsFor(it), uidOf(id)) }
         Unit
+    }
+
+    override suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit> = runCatching {
+        val account = accountDao.getById(outgoing.accountId)?.toDomain() ?: error("Account not found")
+        smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = outgoing)
     }
 
     private suspend fun accountFor(id: String): Account? {
