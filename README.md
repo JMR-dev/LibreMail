@@ -14,8 +14,8 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > contacts autocomplete that sends over SMTP, plus reply; **on-device new-mail
 > notifications** (no push service) with persisted settings; **instant push** via a
 > foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
-> system viewer; and **multiple accounts** — a unified inbox with per-account filtering.
-> Outlook Graph send and search are upcoming.
+> system viewer; **multiple accounts** — a unified inbox with per-account filtering; and
+> **search** across cached mail. Outlook Graph send is upcoming.
 
 ## Features (target MVP)
 

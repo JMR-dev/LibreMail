@@ -25,6 +25,10 @@
     <!-- Mailbox -->
     <string name="mailbox_empty">No messages yet</string>
     <string name="mailbox_all_accounts">All</string>
+    <string name="search">Search</string>
+    <string name="search_close">Close search</string>
+    <string name="search_hint">Search mail</string>
+    <string name="search_no_results">No results</string>
     <string name="mailbox_pull_to_refresh">Pull down to refresh</string>
     <string name="mailbox_welcome_title">Welcome to LibreMail</string>
     <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>

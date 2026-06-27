@@ -37,9 +37,19 @@ class MailboxViewModel @Inject constructor(
     private val _selectedAccountId = MutableStateFlow<String?>(null)
     val selectedAccountId: StateFlow<String?> = _selectedAccountId.asStateFlow()
 
+    private val _searchActive = MutableStateFlow(false)
+    val searchActive: StateFlow<Boolean> = _searchActive.asStateFlow()
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
     val messages: StateFlow<List<Message>> =
-        combine(mailRepository.observeMessages(), _selectedAccountId) { all, accountId ->
-            if (accountId == null) all else all.filter { it.accountId == accountId }
+        combine(mailRepository.observeMessages(), _selectedAccountId, _searchQuery) { all, accountId, query ->
+            val q = query.trim()
+            all.filter { message ->
+                (accountId == null || message.accountId == accountId) &&
+                    (q.isEmpty() || message.matchesSearch(q))
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _isRefreshing = MutableStateFlow(false)
@@ -62,6 +72,19 @@ class MailboxViewModel @Inject constructor(
         _selectedAccountId.value = accountId
     }
 
+    fun openSearch() {
+        _searchActive.value = true
+    }
+
+    fun closeSearch() {
+        _searchActive.value = false
+        _searchQuery.value = ""
+    }
+
+    fun onSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
     fun refresh() {
         if (_isRefreshing.value) return
         viewModelScope.launch {
@@ -75,3 +98,10 @@ class MailboxViewModel @Inject constructor(
         _error.value = null
     }
 }
+
+/** Local match over the always-populated header fields (and snippet, once a body is cached). */
+private fun Message.matchesSearch(query: String): Boolean =
+    sender.contains(query, ignoreCase = true) ||
+        senderEmail.contains(query, ignoreCase = true) ||
+        subject.contains(query, ignoreCase = true) ||
+        snippet.contains(query, ignoreCase = true)

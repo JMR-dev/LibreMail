@@ -2,6 +2,7 @@
 package org.libremail.ui.mailbox
 
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -20,15 +21,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -43,6 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,9 +74,13 @@ fun MailboxScreen(
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
+    val searchActive by viewModel.searchActive.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    BackHandler(enabled = searchActive) { viewModel.closeSearch() }
 
     LaunchedEffect(error) {
         error?.let {
@@ -78,7 +90,31 @@ fun MailboxScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.title_mailbox)) }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (searchActive) {
+                        SearchField(query = searchQuery, onQueryChange = viewModel::onSearchQuery)
+                    } else {
+                        Text(stringResource(R.string.title_mailbox))
+                    }
+                },
+                navigationIcon = {
+                    if (searchActive) {
+                        IconButton(onClick = viewModel::closeSearch) {
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.search_close))
+                        }
+                    }
+                },
+                actions = {
+                    if (hasAccounts && !searchActive) {
+                        IconButton(onClick = viewModel::openSearch) {
+                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                        }
+                    }
+                },
+            )
+        },
         bottomBar = {
             org.libremail.ui.LibreMailBottomBar(
                 current = org.libremail.ui.TopDest.MAILBOX,
@@ -115,7 +151,13 @@ fun MailboxScreen(
                     ) {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
                             if (messages.isEmpty()) {
-                                item { NoMessagesState(Modifier.fillParentMaxSize()) }
+                                item {
+                                    if (searchActive && searchQuery.isNotBlank()) {
+                                        NoResultsState(Modifier.fillParentMaxSize())
+                                    } else {
+                                        NoMessagesState(Modifier.fillParentMaxSize())
+                                    }
+                                }
                             } else {
                                 items(messages, key = { it.id }) { message ->
                                     MessageRow(
@@ -132,6 +174,30 @@ fun MailboxScreen(
             }
         }
     }
+}
+
+@Composable
+private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.titleLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+        decorationBox = { innerTextField ->
+            if (query.isEmpty()) {
+                Text(
+                    stringResource(R.string.search_hint),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            innerTextField()
+        },
+    )
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 }
 
 @Composable
@@ -281,6 +347,24 @@ private fun NoMessagesState(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun NoResultsState(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(stringResource(R.string.search_no_results), style = MaterialTheme.typography.titleMedium)
     }
 }
 
