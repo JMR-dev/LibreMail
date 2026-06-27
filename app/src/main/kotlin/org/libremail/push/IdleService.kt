@@ -15,9 +15,11 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -45,22 +47,35 @@ class IdleService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var watching = false
 
+    /** Active IDLE watcher per account id, so we can start/stop them as accounts change. */
+    private val watchers = mutableMapOf<String, Job>()
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startAsForeground()
         if (!watching) {
             watching = true
-            scope.launch { watchAllAccounts() }
+            scope.launch { reconcileWatchers() }
         }
         return START_STICKY
     }
 
-    private suspend fun watchAllAccounts() {
-        val accounts = accountDao.getAll().map { it.toDomain() }
-        if (accounts.isEmpty()) {
-            stopSelf()
-            return
+    /**
+     * Observes the account list and keeps one IDLE watcher per account: a watcher is started for a
+     * newly-added account and cancelled when its account is removed (which promptly closes that
+     * account's IDLE connection). The service is started/stopped by the app based on whether any
+     * accounts exist, so reaching zero here is just a transient state.
+     */
+    private suspend fun reconcileWatchers() {
+        accountDao.observeAll().collect { entities ->
+            val accounts = entities.map { it.toDomain() }
+            val currentIds = accounts.mapTo(mutableSetOf()) { it.id }
+            (watchers.keys - currentIds).forEach { id -> watchers.remove(id)?.cancel() }
+            accounts.forEach { account ->
+                if (account.id !in watchers) {
+                    watchers[account.id] = scope.launch { watchAccount(account) }
+                }
+            }
         }
-        accounts.forEach { account -> scope.launch { watchAccount(account) } }
     }
 
     /**
