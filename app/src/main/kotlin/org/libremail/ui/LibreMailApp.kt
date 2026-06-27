@@ -25,6 +25,7 @@ import org.libremail.ui.compose.ComposeScreen
 import org.libremail.ui.drafts.DraftsScreen
 import org.libremail.ui.mailbox.MailboxScreen
 import org.libremail.ui.navigation.Routes
+import org.libremail.ui.outbox.OutboxScreen
 import org.libremail.ui.reader.ReaderScreen
 import org.libremail.ui.settings.SettingsScreen
 
@@ -47,6 +48,7 @@ fun LibreMailApp() {
                 onOpenMessage = { id -> navController.navigate(Routes.reader(id)) },
                 onCompose = { navController.navigate(Routes.compose()) },
                 onOpenDrafts = { navController.navigate(Routes.DRAFTS) },
+                onOpenOutbox = { navController.navigate(Routes.OUTBOX) },
                 onAddAccount = { navController.navigate(Routes.ACCOUNT_SETUP) },
                 onSelectTab = navController::navigateTab,
             )
@@ -103,6 +105,9 @@ fun LibreMailApp() {
                 onBack = navController::popBackStack,
                 onOpenDraft = { id -> navController.navigate(Routes.composeDraft(id)) },
             )
+        }
+        composable(Routes.OUTBOX) {
+            OutboxScreen(onBack = navController::popBackStack)
         }
     }
 }

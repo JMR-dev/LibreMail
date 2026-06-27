@@ -26,9 +26,11 @@ class SendScheduler @Inject constructor(
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        // APPEND_OR_REPLACE: ensure newly-queued mail gets a run without cancelling an in-flight send.
+        // REPLACE: start a fresh drain so newly-queued mail and manual retries run promptly,
+        // overriding any pending retry-backoff. At-least-once — a send cancelled mid-flight by a
+        // replacement may be re-sent, which is preferable to mail stuck waiting behind a backoff.
         WorkManager.getInstance(context)
-            .enqueueUniqueWork(SEND_WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+            .enqueueUniqueWork(SEND_WORK, ExistingWorkPolicy.REPLACE, request)
     }
 
     private companion object {

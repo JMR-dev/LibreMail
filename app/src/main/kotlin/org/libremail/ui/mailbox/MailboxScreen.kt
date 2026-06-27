@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
@@ -67,6 +68,7 @@ fun MailboxScreen(
     onOpenMessage: (String) -> Unit,
     onCompose: () -> Unit,
     onOpenDrafts: () -> Unit,
+    onOpenOutbox: () -> Unit,
     onAddAccount: () -> Unit,
     onSelectTab: (org.libremail.ui.TopDest) -> Unit,
     viewModel: MailboxViewModel = hiltViewModel(),
@@ -76,6 +78,7 @@ fun MailboxScreen(
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
     val draftCount by viewModel.draftCount.collectAsStateWithLifecycle()
+    val outboxCount by viewModel.outboxCount.collectAsStateWithLifecycle()
     val searchActive by viewModel.searchActive.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
@@ -150,6 +153,10 @@ fun MailboxScreen(
                         DraftsEntry(count = draftCount, onClick = onOpenDrafts)
                         HorizontalDivider()
                     }
+                    if (outboxCount > 0 && !searchActive) {
+                        OutboxEntry(count = outboxCount, onClick = onOpenOutbox)
+                        HorizontalDivider()
+                    }
                     PullToRefreshBox(
                         isRefreshing = isRefreshing,
                         onRefresh = viewModel::refresh,
@@ -219,6 +226,25 @@ private fun DraftsEntry(count: Int, onClick: () -> Unit) {
         Spacer(Modifier.width(16.dp))
         Text(
             text = stringResource(R.string.drafts_count, count),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
+private fun OutboxEntry(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(16.dp))
+        Text(
+            text = stringResource(R.string.outbox_count, count),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
         )

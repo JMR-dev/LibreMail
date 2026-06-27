@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 
 /**
@@ -37,4 +38,9 @@ interface MailRepository {
     suspend fun getDraft(id: String): Draft?
     suspend fun saveDraft(draft: Draft)
     suspend fun deleteDraft(id: String)
+
+    /** The outbox: messages queued for sending. */
+    fun observeOutbox(): Flow<List<OutboxMessage>>
+    suspend fun cancelOutboxMessage(id: String)
+    suspend fun retryOutbox()
 }

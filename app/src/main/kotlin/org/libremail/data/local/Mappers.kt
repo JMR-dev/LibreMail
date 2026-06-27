@@ -5,10 +5,12 @@ import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
+import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
@@ -118,6 +120,15 @@ internal fun Draft.toEntity(): DraftEntity = DraftEntity(
     subject = subject,
     body = body,
     updatedAt = updatedAt,
+)
+
+internal fun OutboxEntity.toDomain(): OutboxMessage = OutboxMessage(
+    id = id,
+    to = toAddresses,
+    subject = subject,
+    body = body,
+    createdAt = createdAt,
+    lastError = lastError,
 )
 
 private fun String.toMailSecurity(): MailSecurity =

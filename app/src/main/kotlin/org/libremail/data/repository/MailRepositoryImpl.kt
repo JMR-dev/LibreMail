@@ -24,6 +24,7 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.DownloadedAttachment
@@ -115,6 +116,13 @@ class MailRepositoryImpl @Inject constructor(
     override suspend fun saveDraft(draft: Draft) = draftDao.upsert(draft.toEntity())
 
     override suspend fun deleteDraft(id: String) = draftDao.delete(id)
+
+    override fun observeOutbox(): Flow<List<OutboxMessage>> =
+        outboxDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun cancelOutboxMessage(id: String) = outboxDao.delete(id)
+
+    override suspend fun retryOutbox() = sendScheduler.sendNow()
 
     /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
     private fun saveToCache(attachment: DownloadedAttachment): File {

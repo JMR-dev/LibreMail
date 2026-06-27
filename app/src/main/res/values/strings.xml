@@ -49,6 +49,15 @@
     <string name="draft_no_recipient">(no recipient)</string>
     <string name="draft_delete">Delete draft</string>
 
+    <!-- Outbox -->
+    <string name="outbox_title">Outbox</string>
+    <string name="outbox_empty">Outbox is empty</string>
+    <string name="outbox_count">Outbox (%1$d)</string>
+    <string name="outbox_status_queued">Queued</string>
+    <string name="outbox_status_failed">Couldn\'t send — will retry</string>
+    <string name="outbox_cancel">Cancel send</string>
+    <string name="outbox_retry">Retry</string>
+
     <!-- Reader -->
     <string name="reader_reply">Reply</string>
     <string name="attachments_title">Attachments</string>
