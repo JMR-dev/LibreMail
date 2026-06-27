@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.domain.repository
 
+import java.io.File
 import kotlinx.coroutines.flow.Flow
+import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutgoingMessage
 
@@ -16,6 +18,12 @@ interface MailRepository {
 
     /** Loads a message for reading: fetches+caches the body if missing, and marks it read. */
     suspend fun openMessage(id: String): Result<Message>
+
+    /** Cached attachment metadata for a message, populated when the message is opened. */
+    fun observeAttachments(messageId: String): Flow<List<Attachment>>
+
+    /** Downloads an attachment's bytes to a local cache file and returns it. */
+    suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File>
 
     suspend fun setStarred(id: String, starred: Boolean): Result<Unit>
 

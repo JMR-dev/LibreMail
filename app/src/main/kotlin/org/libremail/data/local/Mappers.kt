@@ -2,15 +2,18 @@
 package org.libremail.data.local
 
 import org.libremail.data.local.entity.AccountEntity
+import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.SmtpParams
+import org.libremail.mail.AttachmentPart
 import org.libremail.mail.FetchedMessage
 
 internal fun AccountEntity.toDomain(): Account = Account(
@@ -77,6 +80,22 @@ internal fun FetchedMessage.toEntity(accountId: String): MessageEntity = Message
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isFlagged,
+)
+
+internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
+    messageId = messageId,
+    partIndex = partIndex,
+    filename = filename,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+)
+
+internal fun AttachmentPart.toEntity(messageId: String): AttachmentEntity = AttachmentEntity(
+    messageId = messageId,
+    partIndex = partIndex,
+    filename = filename,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
 )
 
 private fun String.toMailSecurity(): MailSecurity =

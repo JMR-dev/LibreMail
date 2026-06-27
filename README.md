@@ -12,9 +12,9 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > rendered in a hardened WebView (JavaScript off, remote images blocked by default),
 > with mark-read, star, and delete; and **composing** — a compose screen with device-
 > contacts autocomplete that sends over SMTP, plus reply; **on-device new-mail
-> notifications** (no push service) with persisted settings; and **instant push** via a
-> foreground **IMAP IDLE** service. Outlook Graph send, attachments, and multi-account
-> polish are upcoming.
+> notifications** (no push service) with persisted settings; **instant push** via a
+> foreground **IMAP IDLE** service; and **attachments** — downloaded on demand and opened
+> in a system viewer. Outlook Graph send and multi-account polish are upcoming.
 
 ## Features (target MVP)
 

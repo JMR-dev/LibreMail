@@ -12,7 +12,9 @@ import jakarta.mail.Store
 import jakarta.mail.UIDFolder
 import jakarta.mail.event.MessageCountAdapter
 import jakarta.mail.event.MessageCountEvent
+import jakarta.mail.internet.ContentType
 import jakarta.mail.internet.InternetAddress
+import jakarta.mail.internet.MimeUtility
 import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -39,10 +41,26 @@ data class FetchedMessage(
     val isFlagged: Boolean,
 )
 
-/** A message body extracted from the server. */
+/** A message body extracted from the server, with metadata for any attachment parts. */
 data class MessageContent(
     val body: String,
     val isHtml: Boolean,
+    val attachments: List<AttachmentPart> = emptyList(),
+)
+
+/** Metadata for one attachment part. [partIndex] is its position in attachment-tree order. */
+data class AttachmentPart(
+    val partIndex: Int,
+    val filename: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+)
+
+/** A downloaded attachment's bytes plus the metadata needed to open it. */
+class DownloadedAttachment(
+    val filename: String,
+    val mimeType: String,
+    val bytes: ByteArray,
 )
 
 /** Thin IMAP client over Jakarta/Angus Mail. Supports password and XOAUTH2 auth. */
@@ -104,9 +122,34 @@ class ImapClient @Inject constructor() {
                 try {
                     val message = (inbox as UIDFolder).getMessageByUID(uid.toLong())
                         ?: error("Message $uid not found")
-                    val content = extractBody(message) ?: MessageContent("", isHtml = false)
+                    val content = (extractBody(message) ?: MessageContent("", isHtml = false))
+                        .copy(attachments = collectAttachments(message))
                     message.setFlag(Flags.Flag.SEEN, true)
                     content
+                } finally {
+                    runCatching { inbox.close(false) }
+                }
+            }
+        }
+
+    /** Downloads the bytes of one attachment part (identified by its [partIndex]). */
+    suspend fun fetchAttachment(params: ImapConnectionParams, uid: String, partIndex: Int): DownloadedAttachment =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val inbox = store.getFolder("INBOX")
+                inbox.open(Folder.READ_ONLY)
+                try {
+                    val message = (inbox as UIDFolder).getMessageByUID(uid.toLong())
+                        ?: error("Message $uid not found")
+                    val parts = mutableListOf<Part>()
+                    collectAttachmentParts(message, parts)
+                    val part = parts.getOrNull(partIndex) ?: error("Attachment $partIndex not found")
+                    val bytes = part.inputStream.use { it.readBytes() }
+                    DownloadedAttachment(
+                        filename = attachmentName(part) ?: "attachment",
+                        mimeType = baseType(part),
+                        bytes = bytes,
+                    )
                 } finally {
                     runCatching { inbox.close(false) }
                 }
@@ -215,6 +258,39 @@ class ImapClient @Inject constructor() {
         }
         return null
     }
+
+    /** Walks the MIME tree and returns attachment metadata in a stable, depth-first order. */
+    private fun collectAttachments(message: Part): List<AttachmentPart> {
+        val parts = mutableListOf<Part>()
+        collectAttachmentParts(message, parts)
+        return parts.mapIndexed { index, part ->
+            AttachmentPart(
+                partIndex = index,
+                filename = attachmentName(part) ?: "attachment",
+                mimeType = baseType(part),
+                sizeBytes = part.size.toLong().coerceAtLeast(0L),
+            )
+        }
+    }
+
+    private fun collectAttachmentParts(part: Part, into: MutableList<Part>) {
+        when {
+            part.isMimeType("multipart/*") -> {
+                val multipart = part.content as? Multipart ?: return
+                for (i in 0 until multipart.count) collectAttachmentParts(multipart.getBodyPart(i), into)
+            }
+            isAttachment(part) -> into.add(part)
+        }
+    }
+
+    private fun isAttachment(part: Part): Boolean =
+        Part.ATTACHMENT.equals(part.disposition, ignoreCase = true) || !part.fileName.isNullOrBlank()
+
+    private fun attachmentName(part: Part): String? =
+        part.fileName?.let { runCatching { MimeUtility.decodeText(it) }.getOrDefault(it) }
+
+    private fun baseType(part: Part): String =
+        runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream")
 
     private inline fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"

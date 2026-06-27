@@ -38,6 +38,9 @@
 
     <!-- Reader -->
     <string name="reader_reply">Reply</string>
+    <string name="attachments_title">Attachments</string>
+    <string name="attachment_download_failed">Couldn\'t download %1$s</string>
+    <string name="attachment_no_app">No app can open this file</string>
 
     <!-- Account setup -->
     <string name="account_setup_gmail">Sign in with Google</string>

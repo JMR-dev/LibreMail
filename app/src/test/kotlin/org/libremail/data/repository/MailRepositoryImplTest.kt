@@ -16,8 +16,10 @@ class MailRepositoryImplTest {
 
     private val messageDao = mockk<MessageDao>()
     private val repository = MailRepositoryImpl(
+        context = mockk(),
         messageDao = messageDao,
         accountDao = mockk(),
+        attachmentDao = mockk(),
         imapClient = mockk(),
         smtpSender = mockk(),
         connectionFactory = mockk(),

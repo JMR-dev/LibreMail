@@ -1,26 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.repository
 
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
+import org.libremail.data.local.toEntity
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.DownloadedAttachment
 import org.libremail.mail.ImapClient
 import org.libremail.mail.SmtpSender
 
 @Singleton
 class MailRepositoryImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val messageDao: MessageDao,
     private val accountDao: AccountDao,
+    private val attachmentDao: AttachmentDao,
     private val imapClient: ImapClient,
     private val smtpSender: SmtpSender,
     private val connectionFactory: MailConnectionFactory,
@@ -39,6 +48,7 @@ class MailRepositoryImpl @Inject constructor(
             if (entity.body.isBlank()) {
                 val content = imapClient.fetchBodyMarkingSeen(params, uidOf(id))
                 messageDao.updateBody(id, content.body, content.isHtml, snippetOf(content.body))
+                attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
                 messageDao.setRead(id, true)
             } else if (!entity.isRead) {
                 runCatching { imapClient.setFlag(params, uidOf(id), Flags.Flag.SEEN, true) }
@@ -46,6 +56,16 @@ class MailRepositoryImpl @Inject constructor(
             }
         }
         messageDao.getById(id)?.toDomain() ?: error("Message not found")
+    }
+
+    override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
+        attachmentDao.observeForMessage(messageId).map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> = runCatching {
+        val entity = messageDao.getById(messageId) ?: error("Message not found")
+        val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
+        val params = connectionFactory.imapParamsFor(account)
+        saveToCache(imapClient.fetchAttachment(params, uidOf(messageId), partIndex))
     }
 
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = runCatching {
@@ -66,6 +86,15 @@ class MailRepositoryImpl @Inject constructor(
     override suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit> = runCatching {
         val account = accountDao.getById(outgoing.accountId)?.toDomain() ?: error("Account not found")
         smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = outgoing)
+    }
+
+    /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
+    private fun saveToCache(attachment: DownloadedAttachment): File {
+        val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+        val safeName = attachment.filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+        return File(dir, safeName).also { file ->
+            file.outputStream().use { it.write(attachment.bytes) }
+        }
     }
 
     private suspend fun accountFor(id: String): Account? {
