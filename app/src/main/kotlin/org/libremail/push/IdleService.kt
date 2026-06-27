@@ -20,6 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.libremail.R
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.toDomain
@@ -62,13 +63,22 @@ class IdleService : Service() {
         accounts.forEach { account -> scope.launch { watchAccount(account) } }
     }
 
-    /** Holds IDLE for one account, reconnecting with exponential backoff whenever it drops. */
+    /**
+     * Holds IDLE for one account, reconnecting with exponential backoff whenever it drops.
+     * Each IDLE session is bounded by [IDLE_RENEWAL_MS]: when it elapses, [withTimeoutOrNull]
+     * cancels idle() (which closes the connection to unblock it) and we reconnect with a fresh
+     * IDLE. This re-issues IDLE well within RFC 2177's 29-minute limit and before NAT/firewall
+     * idle-socket timeouts would silently strand the connection. Each reconnect catches up via
+     * idle()'s on-connect sync, so no mail is missed across renewals.
+     */
     private suspend fun watchAccount(account: Account) {
         var backoffMs = INITIAL_BACKOFF_MS
         while (scope.isActive) {
             try {
                 val params = connectionFactory.imapParamsFor(account)
-                imapClient.idle(params) { mailSyncer.syncAll() }
+                withTimeoutOrNull(IDLE_RENEWAL_MS) {
+                    imapClient.idle(params) { mailSyncer.syncAll() }
+                }
                 backoffMs = INITIAL_BACKOFF_MS
             } catch (e: CancellationException) {
                 throw e
@@ -115,5 +125,9 @@ class IdleService : Service() {
         const val FOREGROUND_ID = 1002
         const val INITIAL_BACKOFF_MS = 5_000L
         const val MAX_BACKOFF_MS = 5 * 60_000L
+
+        // Re-establish IDLE on this cadence — under RFC 2177's 29-minute ceiling and short enough
+        // to beat typical NAT/firewall idle-socket timeouts.
+        const val IDLE_RENEWAL_MS = 9 * 60_000L
     }
 }

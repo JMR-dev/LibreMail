@@ -17,10 +17,11 @@ import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.eclipse.angus.mail.imap.IMAPFolder
@@ -167,8 +168,17 @@ class ImapClient @Inject constructor() {
                 val syncer = launch {
                     for (signal in pushes) onActivity()
                 }
-                // Closing the store from the cancellation handler unblocks the blocking idle() below.
-                val handle = coroutineContext.job.invokeOnCompletion { runCatching { store.close() } }
+                // Close the connection the moment this scope is cancelled (renewal timeout or
+                // service stop). Doing it here — at cancellation *start*, not job completion —
+                // unblocks the blocking idle() read below so the loop exits promptly; a
+                // completion handler would never run while idle() is still blocked.
+                val closer = launch {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) { runCatching { store.close() } }
+                    }
+                }
                 // Sync once on connect to catch anything that arrived before IDLE was established.
                 pushes.trySend(Unit)
                 try {
@@ -178,9 +188,9 @@ class ImapClient @Inject constructor() {
                 } catch (e: Exception) {
                     if (isActive) throw e // a real connection error: let the caller reconnect
                 } finally {
-                    handle.dispose()
-                    pushes.close()
+                    closer.cancel()
                     syncer.cancel()
+                    pushes.close()
                     runCatching { inbox.close(false) }
                     runCatching { store.close() }
                 }
