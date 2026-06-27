@@ -55,7 +55,7 @@ fun LibreMailApp() {
         ) {
             ReaderScreen(
                 onBack = navController::popBackStack,
-                onReply = { to, subject -> navController.navigate(Routes.compose(to, subject)) },
+                onReply = { to, subject, from -> navController.navigate(Routes.compose(to, subject, from)) },
             )
         }
         composable(
@@ -63,6 +63,7 @@ fun LibreMailApp() {
             arguments = listOf(
                 navArgument(Routes.COMPOSE_ARG_TO) { type = NavType.StringType; defaultValue = "" },
                 navArgument(Routes.COMPOSE_ARG_SUBJECT) { type = NavType.StringType; defaultValue = "" },
+                navArgument(Routes.COMPOSE_ARG_FROM) { type = NavType.StringType; defaultValue = "" },
             ),
         ) {
             ComposeScreen(onBack = navController::popBackStack)

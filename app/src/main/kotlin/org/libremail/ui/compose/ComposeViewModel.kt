@@ -47,6 +47,7 @@ class ComposeViewModel @Inject constructor(
         ComposeUiState(
             to = savedStateHandle.get<String>(Routes.COMPOSE_ARG_TO).orEmpty(),
             subject = savedStateHandle.get<String>(Routes.COMPOSE_ARG_SUBJECT).orEmpty(),
+            fromAccountId = savedStateHandle.get<String>(Routes.COMPOSE_ARG_FROM)?.takeIf { it.isNotBlank() },
         ),
     )
     val state: StateFlow<ComposeUiState> = _state.asStateFlow()

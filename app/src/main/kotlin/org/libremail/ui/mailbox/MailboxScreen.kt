@@ -4,6 +4,7 @@ package org.libremail.ui.mailbox
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
+import org.libremail.domain.model.Account
 import org.libremail.domain.model.Message
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,6 +63,8 @@ fun MailboxScreen(
     viewModel: MailboxViewModel = hiltViewModel(),
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -92,18 +98,33 @@ fun MailboxScreen(
             if (!hasAccounts) {
                 NoAccountState(onAddAccount = onAddAccount)
             } else {
-                PullToRefreshBox(
-                    isRefreshing = isRefreshing,
-                    onRefresh = viewModel::refresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        if (messages.isEmpty()) {
-                            item { NoMessagesState(Modifier.fillParentMaxSize()) }
-                        } else {
-                            items(messages, key = { it.id }) { message ->
-                                MessageRow(message = message, onClick = { onOpenMessage(message.id) })
-                                HorizontalDivider()
+                val accountsById = remember(accounts) { accounts.associateBy { it.id } }
+                val showAccount = selectedAccountId == null && accounts.size >= 2
+                Column(Modifier.fillMaxSize()) {
+                    if (accounts.size >= 2) {
+                        AccountFilterRow(
+                            accounts = accounts,
+                            selectedId = selectedAccountId,
+                            onSelect = viewModel::selectAccount,
+                        )
+                    }
+                    PullToRefreshBox(
+                        isRefreshing = isRefreshing,
+                        onRefresh = viewModel::refresh,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            if (messages.isEmpty()) {
+                                item { NoMessagesState(Modifier.fillParentMaxSize()) }
+                            } else {
+                                items(messages, key = { it.id }) { message ->
+                                    MessageRow(
+                                        message = message,
+                                        accountLabel = if (showAccount) accountsById[message.accountId]?.email else null,
+                                        onClick = { onOpenMessage(message.id) },
+                                    )
+                                    HorizontalDivider()
+                                }
                             }
                         }
                     }
@@ -114,7 +135,31 @@ fun MailboxScreen(
 }
 
 @Composable
-private fun MessageRow(message: Message, onClick: () -> Unit) {
+private fun AccountFilterRow(accounts: List<Account>, selectedId: String?, onSelect: (String?) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = selectedId == null,
+            onClick = { onSelect(null) },
+            label = { Text(stringResource(R.string.mailbox_all_accounts)) },
+        )
+        accounts.forEach { account ->
+            FilterChip(
+                selected = selectedId == account.id,
+                onClick = { onSelect(account.id) },
+                label = { Text(account.email, maxLines = 1) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageRow(message: Message, accountLabel: String?, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -153,6 +198,15 @@ private fun MessageRow(message: Message, onClick: () -> Unit) {
                     text = message.snippet,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (accountLabel != null) {
+                Text(
+                    text = accountLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

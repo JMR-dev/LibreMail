@@ -13,8 +13,9 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > with mark-read, star, and delete; and **composing** — a compose screen with device-
 > contacts autocomplete that sends over SMTP, plus reply; **on-device new-mail
 > notifications** (no push service) with persisted settings; **instant push** via a
-> foreground **IMAP IDLE** service; and **attachments** — downloaded on demand and opened
-> in a system viewer. Outlook Graph send and multi-account polish are upcoming.
+> foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
+> system viewer; and **multiple accounts** — a unified inbox with per-account filtering.
+> Outlook Graph send and search are upcoming.
 
 ## Features (target MVP)
 

@@ -16,7 +16,8 @@ object Routes {
 
     const val COMPOSE_ARG_TO = "to"
     const val COMPOSE_ARG_SUBJECT = "subject"
-    const val COMPOSE_PATTERN = "compose?to={$COMPOSE_ARG_TO}&subject={$COMPOSE_ARG_SUBJECT}"
-    fun compose(to: String = "", subject: String = ""): String =
-        "compose?to=${Uri.encode(to)}&subject=${Uri.encode(subject)}"
+    const val COMPOSE_ARG_FROM = "from"
+    const val COMPOSE_PATTERN = "compose?to={$COMPOSE_ARG_TO}&subject={$COMPOSE_ARG_SUBJECT}&from={$COMPOSE_ARG_FROM}"
+    fun compose(to: String = "", subject: String = "", from: String = ""): String =
+        "compose?to=${Uri.encode(to)}&subject=${Uri.encode(subject)}&from=${Uri.encode(from)}"
 }

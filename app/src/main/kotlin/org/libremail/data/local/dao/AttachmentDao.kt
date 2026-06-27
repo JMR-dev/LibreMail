@@ -20,6 +20,10 @@ interface AttachmentDao {
     @Query("DELETE FROM attachments WHERE messageId = :messageId")
     suspend fun deleteForMessage(messageId: String)
 
+    /** Deletes attachment rows for every message of an account (ids are "accountId:uid"). */
+    @Query("DELETE FROM attachments WHERE messageId LIKE :accountPrefix")
+    suspend fun deleteByAccountPrefix(accountPrefix: String)
+
     /** Replaces the cached attachment list for a message in one transaction. */
     @Transaction
     suspend fun replaceForMessage(messageId: String, attachments: List<AttachmentEntity>) {

@@ -6,6 +6,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.dao.AttachmentDao
+import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.local.toImapParams
@@ -19,6 +21,8 @@ import org.libremail.mail.ImapClient
 @Singleton
 class AccountRepositoryImpl @Inject constructor(
     private val accountDao: AccountDao,
+    private val messageDao: MessageDao,
+    private val attachmentDao: AttachmentDao,
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
     private val syncScheduler: SyncScheduler,
@@ -54,5 +58,8 @@ class AccountRepositoryImpl @Inject constructor(
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)
         credentialStore.delete(id)
+        // Remove the account's cached mail so it disappears from the (unified) inbox.
+        attachmentDao.deleteByAccountPrefix("$id:%")
+        messageDao.deleteByAccount(id)
     }
 }
