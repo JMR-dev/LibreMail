@@ -58,5 +58,21 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Captures the Microsoft OAuth redirect for Outlook sign-in. AppAuth registers the
+             Gmail scheme via ${appAuthRedirectScheme}; this adds the Outlook scheme. The redirect
+             URI org.libremail.outlook://oauth2redirect must be registered as a public-client
+             (mobile/desktop) redirect in the Azure app registration. -->
+        <activity
+            android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            android:exported="true"
+            tools:node="merge">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="org.libremail.outlook" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

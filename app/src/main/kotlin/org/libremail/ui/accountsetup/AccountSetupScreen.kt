@@ -60,6 +60,10 @@ fun AccountSetupScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) { result -> viewModel.onGmailResult(result.data) }
 
+    val outlookLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result -> viewModel.onOutlookResult(result.data) }
+
     LaunchedEffect(state.status) {
         if (state.status == SetupStatus.DONE) onAccountAdded()
     }
@@ -116,6 +120,14 @@ fun AccountSetupScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.account_setup_gmail))
+                }
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { outlookLauncher.launch(viewModel.outlookAuthIntent()) },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.account_setup_outlook))
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(

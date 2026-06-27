@@ -55,6 +55,19 @@ class AccountRepositoryImpl @Inject constructor(
         folders
     }
 
+    override suspend fun addOutlookAccount(
+        email: String,
+        accessToken: String,
+        authStateJson: String,
+    ): Result<List<String>> = runCatching {
+        val account = Account.outlook(email)
+        val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
+        accountDao.upsert(account.toEntity())
+        credentialStore.saveSecret(account.id, authStateJson)
+        syncScheduler.syncNow()
+        folders
+    }
+
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)
         credentialStore.delete(id)

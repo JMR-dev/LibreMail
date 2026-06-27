@@ -27,6 +27,13 @@ val gmailRedirectScheme: String = if (gmailOAuthClientId.endsWith(".apps.googleu
     "org.libremail.oauth"
 }
 
+// Microsoft (Outlook) OAuth public client id — a GUID, not a secret. Overridable via
+// secrets.properties; defaults to the app's registered client id.
+val outlookOAuthClientId: String = secrets.getProperty(
+    "OUTLOOK_OAUTH_CLIENT_ID",
+    "04e4aa5e-ed1f-47f9-b567-b99a0b29b3df",
+)
+
 android {
     namespace = "org.libremail"
     compileSdk = 37
@@ -42,6 +49,8 @@ android {
 
         buildConfigField("String", "GMAIL_OAUTH_CLIENT_ID", "\"$gmailOAuthClientId\"")
         buildConfigField("String", "GMAIL_OAUTH_REDIRECT_URI", "\"$gmailRedirectScheme:/oauth2redirect\"")
+        buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
+        buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"org.libremail.outlook://oauth2redirect\"")
         // AppAuth captures the OAuth redirect via this custom scheme.
         manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
     }

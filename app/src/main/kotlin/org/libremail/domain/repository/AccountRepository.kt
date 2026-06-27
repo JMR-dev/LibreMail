@@ -18,5 +18,8 @@ interface AccountRepository {
     /** Verify (via XOAUTH2), then persist, a Gmail account. Returns the folders found. */
     suspend fun addGmailAccount(email: String, accessToken: String, authStateJson: String): Result<List<String>>
 
+    /** Verify (via XOAUTH2), then persist, an Outlook account. Returns the folders found. */
+    suspend fun addOutlookAccount(email: String, accessToken: String, authStateJson: String): Result<List<String>>
+
     suspend fun deleteAccount(id: String)
 }

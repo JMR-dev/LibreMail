@@ -68,6 +68,7 @@
 
     <!-- Account setup -->
     <string name="account_setup_gmail">Sign in with Google</string>
+    <string name="account_setup_outlook">Sign in with Microsoft</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose how you want to connect your mailbox.</string>
     <string name="account_gmail_needs_client_id">Add your Google OAuth client ID first — see the README</string>
