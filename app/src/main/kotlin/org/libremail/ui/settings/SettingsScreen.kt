@@ -43,8 +43,10 @@ fun SettingsScreen(
     onSelectTab: (TopDest) -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val advancedExpanded by viewModel.advancedExpanded.collectAsStateWithLifecycle()
+
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
         bottomBar = { LibreMailBottomBar(current = TopDest.SETTINGS, onSelect = onSelectTab) },
@@ -71,31 +73,40 @@ fun SettingsScreen(
             ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
             HorizontalDivider()
 
+            SectionHeader(stringResource(R.string.settings_notifications))
+            SwitchRow(
+                title = stringResource(R.string.settings_new_mail),
+                checked = settings.newMailNotifications,
+                onCheckedChange = viewModel::setNewMailNotifications,
+                subtitle = stringResource(R.string.settings_new_mail_summary),
+            )
+            HorizontalDivider()
+
             SectionHeader(stringResource(R.string.settings_appearance))
             SwitchRow(
                 title = stringResource(R.string.settings_dynamic_color),
-                checked = state.dynamicColor,
+                checked = settings.dynamicColor,
                 onCheckedChange = viewModel::setDynamicColor,
                 subtitle = stringResource(R.string.settings_dynamic_color_summary),
             )
             HorizontalDivider()
 
-            AdvancedHeader(expanded = state.advancedExpanded, onToggle = viewModel::toggleAdvanced)
-            AnimatedVisibility(visible = state.advancedExpanded) {
+            AdvancedHeader(expanded = advancedExpanded, onToggle = viewModel::toggleAdvanced)
+            AnimatedVisibility(visible = advancedExpanded) {
                 Column {
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_idle),
-                        checked = state.pushIdle,
+                        checked = settings.pushIdle,
                         onCheckedChange = viewModel::setPushIdle,
                     )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_starttls),
-                        checked = state.allowStartTls,
+                        checked = settings.allowStartTls,
                         onCheckedChange = viewModel::setAllowStartTls,
                     )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_remote_images),
-                        checked = state.loadRemoteImages,
+                        checked = settings.loadRemoteImages,
                         onCheckedChange = viewModel::setLoadRemoteImages,
                     )
                 }

@@ -16,6 +16,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
 
+    @Query("SELECT id FROM messages WHERE accountId = :accountId")
+    suspend fun getIdsForAccount(accountId: String): List<String>
+
     /** Inserts only new messages, leaving existing rows (and their cached bodies) intact. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertNew(messages: List<MessageEntity>)

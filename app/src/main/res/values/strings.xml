@@ -59,8 +59,15 @@
     <string name="manual_smtp_security">SMTP security</string>
     <string name="manual_test_and_add">Test &amp; add account</string>
 
+    <!-- Notifications -->
+    <string name="notif_channel_new_mail">New mail</string>
+    <string name="notif_new_mail_count">%1$d new messages</string>
+
     <!-- Settings -->
     <string name="settings_accounts">Accounts</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_new_mail">New-mail notifications</string>
+    <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
     <string name="account_remove">Remove</string>
     <string name="settings_appearance">Appearance</string>

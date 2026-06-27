@@ -11,8 +11,9 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > Room cache with pull-to-refresh; and **reading** — message bodies fetched on open and
 > rendered in a hardened WebView (JavaScript off, remote images blocked by default),
 > with mark-read, star, and delete; and **composing** — a compose screen with device-
-> contacts autocomplete that sends over SMTP, plus reply. Outlook Graph send, push
-> notifications, and multi-account polish are upcoming.
+> contacts autocomplete that sends over SMTP, plus reply; and **on-device new-mail
+> notifications** (no push service) with persisted settings. Outlook Graph send, IMAP
+> IDLE push, attachments, and multi-account polish are upcoming.
 
 ## Features (target MVP)
 
