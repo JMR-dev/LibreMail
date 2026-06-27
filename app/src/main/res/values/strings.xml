@@ -62,6 +62,9 @@
     <!-- Notifications -->
     <string name="notif_channel_new_mail">New mail</string>
     <string name="notif_new_mail_count">%1$d new messages</string>
+    <string name="notif_channel_push_status">Push (IMAP IDLE)</string>
+    <string name="notif_push_status_title">Watching for new mail</string>
+    <string name="notif_push_status_text">Connected for instant delivery</string>
 
     <!-- Settings -->
     <string name="settings_accounts">Accounts</string>

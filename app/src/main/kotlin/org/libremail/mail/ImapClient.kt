@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
+import android.util.Log
 import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
@@ -9,12 +10,20 @@ import jakarta.mail.Part
 import jakarta.mail.Session
 import jakarta.mail.Store
 import jakarta.mail.UIDFolder
+import jakarta.mail.event.MessageCountAdapter
+import jakarta.mail.event.MessageCountEvent
 import jakarta.mail.internet.InternetAddress
 import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.eclipse.angus.mail.imap.IMAPFolder
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 
@@ -130,6 +139,54 @@ class ImapClient @Inject constructor() {
             }
         }
 
+    /**
+     * Holds a long-lived IMAP connection and uses IMAP IDLE to wait for server activity. The
+     * server pushes new-mail notifications while [IMAPFolder.idle] blocks; Jakarta dispatches them
+     * to the message-count listener (not by returning from idle()), so we forward each push to
+     * [onActivity] via a conflated channel. Runs until the coroutine is cancelled (which closes the
+     * connection to unblock idle()) or a connection error is thrown, leaving reconnection to the caller.
+     */
+    suspend fun idle(params: ImapConnectionParams, onActivity: suspend () -> Unit) =
+        withContext(Dispatchers.IO) {
+            val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
+            val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
+            store.connect(params.host, params.port, params.username, params.secret)
+            val inbox = store.getFolder("INBOX") as IMAPFolder
+            inbox.open(Folder.READ_ONLY)
+            Log.d(TAG, "IDLE connected for ${params.username}")
+
+            val pushes = Channel<Unit>(Channel.CONFLATED)
+            inbox.addMessageCountListener(object : MessageCountAdapter() {
+                override fun messagesAdded(event: MessageCountEvent) {
+                    Log.d(TAG, "IDLE push: ${event.messages.size} new message(s)")
+                    pushes.trySend(Unit)
+                }
+            })
+
+            coroutineScope {
+                val syncer = launch {
+                    for (signal in pushes) onActivity()
+                }
+                // Closing the store from the cancellation handler unblocks the blocking idle() below.
+                val handle = coroutineContext.job.invokeOnCompletion { runCatching { store.close() } }
+                // Sync once on connect to catch anything that arrived before IDLE was established.
+                pushes.trySend(Unit)
+                try {
+                    while (isActive) {
+                        inbox.idle()
+                    }
+                } catch (e: Exception) {
+                    if (isActive) throw e // a real connection error: let the caller reconnect
+                } finally {
+                    handle.dispose()
+                    pushes.close()
+                    syncer.cancel()
+                    runCatching { inbox.close(false) }
+                    runCatching { store.close() }
+                }
+            }
+        }
+
     /** Recursively finds the best body part: HTML preferred, plain text otherwise. */
     private fun extractBody(part: Part): MessageContent? {
         if (part.isMimeType("text/html")) return MessageContent(part.content.toString(), isHtml = true)
@@ -151,22 +208,7 @@ class ImapClient @Inject constructor() {
 
     private inline fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
-        val props = Properties().apply {
-            put("mail.store.protocol", protocol)
-            put("mail.$protocol.host", params.host)
-            put("mail.$protocol.port", params.port.toString())
-            put("mail.$protocol.connectiontimeout", TIMEOUT_MS)
-            put("mail.$protocol.timeout", TIMEOUT_MS)
-            put("mail.$protocol.writetimeout", TIMEOUT_MS)
-            if (params.security == MailSecurity.STARTTLS) {
-                put("mail.$protocol.starttls.enable", "true")
-                put("mail.$protocol.starttls.required", "true")
-            }
-            if (params.useXoauth2) {
-                put("mail.$protocol.auth.mechanisms", "XOAUTH2")
-            }
-        }
-        val store = Session.getInstance(props).getStore(protocol)
+        val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
         store.connect(params.host, params.port, params.username, params.secret)
         return try {
             block(store)
@@ -175,7 +217,24 @@ class ImapClient @Inject constructor() {
         }
     }
 
+    private fun buildProps(protocol: String, params: ImapConnectionParams): Properties = Properties().apply {
+        put("mail.store.protocol", protocol)
+        put("mail.$protocol.host", params.host)
+        put("mail.$protocol.port", params.port.toString())
+        put("mail.$protocol.connectiontimeout", TIMEOUT_MS)
+        put("mail.$protocol.timeout", TIMEOUT_MS)
+        put("mail.$protocol.writetimeout", TIMEOUT_MS)
+        if (params.security == MailSecurity.STARTTLS) {
+            put("mail.$protocol.starttls.enable", "true")
+            put("mail.$protocol.starttls.required", "true")
+        }
+        if (params.useXoauth2) {
+            put("mail.$protocol.auth.mechanisms", "XOAUTH2")
+        }
+    }
+
     private companion object {
         const val TIMEOUT_MS = "15000"
+        const val TAG = "LibreMailIdle"
     }
 }
