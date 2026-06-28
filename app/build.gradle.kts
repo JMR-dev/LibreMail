@@ -129,6 +129,8 @@ dependencies {
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
     testImplementation(libs.greenmail)
+    // The real org.json for unit tests (android.jar ships a stubbed, no-op version).
+    testImplementation("org.json:json:20231013")
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

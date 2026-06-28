@@ -27,13 +27,20 @@ class MailConnectionFactory @Inject constructor(
     suspend fun smtpParamsFor(account: Account): SmtpParams =
         account.toSmtpParams(resolveSecret(account), account.authType != AuthType.PASSWORD_IMAP)
 
+    /** A fresh Microsoft Graph access token for the primary Outlook (sendMail) send path. */
+    suspend fun graphTokenFor(account: Account): String {
+        val stored = credentialStore.loadSecret(account.id)
+            ?: error("No stored credentials for ${account.email}")
+        return refreshedToken(account.id, stored, outlookAuthManager::freshGraphToken)
+    }
+
     private suspend fun resolveSecret(account: Account): String {
         val stored = credentialStore.loadSecret(account.id)
             ?: error("No stored credentials for ${account.email}")
         return when (account.authType) {
             AuthType.PASSWORD_IMAP -> stored
             AuthType.OAUTH_GMAIL -> refreshedToken(account.id, stored, gmailAuthManager::freshAccessToken)
-            AuthType.OAUTH_OUTLOOK -> refreshedToken(account.id, stored, outlookAuthManager::freshAccessToken)
+            AuthType.OAUTH_OUTLOOK -> refreshedToken(account.id, stored, outlookAuthManager::freshOutlookToken)
         }
     }
 

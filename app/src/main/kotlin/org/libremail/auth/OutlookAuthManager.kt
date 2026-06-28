@@ -17,17 +17,21 @@ import net.openid.appauth.AuthorizationRequest
 import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
+import net.openid.appauth.GrantTypeValues
 import net.openid.appauth.ResponseTypeValues
+import net.openid.appauth.TokenRequest
 import org.json.JSONObject
 import org.libremail.BuildConfig
 
 /**
  * Outlook / Microsoft OAuth 2.0 via AppAuth — Authorization Code + PKCE, no client secret.
  *
- * One consent requests the `outlook.office.com` IMAP **and** SMTP scopes. Because both live
- * under a single resource, the resulting access token authenticates IMAP receive and SMTP send
- * over SASL XOAUTH2 — no second token or Graph call is needed. The "common" tenant endpoints
- * accept both personal Microsoft accounts (outlook.com/hotmail) and work/school (Microsoft 365).
+ * Send goes through Microsoft **Graph** (`sendMail`, their first-class/preferred API); IMAP
+ * receive — and SMTP send as a fallback — go through **Exchange Online**. Those are two distinct
+ * resources (`graph.microsoft.com` vs `outlook.office.com`), and Microsoft's token endpoint issues
+ * an access token for one resource per request, so a single consent grants every scope and we mint
+ * resource-specific access tokens from the one refresh token on demand. The "common" tenant accepts
+ * both personal Microsoft accounts and work/school (Microsoft 365).
  */
 @Singleton
 class OutlookAuthManager @Inject constructor(
@@ -48,11 +52,8 @@ class OutlookAuthManager @Inject constructor(
             ResponseTypeValues.CODE,
             Uri.parse(BuildConfig.OUTLOOK_OAUTH_REDIRECT_URI),
         )
-            .setScope(
-                "openid email offline_access " +
-                    "https://outlook.office.com/IMAP.AccessAsUser.All " +
-                    "https://outlook.office.com/SMTP.Send",
-            )
+            // One consent covering both resources; per-resource access tokens are minted later.
+            .setScope("openid email $OFFLINE $GRAPH_SCOPE $OUTLOOK_SCOPE")
             .build()
         return AuthorizationService(context).getAuthorizationRequestIntent(request)
     }
@@ -76,23 +77,39 @@ class OutlookAuthManager @Inject constructor(
             val authState = AuthState(response, exception).apply { update(tokenResponse, null) }
             val email = emailFromIdToken(tokenResponse.idToken)
                 ?: throw IllegalStateException("Could not read the account email from the token")
+            // Mint an Exchange Online token so the caller can verify the account over IMAP.
+            val outlook = refreshForScope(authState, OUTLOOK_SCOPE)
             return OAuthResult(
                 email = email,
-                accessToken = tokenResponse.accessToken.orEmpty(),
-                authStateJson = authState.jsonSerializeString(),
+                accessToken = outlook.accessToken,
+                authStateJson = outlook.authStateJson,
             )
         } finally {
             service.dispose()
         }
     }
 
-    /** Refreshes the access token if needed (using the stored AuthState) for IMAP/SMTP XOAUTH2. */
-    suspend fun freshAccessToken(authStateJson: String): FreshToken {
-        val authState = AuthState.jsonDeserialize(authStateJson)
+    /** A fresh Exchange Online (outlook.office.com) token for IMAP receive and SMTP-fallback send. */
+    suspend fun freshOutlookToken(authStateJson: String): FreshToken =
+        refreshForScope(AuthState.jsonDeserialize(authStateJson), OUTLOOK_SCOPE)
+
+    /** A fresh Microsoft Graph token for the primary `sendMail` send path. */
+    suspend fun freshGraphToken(authStateJson: String): FreshToken =
+        refreshForScope(AuthState.jsonDeserialize(authStateJson), GRAPH_SCOPE)
+
+    /** Redeems the stored refresh token for an access token scoped to a single resource. */
+    private suspend fun refreshForScope(authState: AuthState, scope: String): FreshToken {
+        val refreshToken = authState.refreshToken
+            ?: throw IllegalStateException("No refresh token available; please sign in again")
         val service = AuthorizationService(context)
         try {
-            val accessToken = suspendCancellableCoroutine { continuation ->
-                authState.performActionWithFreshTokens(service) { token, _, error ->
+            val request = TokenRequest.Builder(serviceConfig, BuildConfig.OUTLOOK_OAUTH_CLIENT_ID)
+                .setGrantType(GrantTypeValues.REFRESH_TOKEN)
+                .setRefreshToken(refreshToken)
+                .setScope("$OFFLINE $scope")
+                .build()
+            val tokenResponse = suspendCancellableCoroutine { continuation ->
+                service.performTokenRequest(request) { token, error ->
                     if (token != null) {
                         continuation.resume(token)
                     } else {
@@ -100,7 +117,11 @@ class OutlookAuthManager @Inject constructor(
                     }
                 }
             }
-            return FreshToken(accessToken = accessToken, authStateJson = authState.jsonSerializeString())
+            authState.update(tokenResponse, null)
+            return FreshToken(
+                accessToken = tokenResponse.accessToken.orEmpty(),
+                authStateJson = authState.jsonSerializeString(),
+            )
         } finally {
             service.dispose()
         }
@@ -115,5 +136,12 @@ class OutlookAuthManager @Inject constructor(
             val claims = JSONObject(json)
             claims.optString("email").ifBlank { claims.optString("preferred_username") }.ifBlank { null }
         }.getOrNull()
+    }
+
+    private companion object {
+        const val OFFLINE = "offline_access"
+        const val GRAPH_SCOPE = "https://graph.microsoft.com/Mail.Send"
+        const val OUTLOOK_SCOPE =
+            "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
     }
 }

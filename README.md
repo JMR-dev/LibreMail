@@ -19,7 +19,7 @@ experience with power-user features tucked under an **Advanced Settings** group.
 > system viewer, and attach files when composing; **multiple accounts** — a unified inbox
 > with per-account filtering; and
 > **search** across cached mail and the server (IMAP SEARCH); and **Outlook/Microsoft**
-> accounts (OAuth 2.0 sign-in, IMAP receive + SMTP send over XOAUTH2).
+> accounts (OAuth 2.0 sign-in, IMAP receive + Microsoft Graph send, SMTP/XOAUTH2 fallback).
 
 ## Features (target MVP)
 
@@ -91,18 +91,20 @@ assessment for the restricted scope.
 
 ## Outlook / Microsoft account setup (OAuth client)
 
-Outlook uses the Microsoft identity platform with OAuth 2.0 + PKCE (no client secret),
-requesting the `outlook.office.com` **IMAP** and **SMTP** scopes — a single token
-authenticates both IMAP receive and SMTP send over XOAUTH2. A working client ID ships with
-the build; to use your own Azure app registration instead:
+Outlook uses the Microsoft identity platform with OAuth 2.0 + PKCE (no client secret). Send
+goes through Microsoft **Graph** (`sendMail`, their preferred API) with SMTP/XOAUTH2 as a
+fallback; receive is **IMAP**. Graph and Exchange Online are separate resources, so one
+consent grants every scope and per-resource access tokens are minted from the one refresh
+token. A working client ID ships with the build; to use your own Azure app registration:
 
 1. [Azure portal](https://portal.azure.com/) → **App registrations → New registration.**
    Supported account types: *Accounts in any organizational directory and personal Microsoft
    accounts*.
 2. **Authentication → Add a platform → Mobile and desktop applications**; add the redirect
    URI `org.libremail.outlook://oauth2redirect` and enable **Allow public client flows**.
-3. **API permissions:** add the delegated **Office 365 Exchange Online** scopes
-   `IMAP.AccessAsUser.All` and `SMTP.Send` (`openid`/`email`/`offline_access` come from OIDC).
+3. **API permissions** (delegated): **Microsoft Graph → `Mail.Send`** (primary send), plus
+   **Office 365 Exchange Online → `IMAP.AccessAsUser.All` and `SMTP.Send`** (receive + SMTP
+   fallback). `openid`/`email`/`offline_access` come from OIDC.
 4. Copy the **Application (client) ID** into `secrets.properties` as
    `OUTLOOK_OAUTH_CLIENT_ID` (it overrides the built-in default).
 
