@@ -32,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -40,7 +39,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
 import org.libremail.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -53,12 +51,6 @@ fun AccountSetupScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    val needsClientId = stringResource(R.string.account_gmail_needs_client_id)
-
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result -> viewModel.onGmailResult(result.data) }
 
     val outlookLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -108,20 +100,6 @@ fun AccountSetupScreen(
                     textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(24.dp))
-                Button(
-                    onClick = {
-                        if (viewModel.isGmailConfigured) {
-                            launcher.launch(viewModel.gmailAuthIntent())
-                        } else {
-                            scope.launch { snackbarHostState.showSnackbar(needsClientId) }
-                        }
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.account_setup_gmail))
-                }
-                Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = { outlookLauncher.launch(viewModel.outlookAuthIntent()) },
                     enabled = !busy,
