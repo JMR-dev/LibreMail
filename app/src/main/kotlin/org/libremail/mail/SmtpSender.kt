@@ -43,7 +43,7 @@ class SmtpSender @Inject constructor() {
                 }
                 if (params.security == MailSecurity.STARTTLS) {
                     put("mail.$protocol.starttls.enable", "true")
-                    put("mail.$protocol.starttls.required", "true")
+                    put("mail.$protocol.starttls.required", params.strictStartTls.toString())
                 }
                 if (params.useXoauth2) {
                     put("mail.$protocol.auth.mechanisms", "XOAUTH2")

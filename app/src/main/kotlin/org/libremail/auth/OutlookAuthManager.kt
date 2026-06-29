@@ -121,6 +121,7 @@ class OutlookAuthManager @Inject constructor(
             return FreshToken(
                 accessToken = tokenResponse.accessToken.orEmpty(),
                 authStateJson = authState.jsonSerializeString(),
+                accessTokenExpiry = tokenResponse.accessTokenExpirationTime,
             )
         } finally {
             service.dispose()

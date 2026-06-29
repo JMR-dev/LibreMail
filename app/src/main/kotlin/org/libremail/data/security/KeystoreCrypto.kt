@@ -19,7 +19,11 @@ import javax.inject.Singleton
 @Singleton
 class KeystoreCrypto @Inject constructor() {
 
-    private fun secretKey(): SecretKey {
+    private val keyLock = Any()
+
+    // Synchronized so two concurrent first-run encrypts can't both generate a key under the same
+    // alias — the second would overwrite the first, leaving the first secret undecryptable.
+    private fun secretKey(): SecretKey = synchronized(keyLock) {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
 
@@ -34,7 +38,7 @@ class KeystoreCrypto @Inject constructor() {
                 .setKeySize(256)
                 .build(),
         )
-        return generator.generateKey()
+        generator.generateKey()
     }
 
     /** Returns Base64(iv || ciphertext). */

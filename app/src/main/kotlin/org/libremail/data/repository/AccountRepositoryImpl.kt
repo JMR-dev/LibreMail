@@ -6,7 +6,6 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
-import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
@@ -22,7 +21,6 @@ import org.libremail.mail.ImapClient
 class AccountRepositoryImpl @Inject constructor(
     private val accountDao: AccountDao,
     private val messageDao: MessageDao,
-    private val attachmentDao: AttachmentDao,
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
     private val syncScheduler: SyncScheduler,
@@ -38,19 +36,6 @@ class AccountRepositoryImpl @Inject constructor(
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
         accountDao.upsert(account.toEntity())
         credentialStore.saveSecret(account.id, password)
-        syncScheduler.syncNow()
-        folders
-    }
-
-    override suspend fun addGmailAccount(
-        email: String,
-        accessToken: String,
-        authStateJson: String,
-    ): Result<List<String>> = runCatching {
-        val account = Account.gmail(email)
-        val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
-        accountDao.upsert(account.toEntity())
-        credentialStore.saveSecret(account.id, authStateJson)
         syncScheduler.syncNow()
         folders
     }
@@ -71,8 +56,7 @@ class AccountRepositoryImpl @Inject constructor(
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)
         credentialStore.delete(id)
-        // Remove the account's cached mail so it disappears from the (unified) inbox.
-        attachmentDao.deleteByAccountPrefix("$id:%")
+        // Remove the account's cached mail (attachment rows cascade via the foreign key).
         messageDao.deleteByAccount(id)
     }
 }

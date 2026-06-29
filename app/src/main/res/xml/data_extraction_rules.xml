@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  LibreMail stores encrypted IMAP/OAuth credentials and cached mail in its Room database, encrypted
+  with a non-exportable Android Keystore key. The key never leaves the device, so backing up or
+  transferring the ciphertext would only restore undecryptable data (and needlessly ship mail and
+  credential blobs off-device). Exclude all app data from both cloud backup and device-to-device
+  transfer; accounts are simply re-added on a new device.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+    </device-transfer>
+</data-extraction-rules>

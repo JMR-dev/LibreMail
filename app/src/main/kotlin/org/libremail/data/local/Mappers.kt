@@ -7,6 +7,8 @@ import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
+import org.json.JSONArray
+import org.json.JSONObject
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
@@ -15,6 +17,7 @@ import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.SmtpParams
 import org.libremail.mail.AttachmentPart
@@ -38,7 +41,11 @@ internal fun Account.toEntity(): AccountEntity = AccountEntity(
     smtp = ServerConfigEmbedded(smtp.host, smtp.port, smtp.security.name),
 )
 
-internal fun Account.toImapParams(secret: String, useXoauth2: Boolean): ImapConnectionParams =
+internal fun Account.toImapParams(
+    secret: String,
+    useXoauth2: Boolean,
+    strictStartTls: Boolean = true,
+): ImapConnectionParams =
     ImapConnectionParams(
         host = imap.host,
         port = imap.port,
@@ -46,9 +53,14 @@ internal fun Account.toImapParams(secret: String, useXoauth2: Boolean): ImapConn
         username = email,
         secret = secret,
         useXoauth2 = useXoauth2,
+        strictStartTls = strictStartTls,
     )
 
-internal fun Account.toSmtpParams(secret: String, useXoauth2: Boolean): SmtpParams =
+internal fun Account.toSmtpParams(
+    secret: String,
+    useXoauth2: Boolean,
+    strictStartTls: Boolean = true,
+): SmtpParams =
     SmtpParams(
         host = smtp.host,
         port = smtp.port,
@@ -56,6 +68,7 @@ internal fun Account.toSmtpParams(secret: String, useXoauth2: Boolean): SmtpPara
         username = email,
         secret = secret,
         useXoauth2 = useXoauth2,
+        strictStartTls = strictStartTls,
     )
 
 internal fun MessageEntity.toDomain(): Message = Message(
@@ -70,9 +83,10 @@ internal fun MessageEntity.toDomain(): Message = Message(
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isStarred,
+    inInbox = inInbox,
 )
 
-internal fun FetchedMessage.toEntity(accountId: String): MessageEntity = MessageEntity(
+internal fun FetchedMessage.toEntity(accountId: String, inInbox: Boolean = true): MessageEntity = MessageEntity(
     id = "$accountId:$uid",
     accountId = accountId,
     sender = sender,
@@ -84,6 +98,8 @@ internal fun FetchedMessage.toEntity(accountId: String): MessageEntity = Message
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isFlagged,
+    inInbox = inInbox,
+    bodyFetched = false,
 )
 
 internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
@@ -110,6 +126,7 @@ internal fun DraftEntity.toDomain(): Draft = Draft(
     subject = subject,
     body = body,
     updatedAt = updatedAt,
+    attachments = attachments.toOutgoingAttachments(),
 )
 
 internal fun Draft.toEntity(): DraftEntity = DraftEntity(
@@ -120,7 +137,27 @@ internal fun Draft.toEntity(): DraftEntity = DraftEntity(
     subject = subject,
     body = body,
     updatedAt = updatedAt,
+    attachments = attachments.toJson(),
 )
+
+/** Serializes draft attachments as a JSON array of {uri, name} objects ("" when empty). */
+private fun List<OutgoingAttachment>.toJson(): String {
+    if (isEmpty()) return ""
+    val array = JSONArray()
+    forEach { array.put(JSONObject().put("uri", it.uri).put("name", it.name)) }
+    return array.toString()
+}
+
+private fun String.toOutgoingAttachments(): List<OutgoingAttachment> {
+    if (isBlank()) return emptyList()
+    return runCatching {
+        val array = JSONArray(this)
+        (0 until array.length()).map { i ->
+            val obj = array.getJSONObject(i)
+            OutgoingAttachment(obj.getString("uri"), obj.optString("name"))
+        }
+    }.getOrDefault(emptyList())
+}
 
 internal fun OutboxEntity.toDomain(): OutboxMessage = OutboxMessage(
     id = id,

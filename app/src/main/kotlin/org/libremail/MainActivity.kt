@@ -27,6 +27,12 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var settingsRepository: SettingsRepository
 
+    override fun onStart() {
+        super.onStart()
+        // Foreground: recover IDLE push if a background start was previously blocked.
+        (application as? LibreMailApplication)?.ensurePushStarted()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

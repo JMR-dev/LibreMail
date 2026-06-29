@@ -92,7 +92,8 @@ class IdleService : Service() {
             try {
                 val params = connectionFactory.imapParamsFor(account)
                 withTimeoutOrNull(IDLE_RENEWAL_MS) {
-                    imapClient.idle(params) { mailSyncer.syncAll() }
+                    // Sync just this account on its own push — not every account.
+                    imapClient.idle(params) { mailSyncer.syncAccount(account.id) }
                 }
                 backoffMs = INITIAL_BACKOFF_MS
             } catch (e: CancellationException) {

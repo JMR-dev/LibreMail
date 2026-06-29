@@ -215,8 +215,14 @@ class ImapClient @Inject constructor() {
             val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
             val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
             store.connect(params.host, params.port, params.username, params.secret)
-            val inbox = store.getFolder("INBOX") as IMAPFolder
-            inbox.open(Folder.READ_ONLY)
+            // Close the just-connected store if opening the folder fails, so a failed connect in the
+            // IDLE reconnect loop can't leak connections until the server's per-account limit is hit.
+            val inbox = try {
+                (store.getFolder("INBOX") as IMAPFolder).also { it.open(Folder.READ_ONLY) }
+            } catch (e: Throwable) {
+                runCatching { store.close() }
+                throw e
+            }
             Log.d(TAG, "IDLE connected for ${params.username}")
 
             val pushes = Channel<Unit>(Channel.CONFLATED)
@@ -345,7 +351,7 @@ class ImapClient @Inject constructor() {
         put("mail.$protocol.writetimeout", TIMEOUT_MS)
         if (params.security == MailSecurity.STARTTLS) {
             put("mail.$protocol.starttls.enable", "true")
-            put("mail.$protocol.starttls.required", "true")
+            put("mail.$protocol.starttls.required", params.strictStartTls.toString())
         }
         if (params.useXoauth2) {
             put("mail.$protocol.auth.mechanisms", "XOAUTH2")

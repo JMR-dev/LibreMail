@@ -51,7 +51,9 @@ class MailboxViewModel @Inject constructor(
             val q = query.trim()
             all.filter { message ->
                 (accountId == null || message.accountId == accountId) &&
-                    (q.isEmpty() || message.matchesSearch(q))
+                    // Outside of search show only inbox rows; while searching show every match,
+                    // including transient server-search hits that aren't in the inbox.
+                    (if (q.isEmpty()) message.inInbox else message.matchesSearch(q))
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -99,6 +101,8 @@ class MailboxViewModel @Inject constructor(
     fun closeSearch() {
         _searchActive.value = false
         _searchQuery.value = ""
+        // Drop the transient server-search hits so they don't linger in the inbox.
+        viewModelScope.launch { mailRepository.clearSearchResults() }
     }
 
     fun onSearchQuery(query: String) {

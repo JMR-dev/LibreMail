@@ -33,6 +33,10 @@ class LibreMailApplication : Application(), Configuration.Provider {
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** Whether the IDLE push service should currently be running (push enabled AND an account exists). */
+    @Volatile
+    private var pushShouldBeActive = false
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
@@ -50,7 +54,20 @@ class LibreMailApplication : Application(), Configuration.Provider {
                 accountRepository.observeAccounts().map { it.isNotEmpty() },
             ) { pushEnabled, hasAccounts -> pushEnabled && hasAccounts }
                 .distinctUntilChanged()
-                .collect { active -> if (active) idlePushManager.start() else idlePushManager.stop() }
+                .collect { active ->
+                    pushShouldBeActive = active
+                    if (active) idlePushManager.start() else idlePushManager.stop()
+                }
         }
+    }
+
+    /**
+     * Re-attempts starting the IDLE push service. A start from the background can be blocked
+     * (ForegroundServiceStartNotAllowedException) and is swallowed; because the active/inactive
+     * state hasn't changed, the collector above won't retry, so the foreground (MainActivity) calls
+     * this to recover. Safe to call repeatedly — starting an already-running service is a no-op.
+     */
+    fun ensurePushStarted() {
+        if (pushShouldBeActive) idlePushManager.start()
     }
 }

@@ -11,9 +11,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
 import org.libremail.domain.repository.MailRepository
@@ -39,6 +41,7 @@ sealed interface ReaderEvent {
 class ReaderViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MailRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     private val messageId: String = checkNotNull(savedStateHandle[Routes.READER_ARG_ID])
@@ -50,6 +53,12 @@ class ReaderViewModel @Inject constructor(
     val events = _events.receiveAsFlow()
 
     init {
+        // Honor the global "load remote images by default" preference.
+        viewModelScope.launch {
+            if (settingsRepository.settings.first().loadRemoteImages) {
+                _state.update { it.copy(loadRemoteImages = true) }
+            }
+        }
         viewModelScope.launch {
             repository.openMessage(messageId).fold(
                 onSuccess = { message -> _state.update { it.copy(loading = false, message = message) } },

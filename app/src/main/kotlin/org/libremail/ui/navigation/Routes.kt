@@ -14,7 +14,7 @@ object Routes {
 
     const val READER_ARG_ID = "messageId"
     const val READER_PATTERN = "reader/{$READER_ARG_ID}"
-    fun reader(messageId: String) = "reader/$messageId"
+    fun reader(messageId: String) = "reader/${Uri.encode(messageId)}"
 
     const val COMPOSE_ARG_TO = "to"
     const val COMPOSE_ARG_SUBJECT = "subject"

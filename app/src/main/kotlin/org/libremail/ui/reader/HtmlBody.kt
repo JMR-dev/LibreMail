@@ -9,6 +9,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -26,6 +28,9 @@ fun HtmlBody(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    // Tracks the content actually loaded so recompositions (star/attachment state changes) don't
+    // reload the page and throw away the user's scroll position.
+    val lastLoaded = remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -45,7 +50,17 @@ fun HtmlBody(
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val url = request?.url ?: return false
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url)) }
+                        // Only open ordinary web/mail links, and only on an actual user tap — never
+                        // auto-launch arbitrary intent:/market:/custom-scheme URIs (e.g. via a
+                        // meta-refresh in a malicious email) or navigate inside the WebView.
+                        val scheme = url.scheme?.lowercase()
+                        if (scheme != "http" && scheme != "https" && scheme != "mailto") return true
+                        if (!request.hasGesture()) return true
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
                         return true
                     }
                 }
@@ -53,7 +68,11 @@ fun HtmlBody(
         },
         update = { webView ->
             webView.settings.blockNetworkLoads = !loadRemoteImages
-            webView.loadDataWithBaseURL(null, wrapHtml(html), "text/html", "UTF-8", null)
+            val key = html to loadRemoteImages
+            if (lastLoaded.value != key) {
+                lastLoaded.value = key
+                webView.loadDataWithBaseURL(null, wrapHtml(html), "text/html", "UTF-8", null)
+            }
         },
     )
 }

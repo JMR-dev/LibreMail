@@ -13,4 +13,6 @@ data class OAuthResult(
 data class FreshToken(
     val accessToken: String,
     val authStateJson: String,
+    /** Epoch-millis expiry of [accessToken], when the provider reported one (for caching). */
+    val accessTokenExpiry: Long? = null,
 )

@@ -46,4 +46,7 @@ interface MailRepository {
 
     /** Fetches server-side search matches into the cache so the message list can surface them. */
     suspend fun searchServer(query: String)
+
+    /** Drops transient server-search hits from the cache (called when search is dismissed). */
+    suspend fun clearSearchResults()
 }

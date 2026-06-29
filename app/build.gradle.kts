@@ -34,6 +34,10 @@ val outlookOAuthClientId: String = secrets.getProperty(
     "04e4aa5e-ed1f-47f9-b567-b99a0b29b3df",
 )
 
+// Optional release signing, configured via git-ignored secrets.properties. When absent, release
+// builds fall back to the debug key (installable for testing, but not publishable).
+val releaseStoreFile: String? = secrets.getProperty("RELEASE_STORE_FILE")
+
 android {
     namespace = "org.libremail"
     compileSdk = 37
@@ -55,6 +59,17 @@ android {
         manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = secrets.getProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = secrets.getProperty("RELEASE_KEY_ALIAS")
+                keyPassword = secrets.getProperty("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -62,9 +77,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Sign release builds with the debug key so they're installable for testing.
-            // A public release would configure a dedicated upload/release keystore here.
-            signingConfig = signingConfigs.getByName("debug")
+            // Use a dedicated release keystore when configured in secrets.properties; otherwise fall
+            // back to the debug key so the build is still installable for local testing.
+            signingConfig = if (releaseStoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -85,6 +104,11 @@ android {
             )
         }
     }
+}
+
+// Export Room schemas so migrations can be validated by instrumented MigrationTestHelper tests.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {

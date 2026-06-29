@@ -8,16 +8,18 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.toDomain
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
 import org.libremail.mail.SmtpSender
 
-/** Drains the outbox: sends each queued message over SMTP, deleting it on success. */
+/** Drains the outbox: sends each queued message over Graph/SMTP, deleting it on success. */
 @HiltWorker
 class SendWorker @AssistedInject constructor(
     @Assisted appContext: Context,
@@ -50,7 +52,7 @@ class SendWorker @AssistedInject constructor(
                     subject = entity.subject,
                     body = entity.body,
                 )
-                val files = attachmentDir.listFiles()?.toList().orEmpty()
+                val files = orderedAttachments(attachmentDir)
                 if (account.authType == AuthType.OAUTH_OUTLOOK) {
                     sendOutlook(account, message, files)
                 } else {
@@ -62,8 +64,15 @@ class SendWorker @AssistedInject constructor(
                     attachmentDir.deleteRecursively()
                 },
                 onFailure = { e ->
-                    outboxDao.setError(entity.id, e.message)
-                    anyFailed = true
+                    if (e is GraphSendException && e.mayHaveSent) {
+                        // Graph may already have delivered this; auto-retrying (or any other send)
+                        // would duplicate it, so leave it queued with a clear status and let the
+                        // user decide. Not counted as a failure, so WorkManager won't auto-retry.
+                        outboxDao.setError(entity.id, "Send status unknown — check your Sent folder, then retry or cancel")
+                    } else {
+                        outboxDao.setError(entity.id, e.message)
+                        anyFailed = true
+                    }
                 },
             )
         }
@@ -71,12 +80,31 @@ class SendWorker @AssistedInject constructor(
         return if (anyFailed) Result.retry() else Result.success()
     }
 
-    /** Outlook prefers Microsoft Graph; fall back to SMTP (XOAUTH2) if the Graph send fails. */
+    /**
+     * Outlook prefers Microsoft Graph. Fall back to SMTP only when Graph definitely did NOT send
+     * (a rejection, a pre-send/transport error, or a token failure); never fall back when the Graph
+     * request may already have been accepted, or the message would be sent twice.
+     */
     private suspend fun sendOutlook(account: Account, message: OutgoingMessage, files: List<File>) {
-        runCatching {
-            graphSender.send(connectionFactory.graphTokenFor(account), message, files)
-        }.getOrElse {
+        try {
+            val token = connectionFactory.graphTokenFor(account)
+            graphSender.send(token, message, files)
+        } catch (e: GraphSendException) {
+            if (e.mayHaveSent) throw e
+            smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = message, attachments = files)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Graph was never reached (e.g. token refresh failed) — SMTP cannot duplicate it.
             smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = message, attachments = files)
         }
     }
+
+    /** Attachments are staged one-per-indexed-subdirectory so their original order is preserved. */
+    private fun orderedAttachments(dir: File): List<File> =
+        dir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedBy { it.name.toIntOrNull() ?: Int.MAX_VALUE }
+            ?.mapNotNull { it.listFiles()?.firstOrNull() }
+            .orEmpty()
 }

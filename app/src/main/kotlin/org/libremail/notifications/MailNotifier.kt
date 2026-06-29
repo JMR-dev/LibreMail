@@ -29,39 +29,61 @@ class MailNotifier @Inject constructor(
     fun notifyNewMail(messages: List<MessageEntity>) {
         if (messages.isEmpty() || !hasPermission()) return
         ensureChannel()
+        val manager = NotificationManagerCompat.from(context)
+        val contentIntent = contentIntent()
 
-        val title = if (messages.size == 1) {
-            messages.first().sender
-        } else {
-            context.getString(R.string.notif_new_mail_count, messages.size)
-        }
-        val text = if (messages.size == 1) {
-            messages.first().subject
-        } else {
-            messages.joinToString(", ") { it.sender }
+        // One notification per message, keyed by a stable id, so a later batch never overwrites an
+        // earlier, still-unacknowledged one. setOnlyAlertOnce avoids re-buzzing for the same message.
+        messages.forEach { message ->
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_monochrome)
+                .setContentTitle(message.sender)
+                .setContentText(message.subject)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message.subject))
+                .setCategory(NotificationCompat.CATEGORY_EMAIL)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setGroup(GROUP_KEY)
+                .setContentIntent(contentIntent)
+                .build()
+            manager.notify(notificationId(message.id), notification)
         }
 
+        // Group summary (the system shows it only once two or more children are present).
+        val summary = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle(context.getString(R.string.notif_channel_new_mail))
+            .setStyle(
+                NotificationCompat.InboxStyle().also { style ->
+                    messages.take(SUMMARY_LINES).forEach { style.addLine("${it.sender}: ${it.subject}") }
+                },
+            )
+            .setCategory(NotificationCompat.CATEGORY_EMAIL)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setGroup(GROUP_KEY)
+            .setGroupSummary(true)
+            .setContentIntent(contentIntent)
+            .build()
+        manager.notify(SUMMARY_ID, summary)
+    }
+
+    private fun contentIntent(): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
+        return PendingIntent.getActivity(
             context,
             0,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+    }
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_monochrome)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setCategory(NotificationCompat.CATEGORY_EMAIL)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+    /** Stable per-message id distinct from the summary id, so each message gets its own notification. */
+    private fun notificationId(messageId: String): Int {
+        val hash = messageId.hashCode()
+        return if (hash == SUMMARY_ID) hash + 1 else hash
     }
 
     private fun hasPermission(): Boolean =
@@ -79,6 +101,8 @@ class MailNotifier @Inject constructor(
 
     private companion object {
         const val CHANNEL_ID = "new_mail"
-        const val NOTIFICATION_ID = 1001
+        const val GROUP_KEY = "org.libremail.NEW_MAIL"
+        const val SUMMARY_ID = 1001
+        const val SUMMARY_LINES = 5
     }
 }

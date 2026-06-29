@@ -55,7 +55,7 @@ class MailRepositoryImpl @Inject constructor(
         val account = accountDao.getById(entity.accountId)?.toDomain()
         if (account != null) {
             val params = connectionFactory.imapParamsFor(account)
-            if (entity.body.isBlank()) {
+            if (!entity.bodyFetched) {
                 val content = imapClient.fetchBodyMarkingSeen(params, uidOf(id))
                 messageDao.updateBody(id, content.body, content.isHtml, snippetOf(content.body))
                 attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
@@ -112,12 +112,16 @@ class MailRepositoryImpl @Inject constructor(
         sendScheduler.sendNow()
     }
 
-    /** Copies the picked attachment URIs into the outbox message's own directory for the worker. */
+    /**
+     * Copies the picked attachment URIs into the outbox message's own directory for the worker.
+     * Each attachment goes in its own index-named subdirectory so the send worker can restore the
+     * original order (a flat listing's order is unspecified), keeping the file's real name intact.
+     */
     private fun copyAttachments(outboxId: String, attachments: List<OutgoingAttachment>) {
         if (attachments.isEmpty()) return
-        val dir = File(context.cacheDir, "outbox/$outboxId").apply { mkdirs() }
-        attachments.forEach { attachment ->
+        attachments.forEachIndexed { index, attachment ->
             val safeName = attachment.name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+            val dir = File(context.cacheDir, "outbox/$outboxId/$index").apply { mkdirs() }
             runCatching {
                 context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { input ->
                     File(dir, safeName).outputStream().use { output -> input.copyTo(output) }
@@ -150,22 +154,24 @@ class MailRepositoryImpl @Inject constructor(
             val account = entity.toDomain()
             runCatching {
                 val results = imapClient.search(connectionFactory.imapParamsFor(account), query, SEARCH_LIMIT)
-                val entities = results.map { it.toEntity(account.id) }
+                // Mark hits as non-inbox so they show only while searching (and never overwrite the
+                // inbox membership of a row that is genuinely in the inbox).
+                val entities = results.map { it.toEntity(account.id, inInbox = false) }
                 messageDao.insertNew(entities)
                 entities.forEach {
-                    messageDao.updateHeader(
+                    messageDao.updateHeaderContent(
                         id = it.id,
                         sender = it.sender,
                         senderEmail = it.senderEmail,
                         subject = it.subject,
                         timestampMillis = it.timestampMillis,
-                        isRead = it.isRead,
-                        isStarred = it.isStarred,
                     )
                 }
             }
         }
     }
+
+    override suspend fun clearSearchResults() = messageDao.deleteSearchRows()
 
     /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
     private fun saveToCache(attachment: DownloadedAttachment): File {

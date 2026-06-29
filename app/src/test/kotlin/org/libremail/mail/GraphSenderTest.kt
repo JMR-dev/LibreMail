@@ -35,6 +35,28 @@ class GraphSenderTest {
     }
 
     @Test
+    fun `recipients parse RFC822 display names into bare addresses`() {
+        val json = JSONObject(
+            buildSendMailPayload(
+                message(to = "John Doe <john@example.com>", cc = "\"Doe, Jane\" <jane@example.com>"),
+                emptyList(),
+            ),
+        )
+        val msg = json.getJSONObject("message")
+
+        val to = msg.getJSONArray("toRecipients")
+        assertEquals(1, to.length())
+        val toAddress = to.getJSONObject(0).getJSONObject("emailAddress")
+        assertEquals("john@example.com", toAddress.getString("address"))
+        assertEquals("John Doe", toAddress.getString("name"))
+
+        // The comma inside the quoted display name must not be treated as an address separator.
+        val cc = msg.getJSONArray("ccRecipients")
+        assertEquals(1, cc.length())
+        assertEquals("jane@example.com", cc.getJSONObject(0).getJSONObject("emailAddress").getString("address"))
+    }
+
+    @Test
     fun `payload omits cc when blank and encodes attachments as base64`() {
         val file = File.createTempFile("graph-att", ".txt").apply { writeText("hello") }
         try {

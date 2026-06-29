@@ -9,4 +9,5 @@ data class Draft(
     val subject: String,
     val body: String,
     val updatedAt: Long,
+    val attachments: List<OutgoingAttachment> = emptyList(),
 )

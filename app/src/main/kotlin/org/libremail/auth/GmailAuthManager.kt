@@ -93,7 +93,11 @@ class GmailAuthManager @Inject constructor(
                     }
                 }
             }
-            return FreshToken(accessToken = accessToken, authStateJson = authState.jsonSerializeString())
+            return FreshToken(
+                accessToken = accessToken,
+                authStateJson = authState.jsonSerializeString(),
+                accessTokenExpiry = authState.accessTokenExpirationTime,
+            )
         } finally {
             service.dispose()
         }

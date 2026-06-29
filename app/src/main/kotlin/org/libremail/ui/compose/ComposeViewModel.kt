@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -44,7 +45,7 @@ data class ComposeUiState(
 class ComposeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val mailRepository: MailRepository,
-    accountRepository: AccountRepository,
+    private val accountRepository: AccountRepository,
     private val contactsRepository: ContactsRepository,
 ) : ViewModel() {
 
@@ -69,6 +70,9 @@ class ComposeViewModel @Inject constructor(
 
     private var searchJob: Job? = null
 
+    /** Guards against double-navigation and against saving a draft for an already-sent message. */
+    @Volatile private var navigated = false
+
     init {
         if (draftId != null) {
             viewModelScope.launch {
@@ -80,6 +84,7 @@ class ComposeViewModel @Inject constructor(
                             subject = draft.subject,
                             body = draft.body,
                             fromAccountId = draft.accountId ?: it.fromAccountId,
+                            attachments = draft.attachments,
                         )
                     }
                 }
@@ -125,15 +130,25 @@ class ComposeViewModel @Inject constructor(
 
     /** Leaving the screen: keep a draft if there's anything worth keeping, then close. */
     fun onExit() {
+        if (navigated) return
         viewModelScope.launch {
-            saveOrDeleteDraft()
-            _finished.send(Unit)
+            // Don't save a draft for a message that's mid-send (send() will finish the screen).
+            if (!_state.value.sending) saveOrDeleteDraft()
+            finish()
         }
+    }
+
+    /** Closes the screen exactly once, so send() and a stray back-press can't double-pop. */
+    private suspend fun finish() {
+        if (navigated) return
+        navigated = true
+        _finished.send(Unit)
     }
 
     private suspend fun saveOrDeleteDraft() {
         val s = _state.value
-        val hasContent = s.to.isNotBlank() || s.cc.isNotBlank() || s.subject.isNotBlank() || s.body.isNotBlank()
+        val hasContent = s.to.isNotBlank() || s.cc.isNotBlank() || s.subject.isNotBlank() ||
+            s.body.isNotBlank() || s.attachments.isNotEmpty()
         when {
             hasContent -> mailRepository.saveDraft(
                 Draft(
@@ -144,6 +159,7 @@ class ComposeViewModel @Inject constructor(
                     subject = s.subject,
                     body = s.body,
                     updatedAt = System.currentTimeMillis(),
+                    attachments = s.attachments,
                 ),
             )
             draftId != null -> mailRepository.deleteDraft(draftId) // an existing draft was emptied out
@@ -151,23 +167,28 @@ class ComposeViewModel @Inject constructor(
     }
 
     fun send() {
-        val s = _state.value
-        val account = accounts.value.firstOrNull { it.id == s.fromAccountId } ?: accounts.value.firstOrNull()
-        when {
-            account == null -> _state.update { it.copy(error = "Add an account first") }
-            s.to.isBlank() -> _state.update { it.copy(error = "Add a recipient") }
-            else -> viewModelScope.launch {
-                _state.update { it.copy(sending = true, error = null) }
-                mailRepository.sendMessage(
-                    OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body, s.attachments),
-                ).fold(
-                    onSuccess = {
-                        draftId?.let { mailRepository.deleteDraft(it) }
-                        _state.update { it.copy(sending = false) }
-                        _finished.send(Unit)
-                    },
-                    onFailure = { e -> _state.update { it.copy(sending = false, error = e.message ?: "Could not send") } },
-                )
+        viewModelScope.launch {
+            val s = _state.value
+            // Await the account list if it hasn't emitted yet, so an early tap doesn't wrongly
+            // report "Add an account first".
+            val available = accounts.value.ifEmpty { accountRepository.observeAccounts().first() }
+            val account = available.firstOrNull { it.id == s.fromAccountId } ?: available.firstOrNull()
+            when {
+                account == null -> _state.update { it.copy(error = "Add an account first") }
+                s.to.isBlank() -> _state.update { it.copy(error = "Add a recipient") }
+                else -> {
+                    _state.update { it.copy(sending = true, error = null) }
+                    mailRepository.sendMessage(
+                        OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body, s.attachments),
+                    ).fold(
+                        onSuccess = {
+                            draftId?.let { mailRepository.deleteDraft(it) }
+                            _state.update { it.copy(sending = false) }
+                            finish()
+                        },
+                        onFailure = { e -> _state.update { it.copy(sending = false, error = e.message ?: "Could not send") } },
+                    )
+                }
             }
         }
     }

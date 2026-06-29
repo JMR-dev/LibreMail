@@ -25,8 +25,8 @@ import org.libremail.data.local.entity.OutboxEntity
         OutboxEntity::class,
         DraftEntity::class,
     ],
-    version = 6,
-    exportSchema = false,
+    version = 7,
+    exportSchema = true,
 )
 abstract class LibreMailDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
