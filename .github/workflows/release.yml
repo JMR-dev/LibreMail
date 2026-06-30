@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. v0.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this GitHub release as a pre-release"
+        required: false
+        type: boolean
+        default: true
+
+# Needed to create the tag, the GitHub release, and upload its assets.
+permissions:
+  contents: write
+
+env:
+  ANDROID_PLATFORM: "platforms;android-37.0"
+  ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
+
+jobs:
+  release:
+    name: Build APK and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: Install SDK platform and build-tools
+        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      # No release keystore is configured in CI, so the build falls back to the debug
+      # signing key (installable for testing, not for store publication).
+      - name: Assemble release APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Stage release artifacts (APK + source archives)
+        run: |
+          set -euo pipefail
+          tag='${{ inputs.tag }}'
+          mkdir -p dist
+          apk="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          cp "$apk" "dist/LibreMail-${tag}.apk"
+          # Source archives contain only git-tracked files at the released commit.
+          git archive --format=zip --prefix="LibreMail-${tag}/" -o "dist/LibreMail-${tag}-src.zip" HEAD
+          git archive --format=tar --prefix="LibreMail-${tag}/" HEAD | gzip > "dist/LibreMail-${tag}-src.tar.gz"
+          ls -l dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/LibreMail-${{ inputs.tag }}.apk
+            dist/LibreMail-${{ inputs.tag }}-src.zip
+            dist/LibreMail-${{ inputs.tag }}-src.tar.gz
