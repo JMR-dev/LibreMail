@@ -63,10 +63,15 @@
         <!-- Captures the Microsoft OAuth redirect for Outlook sign-in. AppAuth registers the
              Gmail scheme via ${appAuthRedirectScheme}; this adds the Outlook scheme. The redirect
              URI org.libremail.outlook://oauth2redirect must be registered as a public-client
-             (mobile/desktop) redirect in the Azure app registration. -->
+             (mobile/desktop) redirect in the Azure app registration.
+             AppAuth's RedirectUriReceiverActivity extends AppCompatActivity, so it needs an
+             AppCompat theme; without this it inherits the app's Theme.Material shell and crashes
+             ("You need to use a Theme.AppCompat theme") when the redirect launches it. We reuse the
+             translucent theme AppAuth itself applies to AuthorizationManagementActivity. -->
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
             android:exported="true"
+            android:theme="@style/Theme.AppCompat.Translucent.NoTitleBar"
             tools:node="merge">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

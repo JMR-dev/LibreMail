@@ -45,6 +45,12 @@ class OutlookAuthManager @Inject constructor(
     /** Outlook is always available: the Microsoft client id ships with the build (it is not a secret). */
     val isConfigured: Boolean get() = BuildConfig.OUTLOOK_OAUTH_CLIENT_ID.isNotBlank()
 
+    /**
+     * Builds the browser/Custom-Tab intent that starts the Microsoft sign-in.
+     *
+     * Throws [android.content.ActivityNotFoundException] when no usable browser is installed;
+     * callers must guard the launch and surface that as an error rather than crashing.
+     */
     fun createAuthIntent(): Intent {
         val request = AuthorizationRequest.Builder(
             serviceConfig,
@@ -55,18 +61,43 @@ class OutlookAuthManager @Inject constructor(
             // One consent covering both resources; per-resource access tokens are minted later.
             .setScope("openid email $OFFLINE $GRAPH_SCOPE $OUTLOOK_SCOPE")
             .build()
-        return AuthorizationService(context).getAuthorizationRequestIntent(request)
+        // The returned intent is self-contained, so dispose the service (and its Custom-Tabs
+        // warmup binding) immediately instead of leaking one per button tap.
+        val service = AuthorizationService(context)
+        return try {
+            service.getAuthorizationRequestIntent(request)
+        } finally {
+            service.dispose()
+        }
     }
 
     suspend fun exchangeToken(responseIntent: Intent): OAuthResult {
         val response = AuthorizationResponse.fromIntent(responseIntent)
         val exception = AuthorizationException.fromIntent(responseIntent)
         if (response == null) throw exception ?: IllegalStateException("Authorization was cancelled")
+        val authCode = response.authorizationCode
+            ?: throw exception ?: IllegalStateException("No authorization code was returned")
+
+        // Microsoft issues one access token per resource, so the authorization-code exchange must
+        // name a single resource. AppAuth's createTokenExchangeRequest() sends no scope, which makes
+        // Microsoft reject our multi-resource consent code with AADSTS70011 ("must include a 'scope'
+        // input parameter"). Request the OIDC scopes plus the Exchange Online resource so we still get
+        // an id_token (for the email) and a refresh token to mint the Graph token from later.
+        // This mirrors every field createTokenExchangeRequest() sets — including the nonce, which
+        // AppAuth checks against the id_token's nonce claim (omitting it fails id_token validation).
+        val exchangeRequest = TokenRequest.Builder(serviceConfig, BuildConfig.OUTLOOK_OAUTH_CLIENT_ID)
+            .setGrantType(GrantTypeValues.AUTHORIZATION_CODE)
+            .setAuthorizationCode(authCode)
+            .setRedirectUri(Uri.parse(BuildConfig.OUTLOOK_OAUTH_REDIRECT_URI))
+            .setCodeVerifier(response.request.codeVerifier)
+            .setNonce(response.request.nonce)
+            .setScope("openid email $OFFLINE $OUTLOOK_SCOPE")
+            .build()
 
         val service = AuthorizationService(context)
         try {
             val tokenResponse = suspendCancellableCoroutine { continuation ->
-                service.performTokenRequest(response.createTokenExchangeRequest()) { token, error ->
+                service.performTokenRequest(exchangeRequest) { token, error ->
                     if (token != null) {
                         continuation.resume(token)
                     } else {
