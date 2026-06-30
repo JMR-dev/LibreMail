@@ -5,6 +5,7 @@ import java.io.File
 import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
+import org.libremail.domain.model.Folder
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
@@ -15,6 +16,12 @@ import org.libremail.domain.model.OutgoingMessage
  */
 interface MailRepository {
     fun observeMessages(): Flow<List<Message>>
+
+    /** The account's cached IMAP folders for the navigation drawer. */
+    fun observeFolders(accountId: String): Flow<List<Folder>>
+
+    /** Refreshes the account's folder list from the server into the cache. */
+    suspend fun refreshFolders(accountId: String): Result<Unit>
 
     suspend fun getMessage(id: String): Message?
 
@@ -44,8 +51,11 @@ interface MailRepository {
     suspend fun cancelOutboxMessage(id: String)
     suspend fun retryOutbox()
 
-    /** Fetches server-side search matches into the cache so the message list can surface them. */
-    suspend fun searchServer(query: String)
+    /**
+     * Fetches server-side search matches into the cache so the message list can surface them.
+     * Scoped to [folder]; [accountId] null searches every account (e.g. the unified inbox).
+     */
+    suspend fun searchServer(query: String, accountId: String?, folder: String)
 
     /** Drops transient server-search hits from the cache (called when search is dismissed). */
     suspend fun clearSearchResults()

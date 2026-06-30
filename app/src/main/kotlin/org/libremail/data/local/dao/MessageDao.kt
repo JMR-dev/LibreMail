@@ -16,9 +16,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
 
-    /** Ids of an account's inbox rows (excludes transient server-search hits). */
-    @Query("SELECT id FROM messages WHERE accountId = :accountId AND inInbox = 1")
-    suspend fun getInboxIdsForAccount(accountId: String): List<String>
+    /** Ids of an account's synced rows in [folder] (excludes transient server-search hits). */
+    @Query("SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    suspend fun getSyncedIds(accountId: String, folder: String): List<String>
 
     /** Inserts only new messages, leaving existing rows (and their cached bodies/flags) intact. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -41,9 +41,9 @@ interface MessageDao {
         timestampMillis: Long,
     )
 
-    /** Marks rows as belonging to the inbox (e.g. a former search-only row that the sync now returns). */
+    /** Marks rows as folder-synced (e.g. a former search-only row that the sync now returns). */
     @Query("UPDATE messages SET inInbox = 1 WHERE id IN (:ids)")
-    suspend fun markInInbox(ids: List<String>)
+    suspend fun markSynced(ids: List<String>)
 
     @Query("UPDATE messages SET body = :body, isHtml = :isHtml, snippet = :snippet, bodyFetched = 1 WHERE id = :id")
     suspend fun updateBody(id: String, body: String, isHtml: Boolean, snippet: String)
@@ -60,13 +60,16 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: String)
 
-    /** Clears only an account's inbox rows (leaves any in-flight search-only rows). */
-    @Query("DELETE FROM messages WHERE accountId = :accountId AND inInbox = 1")
-    suspend fun deleteInboxByAccount(accountId: String)
+    /** Clears an account's synced rows in [folder] (leaves any in-flight search-only rows). */
+    @Query("DELETE FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    suspend fun deleteSyncedByAccountFolder(accountId: String, folder: String)
 
-    /** Drops inbox rows for an account that are no longer present on the server. */
-    @Query("DELETE FROM messages WHERE accountId = :accountId AND inInbox = 1 AND id NOT IN (:keepIds)")
-    suspend fun deleteInboxNotIn(accountId: String, keepIds: List<String>)
+    /** Drops synced rows in [folder] for an account that are no longer present on the server. */
+    @Query(
+        "DELETE FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 " +
+            "AND id NOT IN (:keepIds)",
+    )
+    suspend fun deleteSyncedNotIn(accountId: String, folder: String, keepIds: List<String>)
 
     /** Removes transient server-search hits (called when search closes). */
     @Query("DELETE FROM messages WHERE inInbox = 0")

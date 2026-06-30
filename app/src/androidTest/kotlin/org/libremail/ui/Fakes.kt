@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.flowOf
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
+import org.libremail.domain.model.Folder
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
@@ -66,6 +67,10 @@ class FakeMailRepository(
 
     override fun observeMessages(): Flow<List<Message>> = flowOf(emptyList())
 
+    override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(emptyList())
+
+    override suspend fun refreshFolders(accountId: String): Result<Unit> = Result.success(Unit)
+
     override suspend fun getMessage(id: String): Message? = null
 
     override suspend fun openMessage(id: String): Result<Message> =
@@ -103,7 +108,7 @@ class FakeMailRepository(
 
     override suspend fun retryOutbox() {}
 
-    override suspend fun searchServer(query: String) {}
+    override suspend fun searchServer(query: String, accountId: String?, folder: String) {}
 
     override suspend fun clearSearchResults() {}
 }

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.DraftDao
+import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.OutboxEntity
@@ -21,9 +22,9 @@ import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
-import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
+import org.libremail.domain.model.Folder
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
@@ -40,6 +41,7 @@ class MailRepositoryImpl @Inject constructor(
     private val attachmentDao: AttachmentDao,
     private val outboxDao: OutboxDao,
     private val draftDao: DraftDao,
+    private val folderDao: FolderDao,
     private val imapClient: ImapClient,
     private val connectionFactory: MailConnectionFactory,
     private val sendScheduler: SendScheduler,
@@ -47,6 +49,17 @@ class MailRepositoryImpl @Inject constructor(
 
     override fun observeMessages(): Flow<List<Message>> =
         messageDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeFolders(accountId: String): Flow<List<Folder>> =
+        folderDao.observeForAccount(accountId).map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun refreshFolders(accountId: String): Result<Unit> = runCatching {
+        val account = accountDao.getById(accountId)?.toDomain() ?: error("Account not found")
+        val params = connectionFactory.imapParamsFor(account)
+        val entities = imapClient.listFolders(params)
+            .mapIndexed { index, folder -> folder.toEntity(accountId, index) }
+        folderDao.replaceForAccount(accountId, entities)
+    }
 
     override suspend fun getMessage(id: String): Message? = messageDao.getById(id)?.toDomain()
 
@@ -56,12 +69,12 @@ class MailRepositoryImpl @Inject constructor(
         if (account != null) {
             val params = connectionFactory.imapParamsFor(account)
             if (!entity.bodyFetched) {
-                val content = imapClient.fetchBodyMarkingSeen(params, uidOf(id))
+                val content = imapClient.fetchBodyMarkingSeen(params, entity.folder, uidOf(id))
                 messageDao.updateBody(id, content.body, content.isHtml, snippetOf(content.body))
                 attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
                 messageDao.setRead(id, true)
             } else if (!entity.isRead) {
-                runCatching { imapClient.setFlag(params, uidOf(id), Flags.Flag.SEEN, true) }
+                runCatching { imapClient.setFlag(params, entity.folder, uidOf(id), Flags.Flag.SEEN, true) }
                 messageDao.setRead(id, true)
             }
         }
@@ -75,22 +88,27 @@ class MailRepositoryImpl @Inject constructor(
         val entity = messageDao.getById(messageId) ?: error("Message not found")
         val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
         val params = connectionFactory.imapParamsFor(account)
-        saveToCache(imapClient.fetchAttachment(params, uidOf(messageId), partIndex))
+        saveToCache(imapClient.fetchAttachment(params, entity.folder, uidOf(messageId), partIndex))
     }
 
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = runCatching {
         messageDao.setStarred(id, starred) // optimistic; next sync reconciles on failure
-        accountFor(id)?.let { account ->
-            imapClient.setFlag(connectionFactory.imapParamsFor(account), uidOf(id), Flags.Flag.FLAGGED, starred)
+        val entity = messageDao.getById(id)
+        val account = entity?.let { accountDao.getById(it.accountId)?.toDomain() }
+        if (entity != null && account != null) {
+            imapClient.setFlag(
+                connectionFactory.imapParamsFor(account), entity.folder, uidOf(id), Flags.Flag.FLAGGED, starred,
+            )
         }
-        Unit
     }
 
     override suspend fun deleteMessage(id: String): Result<Unit> = runCatching {
-        val account = accountFor(id)
+        val entity = messageDao.getById(id)
+        val account = entity?.let { accountDao.getById(it.accountId)?.toDomain() }
         messageDao.deleteById(id) // optimistic; reappears on next sync if the server delete failed
-        account?.let { imapClient.deleteMessage(connectionFactory.imapParamsFor(it), uidOf(id)) }
-        Unit
+        if (entity != null && account != null) {
+            imapClient.deleteMessage(connectionFactory.imapParamsFor(account), entity.folder, uidOf(id))
+        }
     }
 
     /** Queues the message in the outbox and triggers the send worker; delivery happens in the background. */
@@ -149,26 +167,29 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun retryOutbox() = sendScheduler.sendNow()
 
-    override suspend fun searchServer(query: String) {
-        accountDao.getAll().forEach { entity ->
-            val account = entity.toDomain()
-            runCatching {
-                val results = imapClient.search(connectionFactory.imapParamsFor(account), query, SEARCH_LIMIT)
-                // Mark hits as non-inbox so they show only while searching (and never overwrite the
-                // inbox membership of a row that is genuinely in the inbox).
-                val entities = results.map { it.toEntity(account.id, inInbox = false) }
-                messageDao.insertNew(entities)
-                entities.forEach {
-                    messageDao.updateHeaderContent(
-                        id = it.id,
-                        sender = it.sender,
-                        senderEmail = it.senderEmail,
-                        subject = it.subject,
-                        timestampMillis = it.timestampMillis,
-                    )
+    override suspend fun searchServer(query: String, accountId: String?, folder: String) {
+        accountDao.getAll()
+            .filter { accountId == null || it.id == accountId }
+            .forEach { entity ->
+                val account = entity.toDomain()
+                runCatching {
+                    val params = connectionFactory.imapParamsFor(account)
+                    val results = imapClient.search(params, folder, query, SEARCH_LIMIT)
+                    // Mark hits as search-only (inInbox = false) so they show only while searching, and
+                    // never overwrite the synced membership of a row that is genuinely in the folder.
+                    val entities = results.map { it.toEntity(account.id, folder, inInbox = false) }
+                    messageDao.insertNew(entities)
+                    entities.forEach {
+                        messageDao.updateHeaderContent(
+                            id = it.id,
+                            sender = it.sender,
+                            senderEmail = it.senderEmail,
+                            subject = it.subject,
+                            timestampMillis = it.timestampMillis,
+                        )
+                    }
                 }
             }
-        }
     }
 
     override suspend fun clearSearchResults() = messageDao.deleteSearchRows()
@@ -180,11 +201,6 @@ class MailRepositoryImpl @Inject constructor(
         return File(dir, safeName).also { file ->
             file.outputStream().use { it.write(attachment.bytes) }
         }
-    }
-
-    private suspend fun accountFor(id: String): Account? {
-        val entity = messageDao.getById(id) ?: return null
-        return accountDao.getById(entity.accountId)?.toDomain()
     }
 }
 

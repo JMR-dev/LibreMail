@@ -4,6 +4,12 @@ package org.libremail.mail
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
+import jakarta.mail.Folder
+import jakarta.mail.Message
+import jakarta.mail.Session
+import jakarta.mail.internet.InternetAddress
+import jakarta.mail.internet.MimeMessage
+import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -42,7 +48,7 @@ class ImapClientTest {
 
     @Test
     fun `listFolders returns INBOX for a valid login`() = runTest {
-        assertTrue(client.listFolders(params()).any { it.equals("INBOX", ignoreCase = true) })
+        assertTrue(client.listFolders(params()).any { it.fullName.equals("INBOX", ignoreCase = true) })
     }
 
     @Test
@@ -56,7 +62,7 @@ class ImapClientTest {
         GreenMailUtil.sendTextEmailTest("alice@example.org", "carol@example.org", "Second subject", "Body two")
         greenMail.waitForIncomingEmail(2)
 
-        val messages = client.fetchRecentInbox(params(), limit = 50)
+        val messages = client.fetchRecent(params(), "INBOX", limit = 50)
 
         assertEquals(2, messages.size)
         assertEquals("Second subject", messages.first().subject)
@@ -68,12 +74,12 @@ class ImapClientTest {
     fun `fetchBodyMarkingSeen returns the body and marks the message read`() = runTest {
         GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Hello", "The quick brown fox.")
         greenMail.waitForIncomingEmail(1)
-        val uid = client.fetchRecentInbox(params(), limit = 50).first().uid
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
 
-        val content = client.fetchBodyMarkingSeen(params(), uid)
+        val content = client.fetchBodyMarkingSeen(params(), "INBOX", uid)
 
         assertTrue(content.body.contains("quick brown fox"), "body=${content.body}")
-        assertTrue(client.fetchRecentInbox(params(), limit = 50).first().isRead, "should be marked read")
+        assertTrue(client.fetchRecent(params(), "INBOX", limit = 50).first().isRead, "should be marked read")
     }
 
     @Test
@@ -82,9 +88,61 @@ class ImapClientTest {
         GreenMailUtil.sendTextEmailTest("alice@example.org", "carol@example.org", "Invoice 42", "Payment due")
         greenMail.waitForIncomingEmail(2)
 
-        val results = client.search(params(), query = "Vacation", limit = 50)
+        val results = client.search(params(), "INBOX", query = "Vacation", limit = 50)
 
         assertEquals(1, results.size)
         assertEquals("Vacation plans", results.first().subject)
+    }
+
+    @Test
+    fun `listFolders includes a created non-inbox folder`() = runTest {
+        appendMessage("Archive", "bob@example.org", "Archived", "Stored away")
+
+        val names = client.listFolders(params()).map { it.fullName }
+
+        assertTrue(names.any { it.equals("INBOX", ignoreCase = true) })
+        assertTrue(names.any { it.equals("Archive", ignoreCase = true) }, "folders=$names")
+    }
+
+    @Test
+    fun `fetchRecent reads a non-inbox folder isolated from the inbox`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Inbox subject", "In the inbox")
+        greenMail.waitForIncomingEmail(1)
+        appendMessage("Archive", "carol@example.org", "Archived subject", "In the archive")
+
+        val archive = client.fetchRecent(params(), "Archive", limit = 50)
+        assertEquals(1, archive.size)
+        assertEquals("Archived subject", archive.first().subject)
+
+        // The archived message must not leak into the inbox (UIDs are per-folder).
+        val inbox = client.fetchRecent(params(), "INBOX", limit = 50)
+        assertEquals(setOf("Inbox subject"), inbox.map { it.subject }.toSet())
+    }
+
+    /** Creates [folderName] if needed and appends a message to it, via Jakarta Mail directly. */
+    private fun appendMessage(folderName: String, from: String, subject: String, body: String) {
+        val props = Properties().apply {
+            put("mail.store.protocol", "imap")
+            put("mail.imap.host", "127.0.0.1")
+            put("mail.imap.port", greenMail.imap.port.toString())
+        }
+        val session = Session.getInstance(props)
+        val store = session.getStore("imap")
+        store.connect("127.0.0.1", greenMail.imap.port, "alice@example.org", "secret")
+        try {
+            val folder = store.getFolder(folderName)
+            if (!folder.exists()) folder.create(Folder.HOLDS_MESSAGES)
+            folder.open(Folder.READ_WRITE)
+            val message = MimeMessage(session).apply {
+                setFrom(InternetAddress(from))
+                setRecipient(Message.RecipientType.TO, InternetAddress("alice@example.org"))
+                this.subject = subject
+                setText(body)
+            }
+            folder.appendMessages(arrayOf(message))
+            folder.close(false)
+        } finally {
+            store.close()
+        }
     }
 }

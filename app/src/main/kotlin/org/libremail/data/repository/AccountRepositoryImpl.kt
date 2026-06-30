@@ -6,6 +6,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
@@ -21,6 +22,7 @@ import org.libremail.mail.ImapClient
 class AccountRepositoryImpl @Inject constructor(
     private val accountDao: AccountDao,
     private val messageDao: MessageDao,
+    private val folderDao: FolderDao,
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
     private val syncScheduler: SyncScheduler,
@@ -30,14 +32,14 @@ class AccountRepositoryImpl @Inject constructor(
         accountDao.observeAll().map { rows -> rows.map { it.toDomain() } }
 
     override suspend fun testConnection(params: ImapConnectionParams): Result<List<String>> =
-        runCatching { imapClient.listFolders(params) }
+        runCatching { imapClient.listFolders(params).map { it.fullName } }
 
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
         accountDao.upsert(account.toEntity())
         credentialStore.saveSecret(account.id, password)
         syncScheduler.syncNow()
-        folders
+        folders.map { it.fullName }
     }
 
     override suspend fun addOutlookAccount(
@@ -50,13 +52,14 @@ class AccountRepositoryImpl @Inject constructor(
         accountDao.upsert(account.toEntity())
         credentialStore.saveSecret(account.id, authStateJson)
         syncScheduler.syncNow()
-        folders
+        folders.map { it.fullName }
     }
 
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)
         credentialStore.delete(id)
-        // Remove the account's cached mail (attachment rows cascade via the foreign key).
+        // Remove the account's cached mail (attachment rows cascade via the foreign key) and folders.
         messageDao.deleteByAccount(id)
+        folderDao.deleteForAccount(id)
     }
 }

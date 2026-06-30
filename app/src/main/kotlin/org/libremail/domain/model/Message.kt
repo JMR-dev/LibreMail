@@ -13,6 +13,8 @@ data class Message(
     val timestampMillis: Long,
     val isRead: Boolean,
     val isStarred: Boolean,
-    /** True for messages synced as part of the inbox; false for transient server-search hits. */
+    /** The folder this message belongs to, e.g. "INBOX" or "[Gmail]/Sent Mail". */
+    val folder: String = "INBOX",
+    /** True for messages synced from a folder; false for transient server-search hits. */
     val inInbox: Boolean = true,
 )

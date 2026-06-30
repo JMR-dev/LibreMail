@@ -20,10 +20,12 @@ import org.libremail.data.local.MIGRATION_3_4
 import org.libremail.data.local.MIGRATION_4_5
 import org.libremail.data.local.MIGRATION_5_6
 import org.libremail.data.local.MIGRATION_6_7
+import org.libremail.data.local.MIGRATION_7_8
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.DraftDao
+import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.security.DatabaseKeyStore
@@ -48,6 +50,7 @@ object DatabaseModule {
                 MIGRATION_4_5,
                 MIGRATION_5_6,
                 MIGRATION_6_7,
+                MIGRATION_7_8,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
         // accounts/credentials/mail tables would lose stored secrets. A missing migration should
@@ -87,6 +90,9 @@ object DatabaseModule {
 
     @Provides
     fun provideDraftDao(database: LibreMailDatabase): DraftDao = database.draftDao()
+
+    @Provides
+    fun provideFolderDao(database: LibreMailDatabase): FolderDao = database.folderDao()
 
     private const val DB_NAME = "libremail.db"
 }

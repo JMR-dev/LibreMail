@@ -14,6 +14,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.data.local.entity.AttachmentEntity
+import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 
 /**
@@ -70,10 +71,54 @@ class LibreMailDatabaseTest {
         messageDao.insertNew(listOf(message("acct:1").copy(inInbox = true)))
         messageDao.insertNew(listOf(message("acct:2").copy(inInbox = false)))
 
-        assertEquals(listOf("acct:1"), messageDao.getInboxIdsForAccount("acct"))
+        assertEquals(listOf("acct:1"), messageDao.getSyncedIds("acct", "INBOX"))
 
         messageDao.deleteSearchRows()
         val remaining = messageDao.observeAll().first().map { it.id }
         assertEquals(listOf("acct:1"), remaining)
+    }
+
+    @Test
+    fun foldersAreStoredOrderedAndReplaceablePerAccount() = runBlocking {
+        val folderDao = db.folderDao()
+        folderDao.replaceForAccount(
+            "acct",
+            listOf(
+                FolderEntity("acct", "[Gmail]/Sent Mail", "Sent Mail", "SENT", selectable = true, sortOrder = 1),
+                FolderEntity("acct", "INBOX", "INBOX", "INBOX", selectable = true, sortOrder = 0),
+            ),
+        )
+        // observeForAccount returns folders ordered by sortOrder.
+        assertEquals(
+            listOf("INBOX", "[Gmail]/Sent Mail"),
+            folderDao.observeForAccount("acct").first().map { it.fullName },
+        )
+
+        // replaceForAccount swaps the whole set (delete + insert).
+        folderDao.replaceForAccount("acct", listOf(FolderEntity("acct", "Archive", "Archive", "ARCHIVE", true, 0)))
+        assertEquals(listOf("Archive"), folderDao.observeForAccount("acct").first().map { it.fullName })
+    }
+
+    @Test
+    fun syncReconcileIsScopedToASingleFolder() = runBlocking {
+        val messageDao = db.messageDao()
+        messageDao.insertNew(
+            listOf(
+                message("acct:INBOX:1").copy(folder = "INBOX"),
+                message("acct:INBOX:2").copy(folder = "INBOX"),
+                message("acct:Archive:1").copy(folder = "Archive"),
+            ),
+        )
+
+        // getSyncedIds is scoped to one folder.
+        assertEquals(setOf("acct:INBOX:1", "acct:INBOX:2"), messageDao.getSyncedIds("acct", "INBOX").toSet())
+        assertEquals(listOf("acct:Archive:1"), messageDao.getSyncedIds("acct", "Archive"))
+
+        // Reconciling the inbox must not touch other folders' rows.
+        messageDao.deleteSyncedNotIn("acct", "INBOX", listOf("acct:INBOX:1"))
+        assertEquals(
+            setOf("acct:INBOX:1", "acct:Archive:1"),
+            messageDao.observeAll().first().map { it.id }.toSet(),
+        )
     }
 }

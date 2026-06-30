@@ -35,6 +35,16 @@ import org.eclipse.angus.mail.imap.IMAPFolder
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 
+/** A folder (mailbox) listed from the server, with the metadata needed to classify and display it. */
+data class FetchedFolder(
+    val fullName: String,
+    val displayName: String,
+    /** Raw IMAP attributes from the LIST response (RFC 6154 SPECIAL-USE flags, \Noselect, …). */
+    val attributes: List<String>,
+    /** False for \Noselect containers (e.g. Gmail's "[Gmail]" parent) that can't be opened. */
+    val selectable: Boolean,
+)
+
 /** A message header fetched from the server (no body — that arrives with the reader). */
 data class FetchedMessage(
     val uid: String,
@@ -72,25 +82,44 @@ class DownloadedAttachment(
 @Singleton
 class ImapClient @Inject constructor() {
 
-    /** Connects and returns the account's folder names. Throws on failure. */
-    suspend fun listFolders(params: ImapConnectionParams): List<String> = withContext(Dispatchers.IO) {
+    /** Connects and returns the account's folders with their SPECIAL-USE attributes. Throws on failure. */
+    suspend fun listFolders(params: ImapConnectionParams): List<FetchedFolder> = withContext(Dispatchers.IO) {
         withStore(params) { store ->
-            store.defaultFolder.list("*").map { it.fullName }
+            val folders = store.defaultFolder.list("*").map { folder ->
+                val attributes = if (folder is IMAPFolder) {
+                    runCatching { folder.attributes.toList() }.getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+                val separator = runCatching { folder.separator }.getOrDefault('/')
+                FetchedFolder(
+                    fullName = folder.fullName,
+                    displayName = folder.fullName.substringAfterLast(separator),
+                    attributes = attributes,
+                    selectable = attributes.none { it.equals("\\Noselect", ignoreCase = true) },
+                )
+            }
+            // Some servers don't return INBOX from a wildcard LIST; guarantee it's always present.
+            if (folders.none { it.fullName.equals("INBOX", ignoreCase = true) }) {
+                listOf(FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true)) + folders
+            } else {
+                folders
+            }
         }
     }
 
-    /** Fetches the most recent [limit] INBOX headers, newest first. */
-    suspend fun fetchRecentInbox(params: ImapConnectionParams, limit: Int): List<FetchedMessage> =
+    /** Fetches the most recent [limit] headers of [folder], newest first. */
+    suspend fun fetchRecent(params: ImapConnectionParams, folder: String, limit: Int): List<FetchedMessage> =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_ONLY)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_ONLY)
                 try {
-                    val total = inbox.messageCount
+                    val total = mailbox.messageCount
                     if (total == 0) return@withStore emptyList()
 
-                    val messages = inbox.getMessages(maxOf(1, total - limit + 1), total)
-                    inbox.fetch(
+                    val messages = mailbox.getMessages(maxOf(1, total - limit + 1), total)
+                    mailbox.fetch(
                         messages,
                         FetchProfile().apply {
                             add(FetchProfile.Item.ENVELOPE)
@@ -98,26 +127,26 @@ class ImapClient @Inject constructor() {
                             add(UIDFolder.FetchProfileItem.UID)
                         },
                     )
-                    val uidFolder = inbox as UIDFolder
+                    val uidFolder = mailbox as UIDFolder
                     messages.reversed().map { it.toFetchedMessage(uidFolder) }
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
 
-    /** Runs an IMAP SEARCH over the whole INBOX (subject/from/body) and returns matching headers. */
-    suspend fun search(params: ImapConnectionParams, query: String, limit: Int): List<FetchedMessage> =
+    /** Runs an IMAP SEARCH over [folder] (subject/from/body) and returns matching headers. */
+    suspend fun search(params: ImapConnectionParams, folder: String, query: String, limit: Int): List<FetchedMessage> =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_ONLY)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_ONLY)
                 try {
                     val term = OrTerm(arrayOf(SubjectTerm(query), FromStringTerm(query), BodyTerm(query)))
-                    val matches = inbox.search(term).toList()
+                    val matches = mailbox.search(term).toList()
                     if (matches.isEmpty()) return@withStore emptyList()
                     val recent = if (matches.size > limit) matches.takeLast(limit) else matches
-                    inbox.fetch(
+                    mailbox.fetch(
                         recent.toTypedArray(),
                         FetchProfile().apply {
                             add(FetchProfile.Item.ENVELOPE)
@@ -125,41 +154,46 @@ class ImapClient @Inject constructor() {
                             add(UIDFolder.FetchProfileItem.UID)
                         },
                     )
-                    val uidFolder = inbox as UIDFolder
+                    val uidFolder = mailbox as UIDFolder
                     recent.reversed().map { it.toFetchedMessage(uidFolder) }
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
 
-    /** Fetches a message body by UID and marks it \Seen on the server. */
-    suspend fun fetchBodyMarkingSeen(params: ImapConnectionParams, uid: String): MessageContent =
+    /** Fetches a message body by UID from [folder] and marks it \Seen on the server. */
+    suspend fun fetchBodyMarkingSeen(params: ImapConnectionParams, folder: String, uid: String): MessageContent =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_WRITE)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_WRITE)
                 try {
-                    val message = (inbox as UIDFolder).getMessageByUID(uid.toLong())
+                    val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
                         ?: error("Message $uid not found")
                     val content = (extractBody(message) ?: MessageContent("", isHtml = false))
                         .copy(attachments = collectAttachments(message))
                     message.setFlag(Flags.Flag.SEEN, true)
                     content
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
 
-    /** Downloads the bytes of one attachment part (identified by its [partIndex]). */
-    suspend fun fetchAttachment(params: ImapConnectionParams, uid: String, partIndex: Int): DownloadedAttachment =
+    /** Downloads the bytes of one attachment part (identified by its [partIndex]) from [folder]. */
+    suspend fun fetchAttachment(
+        params: ImapConnectionParams,
+        folder: String,
+        uid: String,
+        partIndex: Int,
+    ): DownloadedAttachment =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_ONLY)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_ONLY)
                 try {
-                    val message = (inbox as UIDFolder).getMessageByUID(uid.toLong())
+                    val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
                         ?: error("Message $uid not found")
                     val parts = mutableListOf<Part>()
                     collectAttachmentParts(message, parts)
@@ -171,34 +205,34 @@ class ImapClient @Inject constructor() {
                         bytes = bytes,
                     )
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
 
-    suspend fun setFlag(params: ImapConnectionParams, uid: String, flag: Flags.Flag, value: Boolean) =
+    suspend fun setFlag(params: ImapConnectionParams, folder: String, uid: String, flag: Flags.Flag, value: Boolean) =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_WRITE)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_WRITE)
                 try {
-                    (inbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(flag, value)
+                    (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(flag, value)
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
 
-    suspend fun deleteMessage(params: ImapConnectionParams, uid: String) =
+    suspend fun deleteMessage(params: ImapConnectionParams, folder: String, uid: String) =
         withContext(Dispatchers.IO) {
             withStore(params) { store ->
-                val inbox = store.getFolder("INBOX")
-                inbox.open(Folder.READ_WRITE)
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_WRITE)
                 try {
-                    (inbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
-                    inbox.expunge()
+                    (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
+                    mailbox.expunge()
                 } finally {
-                    runCatching { inbox.close(false) }
+                    runCatching { mailbox.close(false) }
                 }
             }
         }
