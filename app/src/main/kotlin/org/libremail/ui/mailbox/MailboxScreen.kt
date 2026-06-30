@@ -27,8 +27,10 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -36,16 +38,20 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import org.libremail.R
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Message
@@ -76,6 +83,9 @@ fun MailboxScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
+    val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
+    val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val drawerAccount by viewModel.drawerAccount.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
     val draftCount by viewModel.draftCount.collectAsStateWithLifecycle()
     val outboxCount by viewModel.outboxCount.collectAsStateWithLifecycle()
@@ -84,8 +94,12 @@ fun MailboxScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     BackHandler(enabled = searchActive) { viewModel.closeSearch() }
+    BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
+    LaunchedEffect(drawerState.isOpen) { if (drawerState.isOpen) viewModel.onDrawerOpened() }
 
     LaunchedEffect(error) {
         error?.let {
@@ -94,91 +108,124 @@ fun MailboxScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    if (searchActive) {
-                        SearchField(query = searchQuery, onQueryChange = viewModel::onSearchQuery)
-                    } else {
-                        Text(stringResource(R.string.title_mailbox))
-                    }
-                },
-                navigationIcon = {
-                    if (searchActive) {
-                        IconButton(onClick = viewModel::closeSearch) {
-                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.search_close))
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen || (hasAccounts && !searchActive),
+        drawerContent = {
+            ModalDrawerSheet {
+                FolderDrawer(
+                    accounts = accounts,
+                    drawerAccount = drawerAccount,
+                    folders = folders,
+                    selectedAccountId = selectedAccountId,
+                    selectedFolder = selectedFolder,
+                    onSelectUnifiedInbox = {
+                        viewModel.selectUnifiedInbox()
+                        scope.launch { drawerState.close() }
+                    },
+                    onSelectFolder = { accountId, folder ->
+                        viewModel.selectFolder(accountId, folder)
+                        scope.launch { drawerState.close() }
+                    },
+                    onSelectDrawerAccount = viewModel::setDrawerAccount,
+                )
+            }
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        if (searchActive) {
+                            SearchField(query = searchQuery, onQueryChange = viewModel::onSearchQuery)
+                        } else {
+                            val current = folders.firstOrNull { it.fullName == selectedFolder }
+                            Text(
+                                if (current != null) folderDisplayLabel(current)
+                                else stringResource(R.string.title_mailbox),
+                            )
                         }
-                    }
-                },
-                actions = {
-                    if (hasAccounts && !searchActive) {
-                        IconButton(onClick = viewModel::openSearch) {
-                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                    },
+                    navigationIcon = {
+                        if (searchActive) {
+                            IconButton(onClick = viewModel::closeSearch) {
+                                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.search_close))
+                            }
+                        } else if (hasAccounts) {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.drawer_open))
+                            }
                         }
-                    }
-                },
-            )
-        },
-        bottomBar = {
-            org.libremail.ui.LibreMailBottomBar(
-                current = org.libremail.ui.TopDest.MAILBOX,
-                onSelect = onSelectTab,
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onCompose,
-                icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                text = { Text(stringResource(R.string.action_compose)) },
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            if (!hasAccounts) {
-                NoAccountState(onAddAccount = onAddAccount)
-            } else {
-                val accountsById = remember(accounts) { accounts.associateBy { it.id } }
-                val showAccount = selectedAccountId == null && accounts.size >= 2
-                Column(Modifier.fillMaxSize()) {
-                    if (accounts.size >= 2) {
-                        AccountFilterRow(
-                            accounts = accounts,
-                            selectedId = selectedAccountId,
-                            onSelect = viewModel::selectAccount,
-                        )
-                    }
-                    if (draftCount > 0 && !searchActive) {
-                        DraftsEntry(count = draftCount, onClick = onOpenDrafts)
-                        HorizontalDivider()
-                    }
-                    if (outboxCount > 0 && !searchActive) {
-                        OutboxEntry(count = outboxCount, onClick = onOpenOutbox)
-                        HorizontalDivider()
-                    }
-                    PullToRefreshBox(
-                        isRefreshing = isRefreshing,
-                        onRefresh = viewModel::refresh,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            if (messages.isEmpty()) {
-                                item {
-                                    if (searchActive && searchQuery.isNotBlank()) {
-                                        NoResultsState(Modifier.fillParentMaxSize())
-                                    } else {
-                                        NoMessagesState(Modifier.fillParentMaxSize())
+                    },
+                    actions = {
+                        if (hasAccounts && !searchActive) {
+                            IconButton(onClick = viewModel::openSearch) {
+                                Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                            }
+                        }
+                    },
+                )
+            },
+            bottomBar = {
+                org.libremail.ui.LibreMailBottomBar(
+                    current = org.libremail.ui.TopDest.MAILBOX,
+                    onSelect = onSelectTab,
+                )
+            },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = onCompose,
+                    icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                    text = { Text(stringResource(R.string.action_compose)) },
+                )
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+        ) { padding ->
+            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+                if (!hasAccounts) {
+                    NoAccountState(onAddAccount = onAddAccount)
+                } else {
+                    val accountsById = remember(accounts) { accounts.associateBy { it.id } }
+                    val showAccount = selectedAccountId == null && accounts.size >= 2
+                    Column(Modifier.fillMaxSize()) {
+                        if (accounts.size >= 2 && selectedFolder == INBOX) {
+                            AccountFilterRow(
+                                accounts = accounts,
+                                selectedId = selectedAccountId,
+                                onSelect = viewModel::selectAccount,
+                            )
+                        }
+                        if (draftCount > 0 && !searchActive && selectedFolder == INBOX) {
+                            DraftsEntry(count = draftCount, onClick = onOpenDrafts)
+                            HorizontalDivider()
+                        }
+                        if (outboxCount > 0 && !searchActive && selectedFolder == INBOX) {
+                            OutboxEntry(count = outboxCount, onClick = onOpenOutbox)
+                            HorizontalDivider()
+                        }
+                        PullToRefreshBox(
+                            isRefreshing = isRefreshing,
+                            onRefresh = viewModel::refresh,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                if (messages.isEmpty()) {
+                                    item {
+                                        if (searchActive && searchQuery.isNotBlank()) {
+                                            NoResultsState(Modifier.fillParentMaxSize())
+                                        } else {
+                                            NoMessagesState(Modifier.fillParentMaxSize())
+                                        }
                                     }
-                                }
-                            } else {
-                                items(messages, key = { it.id }) { message ->
-                                    MessageRow(
-                                        message = message,
-                                        accountLabel = if (showAccount) accountsById[message.accountId]?.email else null,
-                                        onClick = { onOpenMessage(message.id) },
-                                    )
-                                    HorizontalDivider()
+                                } else {
+                                    items(messages, key = { it.id }) { message ->
+                                        MessageRow(
+                                            message = message,
+                                            accountLabel = if (showAccount) accountsById[message.accountId]?.email else null,
+                                            onClick = { onOpenMessage(message.id) },
+                                        )
+                                        HorizontalDivider()
+                                    }
                                 }
                             }
                         }

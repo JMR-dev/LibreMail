@@ -4,6 +4,7 @@ package org.libremail.data.local
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
+import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
@@ -14,6 +15,8 @@ import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.Folder
+import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
@@ -21,6 +24,7 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.SmtpParams
 import org.libremail.mail.AttachmentPart
+import org.libremail.mail.FetchedFolder
 import org.libremail.mail.FetchedMessage
 
 internal fun AccountEntity.toDomain(): Account = Account(
@@ -83,11 +87,16 @@ internal fun MessageEntity.toDomain(): Message = Message(
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isStarred,
+    folder = folder,
     inInbox = inInbox,
 )
 
-internal fun FetchedMessage.toEntity(accountId: String, inInbox: Boolean = true): MessageEntity = MessageEntity(
-    id = "$accountId:$uid",
+internal fun FetchedMessage.toEntity(
+    accountId: String,
+    folder: String,
+    inInbox: Boolean = true,
+): MessageEntity = MessageEntity(
+    id = "$accountId:$folder:$uid",
     accountId = accountId,
     sender = sender,
     senderEmail = senderEmail,
@@ -98,8 +107,26 @@ internal fun FetchedMessage.toEntity(accountId: String, inInbox: Boolean = true)
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isFlagged,
+    folder = folder,
     inInbox = inInbox,
     bodyFetched = false,
+)
+
+internal fun FolderEntity.toDomain(): Folder = Folder(
+    accountId = accountId,
+    fullName = fullName,
+    displayName = displayName,
+    role = runCatching { FolderRole.valueOf(role) }.getOrDefault(FolderRole.NORMAL),
+    selectable = selectable,
+)
+
+internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEntity = FolderEntity(
+    accountId = accountId,
+    fullName = fullName,
+    displayName = displayName,
+    role = FolderRole.roleOf(fullName, displayName, attributes).name,
+    selectable = selectable,
+    sortOrder = sortOrder,
 )
 
 internal fun AttachmentEntity.toDomain(): Attachment = Attachment(

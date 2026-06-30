@@ -3,6 +3,7 @@ package org.libremail
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -52,6 +53,9 @@ private fun NotificationPermissionEffect() {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
+        // POST_NOTIFICATIONS is a runtime permission only on Android 13 (API 33)+. On older
+        // versions notifications are enabled by default, so there's nothing to request.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         if (!granted) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)

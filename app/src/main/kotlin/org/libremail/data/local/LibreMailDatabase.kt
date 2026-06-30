@@ -7,12 +7,14 @@ import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.DraftDao
+import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.CredentialEntity
 import org.libremail.data.local.entity.DraftEntity
+import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 
@@ -24,8 +26,9 @@ import org.libremail.data.local.entity.OutboxEntity
         AttachmentEntity::class,
         OutboxEntity::class,
         DraftEntity::class,
+        FolderEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class LibreMailDatabase : RoomDatabase() {
@@ -35,4 +38,5 @@ abstract class LibreMailDatabase : RoomDatabase() {
     abstract fun attachmentDao(): AttachmentDao
     abstract fun outboxDao(): OutboxDao
     abstract fun draftDao(): DraftDao
+    abstract fun folderDao(): FolderDao
 }

@@ -33,6 +33,17 @@
     <string name="mailbox_welcome_title">Welcome to LibreMail</string>
     <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>
 
+    <!-- Folder navigation drawer -->
+    <string name="drawer_open">Show folders</string>
+    <string name="drawer_switch_account">Switch account</string>
+    <string name="folder_all_inboxes">All Inboxes</string>
+    <string name="folder_inbox">Inbox</string>
+    <string name="folder_sent">Sent</string>
+    <string name="folder_drafts">Drafts</string>
+    <string name="folder_archive">Archive</string>
+    <string name="folder_spam">Spam</string>
+    <string name="folder_trash">Trash</string>
+
     <!-- Compose -->
     <string name="compose_from">From</string>
     <string name="compose_to">To</string>

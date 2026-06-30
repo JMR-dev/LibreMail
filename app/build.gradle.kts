@@ -44,7 +44,8 @@ android {
 
     defaultConfig {
         applicationId = "org.libremail.app"
-        minSdk = 33
+        // Supports a rolling ~7-year window of Android versions (API 29 / Android 10, 2019 → latest).
+        minSdk = 29
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -102,6 +103,33 @@ android {
                 "/META-INF/NOTICE*",
                 "/META-INF/INDEX.LIST",
             )
+        }
+    }
+
+    testOptions {
+        // Gradle Managed Devices define the per-API E2E matrix as config-as-code: one virtual
+        // device per supported Android version (a rolling ~7-year window, API 29 → latest stable).
+        // Run the whole matrix with `./gradlew e2eGroupDebugAndroidTest`, or one level with e.g.
+        // `./gradlew api29DebugAndroidTest`. Gradle provisions/boots/tears down the emulators and
+        // downloads the system images on first use. Keep this list in lockstep with the CI matrix in
+        // .github/workflows/ci.yml; when a new Android ships, add it and drop the oldest level that
+        // has fallen outside ~7 years. API 37 (preview) is exercised on the dev emulator until a
+        // stable managed-device image is published, so it is intentionally not listed here.
+        managedDevices {
+            localDevices {
+                listOf(29, 30, 31, 32, 33, 34, 35, 36).forEach { api ->
+                    create("api$api") {
+                        device = "Pixel 2"
+                        apiLevel = api
+                        systemImageSource = "google_apis"
+                    }
+                }
+            }
+            groups {
+                create("e2e") {
+                    targetDevices.addAll(localDevices)
+                }
+            }
         }
     }
 }

@@ -127,3 +127,21 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         db.execSQL("ALTER TABLE `drafts_new` RENAME TO `drafts`")
     }
 }
+
+/**
+ * v7 -> v8: folder-aware mail (preserves existing data).
+ *  - `messages`: add a `folder` column (existing rows are inbox rows). The first post-upgrade INBOX
+ *    sync reconciles ids, which now embed the folder ("accountId:folder:uid").
+ *  - add the `folders` table caching each account's IMAP folder list for the navigation drawer.
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `folder` TEXT NOT NULL DEFAULT 'INBOX'")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `folders` (" +
+                "`accountId` TEXT NOT NULL, `fullName` TEXT NOT NULL, `displayName` TEXT NOT NULL, " +
+                "`role` TEXT NOT NULL, `selectable` INTEGER NOT NULL, `sortOrder` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`accountId`, `fullName`))",
+        )
+    }
+}
