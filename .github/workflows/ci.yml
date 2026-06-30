@@ -22,9 +22,11 @@ env:
 jobs:
   debug-build:
     name: Debug build
-    # arm64 Linux runner so the build toolchain matches real (arm64) Android devices. Emulator jobs
-    # stay on x86_64 (below) because arm64 emulators need macOS hosts and Linux/KVM is more reliable.
-    runs-on: ubuntu-24.04-arm
+    # x86_64: Linux-arm64 runners can't set up this SDK — android-actions/setup-android's sdkmanager
+    # fails (exit 1) on the android-37.0 preview platform, and the emulator package has no arm64-Linux
+    # build. Build/unit-test results are host-arch-independent anyway (R8/AGP/JVM); real arm64
+    # device-ABI coverage would need arm64 emulators, which require macOS hosts.
+    runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -56,7 +58,7 @@ jobs:
 
   unit-tests:
     name: Unit tests
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
