@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.data.settings.AppSettings
+import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
@@ -42,6 +43,7 @@ class SettingsViewModel @Inject constructor(
     fun setAllowStartTls(value: Boolean) = update { settingsRepository.setAllowStartTls(value) }
     fun setLoadRemoteImages(value: Boolean) = update { settingsRepository.setLoadRemoteImages(value) }
     fun setEncryptCache(value: Boolean) = update { settingsRepository.setEncryptCache(value) }
+    fun setFetchPolicy(value: FetchPolicy) = update { settingsRepository.setFetchPolicy(value) }
 
     private inline fun update(crossinline action: suspend () -> Unit) {
         viewModelScope.launch { action() }

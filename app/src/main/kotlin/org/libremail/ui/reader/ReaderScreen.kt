@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
@@ -133,6 +134,7 @@ fun ReaderScreen(
                 message = message,
                 attachments = state.attachments,
                 downloading = state.downloading,
+                downloaded = state.downloaded,
                 onDownloadAttachment = viewModel::downloadAttachment,
                 loadRemoteImages = state.loadRemoteImages,
                 onLoadRemoteImages = viewModel::loadRemoteImages,
@@ -151,6 +153,7 @@ private fun MessageBody(
     message: Message,
     attachments: List<Attachment>,
     downloading: Set<Int>,
+    downloaded: Set<Int>,
     onDownloadAttachment: (Attachment) -> Unit,
     loadRemoteImages: Boolean,
     onLoadRemoteImages: () -> Unit,
@@ -160,7 +163,7 @@ private fun MessageBody(
         Header(message)
         HorizontalDivider()
         if (attachments.isNotEmpty()) {
-            Attachments(attachments, downloading, onDownloadAttachment)
+            Attachments(attachments, downloading, downloaded, onDownloadAttachment)
             HorizontalDivider()
         }
         if (message.isHtml && !loadRemoteImages) {
@@ -195,6 +198,7 @@ private fun MessageBody(
 private fun Attachments(
     attachments: List<Attachment>,
     downloading: Set<Int>,
+    downloaded: Set<Int>,
     onDownload: (Attachment) -> Unit,
 ) {
     Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -208,6 +212,7 @@ private fun Attachments(
             AttachmentRow(
                 attachment = attachment,
                 downloading = attachment.partIndex in downloading,
+                downloaded = attachment.partIndex in downloaded,
                 onClick = { onDownload(attachment) },
             )
             Spacer(Modifier.height(8.dp))
@@ -216,7 +221,7 @@ private fun Attachments(
 }
 
 @Composable
-private fun AttachmentRow(attachment: Attachment, downloading: Boolean, onClick: () -> Unit) {
+private fun AttachmentRow(attachment: Attachment, downloading: Boolean, downloaded: Boolean, onClick: () -> Unit) {
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -258,6 +263,14 @@ private fun AttachmentRow(attachment: Attachment, downloading: Boolean, onClick:
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            if (downloaded) {
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = stringResource(R.string.attachment_downloaded),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
             }
         }
     }

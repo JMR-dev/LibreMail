@@ -20,6 +20,13 @@ interface MessageDao {
     @Query("SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
     suspend fun getSyncedIds(accountId: String, folder: String): List<String>
 
+    /** Ids of synced rows in [folder] whose body hasn't been cached yet (for aggressive prefetch). */
+    @Query(
+        "SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder " +
+            "AND inInbox = 1 AND bodyFetched = 0",
+    )
+    suspend fun getUnfetchedIds(accountId: String, folder: String): List<String>
+
     /** Inserts only new messages, leaving existing rows (and their cached bodies/flags) intact. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertNew(messages: List<MessageEntity>)
@@ -56,6 +63,10 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /** Optimistically removes moved/deleted rows; the next sync reconciles if a server op failed. */
+    @Query("DELETE FROM messages WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 
     @Query("DELETE FROM messages WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: String)

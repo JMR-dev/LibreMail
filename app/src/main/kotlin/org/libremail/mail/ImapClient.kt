@@ -32,6 +32,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.eclipse.angus.mail.imap.IMAPFolder
+import org.eclipse.angus.mail.imap.IMAPMessage
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 
@@ -76,6 +77,17 @@ class DownloadedAttachment(
     val filename: String,
     val mimeType: String,
     val bytes: ByteArray,
+)
+
+/** The original message's fields needed to compose a reply, reply-all, or forward. */
+data class ReplyContext(
+    val fromEmail: String,
+    val toRecipients: List<String>,
+    val ccRecipients: List<String>,
+    val subject: String,
+    val sentDateMillis: Long,
+    val body: String,
+    val isHtml: Boolean,
 )
 
 /** Thin IMAP client over Jakarta/Angus Mail. Supports password and XOAUTH2 auth. */
@@ -181,6 +193,27 @@ class ImapClient @Inject constructor() {
             }
         }
 
+    /**
+     * Fetches a message body + attachment metadata by UID **without** marking it \Seen (opens READ_ONLY
+     * and uses BODY.PEEK). Used to pre-cache content during sync so opening the message is instant.
+     */
+    suspend fun fetchBodyPeek(params: ImapConnectionParams, folder: String, uid: String): MessageContent =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_ONLY)
+                try {
+                    val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
+                        ?: error("Message $uid not found")
+                    (message as? IMAPMessage)?.setPeek(true)
+                    (extractBody(message) ?: MessageContent("", isHtml = false))
+                        .copy(attachments = collectAttachments(message))
+                } finally {
+                    runCatching { mailbox.close(false) }
+                }
+            }
+        }
+
     /** Downloads the bytes of one attachment part (identified by its [partIndex]) from [folder]. */
     suspend fun fetchAttachment(
         params: ImapConnectionParams,
@@ -231,6 +264,65 @@ class ImapClient @Inject constructor() {
                 try {
                     (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
                     mailbox.expunge()
+                } finally {
+                    runCatching { mailbox.close(false) }
+                }
+            }
+        }
+
+    /**
+     * Moves messages from [sourceFolder] to [destFolder] by UID. Implemented as copy + \Deleted +
+     * expunge so it works on every IMAP server (no reliance on the RFC 6851 MOVE extension).
+     */
+    suspend fun moveMessages(
+        params: ImapConnectionParams,
+        sourceFolder: String,
+        uids: List<String>,
+        destFolder: String,
+    ) = withContext(Dispatchers.IO) {
+        if (uids.isEmpty()) return@withContext
+        withStore(params) { store ->
+            val mailbox = store.getFolder(sourceFolder)
+            mailbox.open(Folder.READ_WRITE)
+            try {
+                val uidFolder = mailbox as UIDFolder
+                val messages = uids.mapNotNull { uidFolder.getMessageByUID(it.toLong()) }.toTypedArray()
+                if (messages.isEmpty()) return@withStore
+                mailbox.copyMessages(messages, store.getFolder(destFolder))
+                mailbox.setFlags(messages, Flags(Flags.Flag.DELETED), true)
+                mailbox.expunge()
+            } finally {
+                runCatching { mailbox.close(false) }
+            }
+        }
+    }
+
+    /**
+     * Fetches the fields needed to compose a reply/forward (recipients + body) without marking the
+     * original \Seen (opens READ_ONLY), so building a reply doesn't change the message's read state.
+     */
+    suspend fun fetchForReply(params: ImapConnectionParams, folder: String, uid: String): ReplyContext =
+        withContext(Dispatchers.IO) {
+            withStore(params) { store ->
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_ONLY)
+                try {
+                    val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
+                        ?: error("Message $uid not found")
+                    // BODY.PEEK: reading the body to quote it must not set the \Seen flag.
+                    (message as? IMAPMessage)?.setPeek(true)
+                    val from = message.from?.firstOrNull() as? InternetAddress
+                    val content = extractBody(message) ?: MessageContent("", isHtml = false)
+                    ReplyContext(
+                        fromEmail = from?.address.orEmpty(),
+                        toRecipients = message.recipientEmails(Message.RecipientType.TO),
+                        ccRecipients = message.recipientEmails(Message.RecipientType.CC),
+                        subject = message.subject ?: "",
+                        sentDateMillis = (message.sentDate ?: message.receivedDate)?.time
+                            ?: System.currentTimeMillis(),
+                        body = content.body,
+                        isHtml = content.isHtml,
+                    )
                 } finally {
                     runCatching { mailbox.close(false) }
                 }
@@ -351,6 +443,10 @@ class ImapClient @Inject constructor() {
 
     private fun baseType(part: Part): String =
         runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream")
+
+    /** The email addresses of the given recipient type, skipping any that aren't internet addresses. */
+    private fun Message.recipientEmails(type: Message.RecipientType): List<String> =
+        (getRecipients(type) ?: emptyArray()).mapNotNull { (it as? InternetAddress)?.address }
 
     private fun Message.toFetchedMessage(uidFolder: UIDFolder): FetchedMessage {
         val from = from?.firstOrNull() as? InternetAddress

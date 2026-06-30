@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,13 +19,15 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import org.libremail.data.sync.MailSyncer
+import org.libremail.data.sync.Syncer
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 
@@ -35,7 +38,7 @@ const val INBOX = "INBOX"
 class MailboxViewModel @Inject constructor(
     private val mailRepository: MailRepository,
     accountRepository: AccountRepository,
-    private val mailSyncer: MailSyncer,
+    private val mailSyncer: Syncer,
 ) : ViewModel() {
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
@@ -107,6 +110,126 @@ class MailboxViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    // --- Multi-select contextual action bar ---
+
+    private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedIds: StateFlow<Set<String>> = _selectedIds.asStateFlow()
+
+    private val _pendingConfirm = MutableStateFlow<PendingAction?>(null)
+    val pendingConfirm: StateFlow<PendingAction?> = _pendingConfirm.asStateFlow()
+
+    /** True while a reply/forward draft is being fetched and built (a brief network round-trip). */
+    private val _actionInProgress = MutableStateFlow(false)
+    val actionInProgress: StateFlow<Boolean> = _actionInProgress.asStateFlow()
+
+    private val _events = Channel<MailboxEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
+
+    /** The role of the folder currently shown — decides whether "Delete" trashes or permanently expunges. */
+    val currentFolderRole: StateFlow<FolderRole?> =
+        combine(folders, _selectedFolder) { fs, sel -> fs.firstOrNull { it.fullName == sel }?.role }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** The single account every selected message belongs to, or null if the selection spans accounts. */
+    private val selectionAccountId: StateFlow<String?> =
+        combine(_selectedIds, messages) { ids, msgs ->
+            msgs.filter { it.id in ids }.map { it.accountId }.distinct().singleOrNull()
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Whether "Move" is offered: only when the whole selection sits in a single account's folder tree. */
+    val canMove: StateFlow<Boolean> = selectionAccountId
+        .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Destination folders for the Move picker: the selection account's selectable folders. */
+    val moveTargetFolders: StateFlow<List<Folder>> = selectionAccountId
+        .flatMapLatest { acct -> if (acct == null) flowOf(emptyList()) else mailRepository.observeFolders(acct) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun startSelection(id: String) {
+        _selectedIds.value = setOf(id)
+    }
+
+    fun toggleSelection(id: String) {
+        _selectedIds.value = _selectedIds.value.let { if (id in it) it - id else it + id }
+    }
+
+    fun clearSelection() {
+        _selectedIds.value = emptySet()
+    }
+
+    fun selectAll() {
+        _selectedIds.value = messages.value.map { it.id }.toSet()
+    }
+
+    fun archiveSelected() = runOnSelection { mailRepository.archive(it) }
+
+    fun moveSelected(destFolderFullName: String) =
+        runOnSelection { mailRepository.moveToFolder(it, destFolderFullName) }
+
+    /** Reply and Forward open compose directly; Reply All is confirmed first (see [requestReplyAll]). */
+    fun reply(mode: ReplyMode) {
+        val id = _selectedIds.value.singleOrNull() ?: return
+        buildReply(mode, id)
+    }
+
+    // Confirmation-gated actions: the screen shows a dialog bound to [pendingConfirm], then [confirmPending].
+
+    fun requestSpam() {
+        if (_selectedIds.value.isEmpty()) return
+        _pendingConfirm.value = PendingAction.Spam(_selectedIds.value.size)
+    }
+
+    fun requestDelete() {
+        if (_selectedIds.value.isEmpty()) return
+        val role = currentFolderRole.value
+        val permanent = role == FolderRole.TRASH || role == FolderRole.SPAM
+        _pendingConfirm.value = PendingAction.Delete(_selectedIds.value.size, permanent)
+    }
+
+    fun requestReplyAll() {
+        val id = _selectedIds.value.singleOrNull() ?: return
+        _pendingConfirm.value = PendingAction.ReplyAll(id)
+    }
+
+    fun confirmPending() {
+        when (val pending = _pendingConfirm.value) {
+            is PendingAction.Spam -> runOnSelection { mailRepository.reportSpam(it) }
+            is PendingAction.Delete ->
+                if (pending.permanent) runOnSelection { mailRepository.expunge(it) }
+                else runOnSelection { mailRepository.trash(it) }
+            is PendingAction.ReplyAll -> buildReply(ReplyMode.REPLY_ALL, pending.messageId)
+            null -> Unit
+        }
+        _pendingConfirm.value = null
+    }
+
+    fun dismissConfirm() {
+        _pendingConfirm.value = null
+    }
+
+    /** Snapshots the selection, exits selection mode, then runs [block]; failures surface via [error]. */
+    private fun runOnSelection(block: suspend (List<String>) -> Result<Unit>) {
+        val ids = _selectedIds.value.toList()
+        if (ids.isEmpty()) return
+        clearSelection()
+        viewModelScope.launch {
+            block(ids).onFailure { _error.value = it.message ?: "Action failed" }
+        }
+    }
+
+    private fun buildReply(mode: ReplyMode, messageId: String) {
+        clearSelection()
+        viewModelScope.launch {
+            _actionInProgress.value = true
+            mailRepository.buildReplyDraft(messageId, mode).fold(
+                onSuccess = { draftId -> _events.send(MailboxEvent.OpenCompose(draftId)) },
+                onFailure = { _error.value = it.message ?: "Could not open compose" },
+            )
+            _actionInProgress.value = false
+        }
+    }
+
     init {
         // Fall back to the unified inbox if the filtered account is removed.
         viewModelScope.launch {
@@ -133,11 +256,13 @@ class MailboxViewModel @Inject constructor(
     }
 
     fun selectAccount(accountId: String?) {
+        clearSelection()
         _selectedAccountId.value = accountId
     }
 
     /** Browses a specific account's folder; syncs it from the server in the background. */
     fun selectFolder(accountId: String, folderFullName: String) {
+        clearSelection()
         _selectedAccountId.value = accountId
         _drawerAccountId.value = accountId
         _selectedFolder.value = folderFullName
@@ -146,6 +271,7 @@ class MailboxViewModel @Inject constructor(
 
     /** Returns to the unified inbox across all accounts. */
     fun selectUnifiedInbox() {
+        clearSelection()
         _selectedAccountId.value = null
         _drawerAccountId.value = null
         _selectedFolder.value = INBOX
@@ -164,6 +290,7 @@ class MailboxViewModel @Inject constructor(
     }
 
     fun openSearch() {
+        clearSelection()
         _searchActive.value = true
     }
 
@@ -200,6 +327,18 @@ class MailboxViewModel @Inject constructor(
     fun consumeError() {
         _error.value = null
     }
+}
+
+/** A destructive or notable CAB action awaiting user confirmation. */
+sealed interface PendingAction {
+    data class Spam(val count: Int) : PendingAction
+    data class Delete(val count: Int, val permanent: Boolean) : PendingAction
+    data class ReplyAll(val messageId: String) : PendingAction
+}
+
+/** One-shot effects the mailbox screen acts on. */
+sealed interface MailboxEvent {
+    data class OpenCompose(val draftId: String) : MailboxEvent
 }
 
 /** Guarantees an inbox entry so the drawer is usable before the first folder-list refresh completes. */

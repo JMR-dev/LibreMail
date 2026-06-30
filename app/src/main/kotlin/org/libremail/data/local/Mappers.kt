@@ -89,6 +89,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
     isStarred = isStarred,
     folder = folder,
     inInbox = inInbox,
+    bodyFetched = bodyFetched,
 )
 
 internal fun FetchedMessage.toEntity(

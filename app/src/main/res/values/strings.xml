@@ -33,6 +33,29 @@
     <string name="mailbox_welcome_title">Welcome to LibreMail</string>
     <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>
 
+    <!-- Mailbox multi-select contextual action bar -->
+    <string name="cab_selected_count">%1$d selected</string>
+    <string name="cab_close">Clear selection</string>
+    <string name="action_archive">Archive</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_spam">Spam</string>
+    <string name="action_move">Move</string>
+    <string name="action_reply">Reply</string>
+    <string name="action_reply_all">Reply all</string>
+    <string name="action_forward">Forward</string>
+    <string name="action_select_all">Select all</string>
+    <string name="action_more">More options</string>
+    <string name="move_picker_title">Move to</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm_spam_title">Move to Spam?</string>
+    <string name="confirm_spam_text">Move %1$d message(s) to the Spam folder?</string>
+    <string name="confirm_trash_title">Move to Trash?</string>
+    <string name="confirm_trash_text">Move %1$d message(s) to Trash?</string>
+    <string name="confirm_delete_title">Delete permanently?</string>
+    <string name="confirm_delete_text">This permanently deletes %1$d message(s) and can\'t be undone.</string>
+    <string name="confirm_reply_all_title">Reply to all?</string>
+    <string name="confirm_reply_all_text">Reply to everyone included on this message?</string>
+
     <!-- Folder navigation drawer -->
     <string name="drawer_open">Show folders</string>
     <string name="drawer_switch_account">Switch account</string>
@@ -74,6 +97,8 @@
     <!-- Reader -->
     <string name="reader_reply">Reply</string>
     <string name="attachments_title">Attachments</string>
+    <string name="attachment_downloaded">Downloaded</string>
+    <string name="message_available_offline">Available offline</string>
     <string name="attachment_download_failed">Couldn\'t download %1$s</string>
     <string name="attachment_no_app">No app can open this file</string>
 
@@ -105,6 +130,13 @@
 
     <!-- Settings -->
     <string name="settings_accounts">Accounts</string>
+    <string name="settings_downloading">Message downloading</string>
+    <string name="fetch_always">Always fetch all</string>
+    <string name="fetch_always_summary">Download full messages and attachments as they sync, on any connection.</string>
+    <string name="fetch_wifi">Fetch all on Wi-Fi</string>
+    <string name="fetch_wifi_summary">Download full messages and attachments only on Wi-Fi or other unmetered networks; otherwise fetch them when you open a message.</string>
+    <string name="fetch_on_demand">Always on-demand</string>
+    <string name="fetch_on_demand_summary">Sync only message headers; download a message\'s content when you open it.</string>
     <string name="settings_notifications">Notifications</string>
     <string name="settings_new_mail">New-mail notifications</string>
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
