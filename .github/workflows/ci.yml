@@ -222,17 +222,55 @@ jobs:
         run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "platform-tools" "emulator" "$API37_IMAGE"
 
       - name: Create API 37 AVD
-        run: echo "no" | avdmanager create avd -n api37 -k "$API37_IMAGE" -d pixel_2 --force
+        run: |
+          # avdmanager and the emulator disagree on the default AVD dir when ANDROID_SDK_HOME is set
+          # on the runner (avdmanager writes $ANDROID_SDK_HOME/.android/avd; the emulator looks in
+          # $ANDROID_SDK_HOME/avd), which made the boot step report "Unknown AVD name [api37]". Pin
+          # ANDROID_AVD_HOME so both agree, and carry it to the boot step via $GITHUB_ENV.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "no" | avdmanager create avd -n api37 -k "$API37_IMAGE" -d pixel_2 --force
+          echo "AVDs visible to the emulator:"; "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds
 
       - name: Boot emulator and run E2E
         run: |
           set -euo pipefail
-          "$ANDROID_SDK_ROOT/emulator/emulator" -avd api37 \
-            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none &
-          adb wait-for-device
-          timeout 300 bash -c 'while [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" != "1" ]; do sleep 3; done'
+          EMU_LOG="${RUNNER_TEMP:-/tmp}/emulator.log"
+
+          boot_emulator() {
+            echo "::group::Start API 37 emulator (attempt $1)"
+            # Capture the emulator's own output — without this a boot failure is invisible.
+            "$ANDROID_SDK_ROOT/emulator/emulator" -avd api37 \
+              -no-window -no-audio -no-boot-anim -no-snapshot -accel on \
+              -gpu swiftshader_indirect -camera-back none -camera-front none > "$EMU_LOG" 2>&1 &
+            # ONE bounded wait covering both device registration and full boot, so a stuck emulator
+            # fails fast instead of hanging the whole job until the 35-min cap (the original bug).
+            if timeout 300 adb wait-for-device shell \
+                'while [ "$(getprop sys.boot_completed | tr -d "\r")" != "1" ]; do sleep 2; done'; then
+              echo "::endgroup::"; return 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::API 37 emulator did not boot within 300s (attempt $1)"
+            adb devices || true
+            echo "--- emulator.log (tail) ---"; tail -120 "$EMU_LOG" || true
+            adb emu kill 2>/dev/null || true
+            sleep 5
+            return 1
+          }
+
+          booted=0
+          for attempt in 1 2; do boot_emulator "$attempt" && { booted=1; break; }; done
+          [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
+
           adb shell input keyevent 82 || true
           ./gradlew connectedDebugAndroidTest --stacktrace
+
+      - name: Dump emulator log on failure
+        if: failure()
+        run: |
+          echo "--- emulator.log ---"; tail -200 "${RUNNER_TEMP:-/tmp}/emulator.log" 2>/dev/null || echo "(none)"
+          echo "--- logcat ---"; adb logcat -d 2>/dev/null | tail -120 || echo "(device unavailable)"
 
       - name: Shut down emulator
         if: always()
