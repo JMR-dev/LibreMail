@@ -14,6 +14,10 @@ interface AttachmentDao {
     @Query("SELECT * FROM attachments WHERE messageId = :messageId ORDER BY partIndex")
     fun observeForMessage(messageId: String): Flow<List<AttachmentEntity>>
 
+    /** One-shot read of a message's cached attachment metadata (e.g. to pre-download their bytes). */
+    @Query("SELECT * FROM attachments WHERE messageId = :messageId ORDER BY partIndex")
+    suspend fun getForMessage(messageId: String): List<AttachmentEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(attachments: List<AttachmentEntity>)
 

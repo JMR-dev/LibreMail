@@ -12,6 +12,7 @@ import jakarta.mail.internet.MimeMessage
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -102,6 +103,47 @@ class ImapClientTest {
 
         assertTrue(names.any { it.equals("INBOX", ignoreCase = true) })
         assertTrue(names.any { it.equals("Archive", ignoreCase = true) }, "folders=$names")
+    }
+
+    @Test
+    fun `moveMessages relocates a message to another folder`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Move me", "Relocate this")
+        greenMail.waitForIncomingEmail(1)
+        appendMessage("Archive", "carol@example.org", "Seed", "Creates the Archive folder")
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first { it.subject == "Move me" }.uid
+
+        client.moveMessages(params(), "INBOX", listOf(uid), "Archive")
+
+        val inbox = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        val archive = client.fetchRecent(params(), "Archive", limit = 50).map { it.subject }
+        assertFalse(inbox.contains("Move me"), "inbox=$inbox")
+        assertTrue(archive.contains("Move me"), "archive=$archive")
+    }
+
+    @Test
+    fun `fetchForReply returns recipients and body without marking the message read`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Question", "What time?")
+        greenMail.waitForIncomingEmail(1)
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+
+        val context = client.fetchForReply(params(), "INBOX", uid)
+
+        assertEquals("bob@example.org", context.fromEmail)
+        assertTrue(context.toRecipients.contains("alice@example.org"), "to=${context.toRecipients}")
+        assertTrue(context.body.contains("What time?"), "body=${context.body}")
+        assertFalse(client.fetchRecent(params(), "INBOX", limit = 50).first().isRead, "should stay unread")
+    }
+
+    @Test
+    fun `fetchBodyPeek returns body and attachments without marking the message read`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Peek", "Peek body text")
+        greenMail.waitForIncomingEmail(1)
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+
+        val content = client.fetchBodyPeek(params(), "INBOX", uid)
+
+        assertTrue(content.body.contains("Peek body text"), "body=${content.body}")
+        assertFalse(client.fetchRecent(params(), "INBOX", limit = 50).first().isRead, "should stay unread")
     }
 
     @Test

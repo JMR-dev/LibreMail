@@ -50,6 +50,7 @@ fun LibreMailApp() {
                 onOpenDrafts = { navController.navigate(Routes.DRAFTS) },
                 onOpenOutbox = { navController.navigate(Routes.OUTBOX) },
                 onAddAccount = { navController.navigate(Routes.ACCOUNT_SETUP) },
+                onOpenCompose = { draftId -> navController.navigate(Routes.composeDraft(draftId)) },
                 onSelectTab = navController::navigateTab,
             )
         }

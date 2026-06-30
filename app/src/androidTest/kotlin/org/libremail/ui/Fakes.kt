@@ -13,6 +13,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.domain.model.ReplyMode
+import org.libremail.data.sync.Syncer
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 
@@ -59,31 +61,78 @@ class FakeAccountRepository(
  */
 class FakeMailRepository(
     var sendResult: Result<Unit> = Result.success(Unit),
+    private val messages: List<Message> = emptyList(),
+    private val folders: List<Folder> = emptyList(),
+    private val attachments: List<Attachment> = emptyList(),
+    private val downloadedParts: Set<Int> = emptySet(),
 ) : MailRepository {
 
     val sentMessages = mutableListOf<OutgoingMessage>()
     val savedDrafts = mutableListOf<Draft>()
     val deletedDraftIds = mutableListOf<String>()
+    val archivedIds = mutableListOf<List<String>>()
+    val spammedIds = mutableListOf<List<String>>()
+    val trashedIds = mutableListOf<List<String>>()
+    val expungedIds = mutableListOf<List<String>>()
+    val movedToFolder = mutableListOf<Pair<List<String>, String>>()
+    val replyDrafts = mutableListOf<Pair<String, ReplyMode>>()
 
-    override fun observeMessages(): Flow<List<Message>> = flowOf(emptyList())
+    override fun observeMessages(): Flow<List<Message>> = flowOf(messages)
 
-    override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(emptyList())
+    override fun observeFolders(accountId: String): Flow<List<Folder>> =
+        flowOf(folders.filter { it.accountId == accountId })
 
     override suspend fun refreshFolders(accountId: String): Result<Unit> = Result.success(Unit)
 
-    override suspend fun getMessage(id: String): Message? = null
+    override suspend fun getMessage(id: String): Message? = messages.firstOrNull { it.id == id }
 
     override suspend fun openMessage(id: String): Result<Message> =
-        Result.failure(UnsupportedOperationException("not used in UI tests"))
+        messages.firstOrNull { it.id == id }?.let { Result.success(it) }
+            ?: Result.failure(NoSuchElementException("no message $id"))
 
-    override fun observeAttachments(messageId: String): Flow<List<Attachment>> = flowOf(emptyList())
+    override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
+        flowOf(attachments.filter { it.messageId == messageId })
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> =
         Result.failure(UnsupportedOperationException("not used in UI tests"))
 
+    override suspend fun prefetchMessage(messageId: String): Result<Unit> = Result.success(Unit)
+
+    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> = downloadedParts
+
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = Result.success(Unit)
 
     override suspend fun deleteMessage(id: String): Result<Unit> = Result.success(Unit)
+
+    override suspend fun archive(ids: List<String>): Result<Unit> {
+        archivedIds += ids
+        return Result.success(Unit)
+    }
+
+    override suspend fun reportSpam(ids: List<String>): Result<Unit> {
+        spammedIds += ids
+        return Result.success(Unit)
+    }
+
+    override suspend fun trash(ids: List<String>): Result<Unit> {
+        trashedIds += ids
+        return Result.success(Unit)
+    }
+
+    override suspend fun expunge(ids: List<String>): Result<Unit> {
+        expungedIds += ids
+        return Result.success(Unit)
+    }
+
+    override suspend fun moveToFolder(ids: List<String>, destFolderFullName: String): Result<Unit> {
+        movedToFolder += ids to destFolderFullName
+        return Result.success(Unit)
+    }
+
+    override suspend fun buildReplyDraft(messageId: String, mode: ReplyMode): Result<String> {
+        replyDrafts += messageId to mode
+        return Result.success("draft-$messageId")
+    }
 
     override suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit> {
         sentMessages += outgoing
@@ -111,4 +160,11 @@ class FakeMailRepository(
     override suspend fun searchServer(query: String, accountId: String?, folder: String) {}
 
     override suspend fun clearSearchResults() {}
+}
+
+/** No-op [Syncer] for UI tests: the screen renders cached data, so sync calls do nothing. */
+class FakeMailSyncer : Syncer {
+    override suspend fun syncAll(): Result<Int> = Result.success(0)
+    override suspend fun syncAccount(accountId: String): Result<Int> = Result.success(0)
+    override suspend fun syncFolder(accountId: String, folder: String): Result<Int> = Result.success(0)
 }

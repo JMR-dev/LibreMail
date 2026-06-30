@@ -11,12 +11,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.libremail.data.ReplyBuilder
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.entity.FolderEntity
+import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
@@ -25,12 +28,14 @@ import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
+import org.libremail.domain.model.FolderRole
+import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
-import org.libremail.mail.DownloadedAttachment
 import org.libremail.mail.ImapClient
 
 @Singleton
@@ -86,9 +91,38 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> = runCatching {
         val entity = messageDao.getById(messageId) ?: error("Message not found")
+        val meta = attachmentDao.getForMessage(messageId).firstOrNull { it.partIndex == partIndex }
+        val target = attachmentFile(messageId, partIndex, meta?.filename ?: "attachment")
+        // Reuse a previously downloaded (or pre-fetched) file so it opens instantly and offline.
+        if (target.exists() && target.length() > 0L) return@runCatching target
         val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
         val params = connectionFactory.imapParamsFor(account)
-        saveToCache(imapClient.fetchAttachment(params, entity.folder, uidOf(messageId), partIndex))
+        val downloaded = imapClient.fetchAttachment(params, entity.folder, uidOf(messageId), partIndex)
+        target.parentFile?.mkdirs()
+        target.outputStream().use { it.write(downloaded.bytes) }
+        target
+    }
+
+    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> =
+        attachmentDao.getForMessage(messageId)
+            .filter { val file = attachmentFile(messageId, it.partIndex, it.filename); file.exists() && file.length() > 0L }
+            .map { it.partIndex }
+            .toSet()
+
+    override suspend fun prefetchMessage(messageId: String): Result<Unit> = runCatching {
+        val entity = messageDao.getById(messageId) ?: return@runCatching
+        val account = accountDao.getById(entity.accountId)?.toDomain() ?: return@runCatching
+        val params = connectionFactory.imapParamsFor(account)
+        // Cache the body (peek, so prefetching never marks the message read) and its attachment metadata.
+        if (!entity.bodyFetched) {
+            val content = imapClient.fetchBodyPeek(params, entity.folder, uidOf(messageId))
+            messageDao.updateBody(messageId, content.body, content.isHtml, snippetOf(content.body))
+            attachmentDao.replaceForMessage(messageId, content.attachments.map { it.toEntity(messageId) })
+        }
+        // Auto-download every attachment's bytes into the persistent per-part cache (skips ones present).
+        attachmentDao.getForMessage(messageId).forEach { attachment ->
+            downloadAttachment(messageId, attachment.partIndex)
+        }
     }
 
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = runCatching {
@@ -109,6 +143,101 @@ class MailRepositoryImpl @Inject constructor(
         if (entity != null && account != null) {
             imapClient.deleteMessage(connectionFactory.imapParamsFor(account), entity.folder, uidOf(id))
         }
+    }
+
+    override suspend fun archive(ids: List<String>): Result<Unit> =
+        moveByRole(ids, FolderRole.ARCHIVE, fallbackExpunge = false)
+
+    override suspend fun reportSpam(ids: List<String>): Result<Unit> =
+        moveByRole(ids, FolderRole.SPAM, fallbackExpunge = false)
+
+    override suspend fun trash(ids: List<String>): Result<Unit> =
+        moveByRole(ids, FolderRole.TRASH, fallbackExpunge = true)
+
+    override suspend fun expunge(ids: List<String>): Result<Unit> = runCatching {
+        val entities = ids.mapNotNull { messageDao.getById(it) }
+        messageDao.deleteByIds(ids) // optimistic
+        forEachAccountFolder(entities) { params, folder, group ->
+            group.forEach { imapClient.deleteMessage(params, folder, uidOf(it.id)) }
+        }
+    }
+
+    override suspend fun moveToFolder(ids: List<String>, destFolderFullName: String): Result<Unit> = runCatching {
+        val entities = ids.mapNotNull { messageDao.getById(it) }
+        messageDao.deleteByIds(ids) // optimistic
+        forEachAccountFolder(entities) { params, folder, group ->
+            if (folder != destFolderFullName) {
+                imapClient.moveMessages(params, folder, group.map { uidOf(it.id) }, destFolderFullName)
+            }
+        }
+    }
+
+    override suspend fun buildReplyDraft(messageId: String, mode: ReplyMode): Result<String> = runCatching {
+        val entity = messageDao.getById(messageId) ?: error("Message not found")
+        val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
+        val params = connectionFactory.imapParamsFor(account)
+        val context = imapClient.fetchForReply(params, entity.folder, uidOf(messageId))
+        val content = ReplyBuilder.build(context, mode, account.email)
+        val draftId = UUID.randomUUID().toString()
+        saveDraft(
+            Draft(
+                id = draftId,
+                accountId = entity.accountId,
+                to = content.to,
+                cc = content.cc,
+                subject = content.subject,
+                body = content.body,
+                updatedAt = System.currentTimeMillis(),
+                attachments = emptyList(),
+            ),
+        )
+        draftId
+    }
+
+    /**
+     * Moves messages to each account's folder for [role], resolving the destination per account so the
+     * unified inbox works. Removes local rows first (optimistic; reconciled on the next sync). When the
+     * role folder is missing: trash falls back to a permanent expunge ([fallbackExpunge]); others fail.
+     */
+    private suspend fun moveByRole(ids: List<String>, role: FolderRole, fallbackExpunge: Boolean): Result<Unit> =
+        runCatching {
+            val entities = ids.mapNotNull { messageDao.getById(it) }
+            messageDao.deleteByIds(ids) // optimistic
+            val destByAccount = entities.map { it.accountId }.distinct()
+                .associateWith { resolveRoleFolder(it, role) }
+            forEachAccountFolder(entities) { params, folder, group ->
+                when (val dest = destByAccount[group.first().accountId]) {
+                    null ->
+                        if (fallbackExpunge) {
+                            group.forEach { imapClient.deleteMessage(params, folder, uidOf(it.id)) }
+                        } else {
+                            error("No ${role.name.lowercase()} folder for this account")
+                        }
+                    else -> imapClient.moveMessages(params, folder, group.map { uidOf(it.id) }, dest)
+                }
+            }
+        }
+
+    /** Groups [entities] by account then source folder and runs [block] once per (account, folder) group. */
+    private suspend fun forEachAccountFolder(
+        entities: List<MessageEntity>,
+        block: suspend (params: ImapConnectionParams, folder: String, group: List<MessageEntity>) -> Unit,
+    ) {
+        entities.groupBy { it.accountId }.forEach { (accountId, accountMessages) ->
+            val account = accountDao.getById(accountId)?.toDomain() ?: return@forEach
+            val params = connectionFactory.imapParamsFor(account)
+            accountMessages.groupBy { it.folder }.forEach { (folder, group) -> block(params, folder, group) }
+        }
+    }
+
+    /** Resolves the full name of an account's folder for [role], refreshing the cache once if needed. */
+    private suspend fun resolveRoleFolder(accountId: String, role: FolderRole): String? {
+        fun pick(folders: List<FolderEntity>) =
+            folders.firstOrNull { it.role == role.name && it.selectable }?.fullName
+        pick(folderDao.getForAccountOnce(accountId))?.let { return it }
+        // The folder cache can be cold (the user may not have opened the drawer yet); refresh and retry.
+        runCatching { refreshFolders(accountId) }
+        return pick(folderDao.getForAccountOnce(accountId))
     }
 
     /** Queues the message in the outbox and triggers the send worker; delivery happens in the background. */
@@ -194,13 +323,15 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun clearSearchResults() = messageDao.deleteSearchRows()
 
-    /** Writes downloaded bytes to a private cache file that the FileProvider can share. */
-    private fun saveToCache(attachment: DownloadedAttachment): File {
-        val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
-        val safeName = attachment.filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
-        return File(dir, safeName).also { file ->
-            file.outputStream().use { it.write(attachment.bytes) }
-        }
+    /**
+     * Deterministic cache path for one attachment part, under the FileProvider-shared `attachments/`
+     * dir. Keying by message id + part index lets prefetch and on-demand download share the same file
+     * and avoids filename collisions between messages.
+     */
+    private fun attachmentFile(messageId: String, partIndex: Int, filename: String): File {
+        val safeId = messageId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val safeName = filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+        return File(context.cacheDir, "attachments/$safeId/$partIndex/$safeName")
     }
 }
 

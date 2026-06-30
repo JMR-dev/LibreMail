@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -33,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
+import org.libremail.data.settings.FetchPolicy
 import org.libremail.ui.LibreMailBottomBar
 import org.libremail.ui.TopDest
 
@@ -88,6 +90,27 @@ fun SettingsScreen(
                 checked = settings.dynamicColor,
                 onCheckedChange = viewModel::setDynamicColor,
                 subtitle = stringResource(R.string.settings_dynamic_color_summary),
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_downloading))
+            RadioRow(
+                title = stringResource(R.string.fetch_always),
+                subtitle = stringResource(R.string.fetch_always_summary),
+                selected = settings.fetchPolicy == FetchPolicy.ALWAYS,
+                onClick = { viewModel.setFetchPolicy(FetchPolicy.ALWAYS) },
+            )
+            RadioRow(
+                title = stringResource(R.string.fetch_wifi),
+                subtitle = stringResource(R.string.fetch_wifi_summary),
+                selected = settings.fetchPolicy == FetchPolicy.WIFI_ONLY,
+                onClick = { viewModel.setFetchPolicy(FetchPolicy.WIFI_ONLY) },
+            )
+            RadioRow(
+                title = stringResource(R.string.fetch_on_demand),
+                subtitle = stringResource(R.string.fetch_on_demand_summary),
+                selected = settings.fetchPolicy == FetchPolicy.ON_DEMAND,
+                onClick = { viewModel.setFetchPolicy(FetchPolicy.ON_DEMAND) },
             )
             HorizontalDivider()
 
@@ -171,6 +194,30 @@ private fun SwitchRow(
         }
         Spacer(Modifier.width(16.dp))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun RadioRow(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
