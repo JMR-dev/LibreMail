@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.mailbox
 
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -10,6 +11,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -26,6 +28,7 @@ import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
@@ -147,13 +150,232 @@ class MailboxViewModelTest {
         assertTrue(vm.folders.value.none { it.fullName == "Archive" }, "alice's folders should no longer show")
     }
 
+    @Test
+    fun `toggle adds then removes a message from the selection`() = runTest(testDispatcher) {
+        val vm = createViewModel(accounts = listOf(alice), messages = emptyList())
+
+        vm.startSelection("a")
+        assertEquals(setOf("a"), vm.selectedIds.value)
+        vm.toggleSelection("b")
+        assertEquals(setOf("a", "b"), vm.selectedIds.value)
+        vm.toggleSelection("a")
+        assertEquals(setOf("b"), vm.selectedIds.value)
+        vm.clearSelection()
+        assertTrue(vm.selectedIds.value.isEmpty())
+    }
+
+    @Test
+    fun `selectAll selects every visible message`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:a:INBOX:2", "imap:a", "INBOX")),
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.selectAll()
+
+        assertEquals(setOf("imap:a:INBOX:1", "imap:a:INBOX:2"), vm.selectedIds.value)
+    }
+
+    @Test
+    fun `delete from a normal folder confirms then moves to trash`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.trash(any()) } returns Result.success(Unit)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.requestDelete()
+        val pending = vm.pendingConfirm.value
+        assertTrue(pending is PendingAction.Delete && !pending.permanent)
+
+        vm.confirmPending()
+
+        coVerify { repo.trash(listOf("imap:a:INBOX:1")) }
+        assertTrue(vm.selectedIds.value.isEmpty())
+        assertNull(vm.pendingConfirm.value)
+    }
+
+    @Test
+    fun `delete from the spam folder warns and expunges permanently`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.expunge(any()) } returns Result.success(Unit)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:Spam:1", "imap:a", "Spam")),
+            folders = mapOf(
+                "imap:a" to listOf(
+                    folder("imap:a", "INBOX", FolderRole.INBOX),
+                    folder("imap:a", "Spam", FolderRole.SPAM),
+                ),
+            ),
+            repo = repo,
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.currentFolderRole.collect {} }
+        vm.selectFolder("imap:a", "Spam")
+
+        vm.startSelection("imap:a:Spam:1")
+        vm.requestDelete()
+        val pending = vm.pendingConfirm.value
+        assertTrue(pending is PendingAction.Delete && pending.permanent)
+
+        vm.confirmPending()
+
+        coVerify { repo.expunge(listOf("imap:a:Spam:1")) }
+    }
+
+    @Test
+    fun `spam acts only after the confirmation is accepted`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.reportSpam(any()) } returns Result.success(Unit)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.requestSpam()
+        assertTrue(vm.pendingConfirm.value is PendingAction.Spam)
+        coVerify(exactly = 0) { repo.reportSpam(any()) }
+
+        vm.confirmPending()
+        coVerify(exactly = 1) { repo.reportSpam(listOf("imap:a:INBOX:1")) }
+    }
+
+    @Test
+    fun `forward builds a draft and emits OpenCompose`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.FORWARD) } returns Result.success("draft1")
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.reply(ReplyMode.FORWARD)
+
+        assertEquals(MailboxEvent.OpenCompose("draft1"), vm.events.first())
+        coVerify { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.FORWARD) }
+    }
+
+    @Test
+    fun `archive delegates the selection to the repository and exits selection`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.archive(any()) } returns Result.success(Unit)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.archiveSelected()
+
+        coVerify { repo.archive(listOf("imap:a:INBOX:1")) }
+        assertTrue(vm.selectedIds.value.isEmpty())
+    }
+
+    @Test
+    fun `reply opens a prefilled draft for the single selection`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.REPLY) } returns Result.success("d2")
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.reply(ReplyMode.REPLY)
+
+        assertEquals(MailboxEvent.OpenCompose("d2"), vm.events.first())
+    }
+
+    @Test
+    fun `dismissing a pending confirmation cancels the action`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+        vm.startSelection("imap:a:INBOX:1")
+
+        vm.requestSpam()
+        vm.dismissConfirm()
+        assertNull(vm.pendingConfirm.value)
+
+        vm.confirmPending() // nothing pending — no-op
+        coVerify(exactly = 0) { repo.reportSpam(any()) }
+    }
+
+    @Test
+    fun `move is enabled for a single-account selection and disabled across accounts`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice, bob),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:b:INBOX:1", "imap:b", "INBOX")),
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.canMove.collect {} }
+
+        vm.startSelection("imap:a:INBOX:1")
+        assertEquals(true, vm.canMove.value)
+
+        vm.toggleSelection("imap:b:INBOX:1")
+        assertEquals(false, vm.canMove.value)
+    }
+
+    @Test
+    fun `move sends the selection to the chosen folder`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.moveToFolder(any(), any()) } returns Result.success(Unit)
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+
+        vm.startSelection("imap:a:INBOX:1")
+        vm.moveSelected("Receipts")
+
+        coVerify { repo.moveToFolder(listOf("imap:a:INBOX:1"), "Receipts") }
+        assertTrue(vm.selectedIds.value.isEmpty())
+    }
+
+    @Test
+    fun `reply all confirms first, then opens a prefilled draft`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.REPLY_ALL) } returns Result.success("d1")
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
+            repo = repo,
+        )
+        vm.startSelection("imap:a:INBOX:1")
+
+        vm.requestReplyAll()
+        assertTrue(vm.pendingConfirm.value is PendingAction.ReplyAll)
+        coVerify(exactly = 0) { repo.buildReplyDraft(any(), any()) }
+
+        vm.confirmPending()
+        assertEquals(MailboxEvent.OpenCompose("d1"), vm.events.first())
+        coVerify { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.REPLY_ALL) }
+    }
+
     private fun createViewModel(
         accounts: List<Account>,
         messages: List<Message>,
         folders: Map<String, List<Folder>> = emptyMap(),
         syncer: MailSyncer = mockk(relaxed = true),
+        repo: MailRepository = mockk(relaxed = true),
     ): MailboxViewModel {
-        val repo = mockk<MailRepository>(relaxed = true)
         every { repo.observeMessages() } returns MutableStateFlow(messages)
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())

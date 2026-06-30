@@ -9,6 +9,7 @@ import org.libremail.domain.model.Folder
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.domain.model.ReplyMode
 
 /**
  * Abstraction over the local message cache (and, in later increments, network sync).
@@ -34,9 +35,39 @@ interface MailRepository {
     /** Downloads an attachment's bytes to a local cache file and returns it. */
     suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File>
 
+    /** Part indexes of a message whose attachment bytes are already cached on disk (openable offline). */
+    suspend fun downloadedAttachmentParts(messageId: String): Set<Int>
+
+    /**
+     * Pre-caches a message's full content (body + every attachment's bytes) without marking it read.
+     * Used by aggressive sync so opening the message — and its attachments — is instant and works offline.
+     */
+    suspend fun prefetchMessage(messageId: String): Result<Unit>
+
     suspend fun setStarred(id: String, starred: Boolean): Result<Unit>
 
     suspend fun deleteMessage(id: String): Result<Unit>
+
+    /** Moves messages to each account's Archive folder. Fails if an account has no archive folder. */
+    suspend fun archive(ids: List<String>): Result<Unit>
+
+    /** Moves messages to each account's Spam/Junk folder. Fails if an account has no spam folder. */
+    suspend fun reportSpam(ids: List<String>): Result<Unit>
+
+    /** Moves messages to each account's Trash folder, falling back to a permanent delete if there is none. */
+    suspend fun trash(ids: List<String>): Result<Unit>
+
+    /** Permanently deletes messages from their current folder (IMAP delete + expunge). */
+    suspend fun expunge(ids: List<String>): Result<Unit>
+
+    /** Moves messages to a specific destination folder (used by the explicit "Move" picker). */
+    suspend fun moveToFolder(ids: List<String>, destFolderFullName: String): Result<Unit>
+
+    /**
+     * Fetches the original message and builds a pre-filled reply/forward draft, returning its id so the
+     * caller can open the compose screen on that draft.
+     */
+    suspend fun buildReplyDraft(messageId: String, mode: ReplyMode): Result<String>
 
     suspend fun sendMessage(outgoing: OutgoingMessage): Result<Unit>
 

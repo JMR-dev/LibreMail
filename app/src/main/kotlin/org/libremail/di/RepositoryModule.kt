@@ -8,6 +8,8 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 import org.libremail.data.repository.AccountRepositoryImpl
 import org.libremail.data.repository.MailRepositoryImpl
+import org.libremail.data.sync.MailSyncer
+import org.libremail.data.sync.Syncer
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 
@@ -22,4 +24,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindAccountRepository(impl: AccountRepositoryImpl): AccountRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSyncer(impl: MailSyncer): Syncer
 }

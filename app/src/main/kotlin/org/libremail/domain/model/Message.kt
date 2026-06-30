@@ -17,4 +17,6 @@ data class Message(
     val folder: String = "INBOX",
     /** True for messages synced from a folder; false for transient server-search hits. */
     val inInbox: Boolean = true,
+    /** True once the body has been cached locally, i.e. the message can be opened offline. */
+    val bodyFetched: Boolean = false,
 )

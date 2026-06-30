@@ -3,9 +3,12 @@ package org.libremail.ui.mailbox
 
 import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,14 +25,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -44,19 +55,23 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -67,7 +82,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import org.libremail.R
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.Folder
+import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,6 +95,7 @@ fun MailboxScreen(
     onOpenDrafts: () -> Unit,
     onOpenOutbox: () -> Unit,
     onAddAccount: () -> Unit,
+    onOpenCompose: (String) -> Unit,
     onSelectTab: (org.libremail.ui.TopDest) -> Unit,
     viewModel: MailboxViewModel = hiltViewModel(),
 ) {
@@ -93,12 +112,22 @@ fun MailboxScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
+    val pendingConfirm by viewModel.pendingConfirm.collectAsStateWithLifecycle()
+    val currentFolderRole by viewModel.currentFolderRole.collectAsStateWithLifecycle()
+    val canMove by viewModel.canMove.collectAsStateWithLifecycle()
+    val moveTargetFolders by viewModel.moveTargetFolders.collectAsStateWithLifecycle()
+    val actionInProgress by viewModel.actionInProgress.collectAsStateWithLifecycle()
+    val selectionMode = selectedIds.isNotEmpty()
+    var showMovePicker by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     BackHandler(enabled = searchActive) { viewModel.closeSearch() }
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
+    // Registered last so it takes priority: Back exits selection before closing search/drawer.
+    BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
     LaunchedEffect(drawerState.isOpen) { if (drawerState.isOpen) viewModel.onDrawerOpened() }
 
     LaunchedEffect(error) {
@@ -108,9 +137,17 @@ fun MailboxScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is MailboxEvent.OpenCompose -> onOpenCompose(event.draftId)
+            }
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = drawerState.isOpen || (hasAccounts && !searchActive),
+        gesturesEnabled = drawerState.isOpen || (hasAccounts && !searchActive && !selectionMode),
         drawerContent = {
             ModalDrawerSheet {
                 FolderDrawer(
@@ -134,37 +171,54 @@ fun MailboxScreen(
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = {
-                        if (searchActive) {
-                            SearchField(query = searchQuery, onQueryChange = viewModel::onSearchQuery)
-                        } else {
-                            val current = folders.firstOrNull { it.fullName == selectedFolder }
-                            Text(
-                                if (current != null) folderDisplayLabel(current)
-                                else stringResource(R.string.title_mailbox),
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        if (searchActive) {
-                            IconButton(onClick = viewModel::closeSearch) {
-                                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.search_close))
+                if (selectionMode) {
+                    SelectionTopBar(
+                        count = selectedIds.size,
+                        folderRole = currentFolderRole,
+                        canMove = canMove,
+                        onClose = viewModel::clearSelection,
+                        onArchive = viewModel::archiveSelected,
+                        onDelete = viewModel::requestDelete,
+                        onSpam = viewModel::requestSpam,
+                        onMove = { showMovePicker = true },
+                        onSelectAll = viewModel::selectAll,
+                        onReply = { viewModel.reply(ReplyMode.REPLY) },
+                        onReplyAll = viewModel::requestReplyAll,
+                        onForward = { viewModel.reply(ReplyMode.FORWARD) },
+                    )
+                } else {
+                    TopAppBar(
+                        title = {
+                            if (searchActive) {
+                                SearchField(query = searchQuery, onQueryChange = viewModel::onSearchQuery)
+                            } else {
+                                val current = folders.firstOrNull { it.fullName == selectedFolder }
+                                Text(
+                                    if (current != null) folderDisplayLabel(current)
+                                    else stringResource(R.string.title_mailbox),
+                                )
                             }
-                        } else if (hasAccounts) {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.drawer_open))
+                        },
+                        navigationIcon = {
+                            if (searchActive) {
+                                IconButton(onClick = viewModel::closeSearch) {
+                                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.search_close))
+                                }
+                            } else if (hasAccounts) {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.drawer_open))
+                                }
                             }
-                        }
-                    },
-                    actions = {
-                        if (hasAccounts && !searchActive) {
-                            IconButton(onClick = viewModel::openSearch) {
-                                Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                        },
+                        actions = {
+                            if (hasAccounts && !searchActive) {
+                                IconButton(onClick = viewModel::openSearch) {
+                                    Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                                }
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             },
             bottomBar = {
                 org.libremail.ui.LibreMailBottomBar(
@@ -222,7 +276,12 @@ fun MailboxScreen(
                                         MessageRow(
                                             message = message,
                                             accountLabel = if (showAccount) accountsById[message.accountId]?.email else null,
-                                            onClick = { onOpenMessage(message.id) },
+                                            selected = message.id in selectedIds,
+                                            onClick = {
+                                                if (selectionMode) viewModel.toggleSelection(message.id)
+                                                else onOpenMessage(message.id)
+                                            },
+                                            onLongClick = { viewModel.startSelection(message.id) },
                                         )
                                         HorizontalDivider()
                                     }
@@ -231,6 +290,40 @@ fun MailboxScreen(
                         }
                     }
                 }
+            }
+        }
+
+        pendingConfirm?.let { pending ->
+            ConfirmActionDialog(
+                pending = pending,
+                onConfirm = viewModel::confirmPending,
+                onDismiss = viewModel::dismissConfirm,
+            )
+        }
+        if (showMovePicker) {
+            MoveFolderDialog(
+                folders = moveTargetFolders.filter { it.selectable && it.fullName != selectedFolder },
+                onSelect = { folder ->
+                    showMovePicker = false
+                    viewModel.moveSelected(folder.fullName)
+                },
+                onDismiss = { showMovePicker = false },
+            )
+        }
+        // Blocking spinner while a reply/forward fetches the latest message from the server.
+        if (actionInProgress) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
             }
         }
     }
@@ -322,16 +415,24 @@ private fun AccountFilterRow(accounts: List<Account>, selectedId: String?, onSel
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: Message, accountLabel: String?, onClick: () -> Unit) {
+private fun MessageRow(
+    message: Message,
+    accountLabel: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(message.sender)
+        if (selected) SelectedAvatar() else Avatar(message.sender)
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,6 +445,15 @@ private fun MessageRow(message: Message, accountLabel: String?, onClick: () -> U
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(8.dp))
+                if (message.bodyFetched) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = stringResource(R.string.message_available_offline),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     text = formatTimestamp(message.timestampMillis),
                     style = MaterialTheme.typography.labelSmall,
@@ -394,6 +504,157 @@ private fun Avatar(name: String) {
             style = MaterialTheme.typography.titleMedium,
         )
     }
+}
+
+@Composable
+private fun SelectedAvatar() {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+    }
+}
+
+/**
+ * The contextual action bar shown while messages are selected. Archive/Delete are the common actions;
+ * the overflow holds the rest. Reply/Reply All/Forward appear only for a single selected message, and
+ * Archive/Spam are hidden while already viewing that role's folder.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectionTopBar(
+    count: Int,
+    folderRole: FolderRole?,
+    canMove: Boolean,
+    onClose: () -> Unit,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit,
+    onSpam: () -> Unit,
+    onMove: () -> Unit,
+    onSelectAll: () -> Unit,
+    onReply: () -> Unit,
+    onReplyAll: () -> Unit,
+    onForward: () -> Unit,
+) {
+    TopAppBar(
+        title = { Text(stringResource(R.string.cab_selected_count, count)) },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cab_close))
+            }
+        },
+        actions = {
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
+            }
+            var expanded by remember { mutableStateOf(false) }
+            IconButton(onClick = { expanded = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                if (folderRole != FolderRole.ARCHIVE) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_archive)) },
+                        onClick = { expanded = false; onArchive() },
+                    )
+                }
+                if (folderRole != FolderRole.SPAM) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_spam)) },
+                        onClick = { expanded = false; onSpam() },
+                    )
+                }
+                if (canMove) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_move)) },
+                        onClick = { expanded = false; onMove() },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.action_select_all)) },
+                    onClick = { expanded = false; onSelectAll() },
+                )
+                if (count == 1) {
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_reply)) },
+                        onClick = { expanded = false; onReply() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_reply_all)) },
+                        onClick = { expanded = false; onReplyAll() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_forward)) },
+                        onClick = { expanded = false; onForward() },
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ConfirmActionDialog(pending: PendingAction, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val title: String
+    val text: String
+    val confirmLabel: String
+    when (pending) {
+        is PendingAction.Spam -> {
+            title = stringResource(R.string.confirm_spam_title)
+            text = stringResource(R.string.confirm_spam_text, pending.count)
+            confirmLabel = stringResource(R.string.action_move)
+        }
+        is PendingAction.Delete -> if (pending.permanent) {
+            title = stringResource(R.string.confirm_delete_title)
+            text = stringResource(R.string.confirm_delete_text, pending.count)
+            confirmLabel = stringResource(R.string.action_delete)
+        } else {
+            title = stringResource(R.string.confirm_trash_title)
+            text = stringResource(R.string.confirm_trash_text, pending.count)
+            confirmLabel = stringResource(R.string.action_move)
+        }
+        is PendingAction.ReplyAll -> {
+            title = stringResource(R.string.confirm_reply_all_title)
+            text = stringResource(R.string.confirm_reply_all_text)
+            confirmLabel = stringResource(R.string.action_reply_all)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun MoveFolderDialog(folders: List<Folder>, onSelect: (Folder) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.move_picker_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                folders.forEach { folder ->
+                    Text(
+                        text = folderDisplayLabel(folder),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(folder) }
+                            .padding(vertical = 12.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable

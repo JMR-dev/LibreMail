@@ -14,6 +14,10 @@ interface FolderDao {
     @Query("SELECT * FROM folders WHERE accountId = :accountId ORDER BY sortOrder ASC")
     fun observeForAccount(accountId: String): Flow<List<FolderEntity>>
 
+    /** One-shot read of an account's folders, e.g. to resolve a role folder for archive/spam/trash. */
+    @Query("SELECT * FROM folders WHERE accountId = :accountId ORDER BY sortOrder ASC")
+    suspend fun getForAccountOnce(accountId: String): List<FolderEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(folders: List<FolderEntity>)
 

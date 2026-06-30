@@ -26,6 +26,8 @@ data class ReaderUiState(
     val message: Message? = null,
     val attachments: List<Attachment> = emptyList(),
     val downloading: Set<Int> = emptySet(),
+    /** Part indexes whose bytes are already cached on disk (openable offline). */
+    val downloaded: Set<Int> = emptySet(),
     val loadRemoteImages: Boolean = false,
     val deleted: Boolean = false,
     val error: String? = null,
@@ -67,7 +69,7 @@ class ReaderViewModel @Inject constructor(
         }
         viewModelScope.launch {
             repository.observeAttachments(messageId).collect { attachments ->
-                _state.update { it.copy(attachments = attachments) }
+                _state.update { it.copy(attachments = attachments, downloaded = repository.downloadedAttachmentParts(messageId)) }
             }
         }
     }
@@ -78,6 +80,7 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             repository.downloadAttachment(attachment.messageId, attachment.partIndex).fold(
                 onSuccess = { file ->
+                    _state.update { it.copy(downloaded = it.downloaded + attachment.partIndex) }
                     _events.send(ReaderEvent.OpenFile(file, attachment.mimeType, attachment.filename))
                 },
                 onFailure = { _events.send(ReaderEvent.DownloadFailed(attachment.filename)) },
