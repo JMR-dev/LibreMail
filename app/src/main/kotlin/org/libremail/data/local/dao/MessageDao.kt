@@ -16,6 +16,59 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(messages: List<MessageEntity>)
+    /** Ids of an account's inbox rows (excludes transient server-search hits). */
+    @Query("SELECT id FROM messages WHERE accountId = :accountId AND inInbox = 1")
+    suspend fun getInboxIdsForAccount(accountId: String): List<String>
+
+    /** Inserts only new messages, leaving existing rows (and their cached bodies/flags) intact. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertNew(messages: List<MessageEntity>)
+
+    /**
+     * Refreshes the display fields from the server without touching the cached body, the local
+     * read/star flags (which may hold an optimistic change the server hasn't reflected yet), or the
+     * inbox membership.
+     */
+    @Query(
+        "UPDATE messages SET sender = :sender, senderEmail = :senderEmail, subject = :subject, " +
+            "timestampMillis = :timestampMillis WHERE id = :id",
+    )
+    suspend fun updateHeaderContent(
+        id: String,
+        sender: String,
+        senderEmail: String,
+        subject: String,
+        timestampMillis: Long,
+    )
+
+    /** Marks rows as belonging to the inbox (e.g. a former search-only row that the sync now returns). */
+    @Query("UPDATE messages SET inInbox = 1 WHERE id IN (:ids)")
+    suspend fun markInInbox(ids: List<String>)
+
+    @Query("UPDATE messages SET body = :body, isHtml = :isHtml, snippet = :snippet, bodyFetched = 1 WHERE id = :id")
+    suspend fun updateBody(id: String, body: String, isHtml: Boolean, snippet: String)
+
+    @Query("UPDATE messages SET isRead = :isRead WHERE id = :id")
+    suspend fun setRead(id: String, isRead: Boolean)
+
+    @Query("UPDATE messages SET isStarred = :isStarred WHERE id = :id")
+    suspend fun setStarred(id: String, isStarred: Boolean)
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM messages WHERE accountId = :accountId")
+    suspend fun deleteByAccount(accountId: String)
+
+    /** Clears only an account's inbox rows (leaves any in-flight search-only rows). */
+    @Query("DELETE FROM messages WHERE accountId = :accountId AND inInbox = 1")
+    suspend fun deleteInboxByAccount(accountId: String)
+
+    /** Drops inbox rows for an account that are no longer present on the server. */
+    @Query("DELETE FROM messages WHERE accountId = :accountId AND inInbox = 1 AND id NOT IN (:keepIds)")
+    suspend fun deleteInboxNotIn(accountId: String, keepIds: List<String>)
+
+    /** Removes transient server-search hits (called when search closes). */
+    @Query("DELETE FROM messages WHERE inInbox = 0")
+    suspend fun deleteSearchRows()
 }

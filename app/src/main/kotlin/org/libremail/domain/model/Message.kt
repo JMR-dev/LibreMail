@@ -9,7 +9,10 @@ data class Message(
     val subject: String,
     val snippet: String,
     val body: String,
+    val isHtml: Boolean,
     val timestampMillis: Long,
     val isRead: Boolean,
     val isStarred: Boolean,
+    /** True for messages synced as part of the inbox; false for transient server-search hits. */
+    val inInbox: Boolean = true,
 )

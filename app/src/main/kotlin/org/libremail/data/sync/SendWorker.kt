@@ -1,0 +1,110 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+package org.libremail.data.sync
+
+import android.content.Context
+import androidx.hilt.work.HiltWorker
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
+import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.toDomain
+import org.libremail.domain.model.Account
+import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.OutgoingMessage
+import org.libremail.mail.GraphSendException
+import org.libremail.mail.GraphSender
+import org.libremail.mail.SmtpSender
+
+/** Drains the outbox: sends each queued message over Graph/SMTP, deleting it on success. */
+@HiltWorker
+class SendWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val outboxDao: OutboxDao,
+    private val accountDao: AccountDao,
+    private val smtpSender: SmtpSender,
+    private val graphSender: GraphSender,
+    private val connectionFactory: MailConnectionFactory,
+) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun doWork(): Result {
+        val pending = outboxDao.getAll()
+        if (pending.isEmpty()) return Result.success()
+
+        var anyFailed = false
+        for (entity in pending) {
+            val attachmentDir = File(applicationContext.cacheDir, "outbox/${entity.id}")
+            val account = accountDao.getById(entity.accountId)?.toDomain()
+            if (account == null) {
+                outboxDao.delete(entity.id) // account removed — drop the queued message
+                attachmentDir.deleteRecursively()
+                continue
+            }
+            runCatching {
+                val message = OutgoingMessage(
+                    accountId = entity.accountId,
+                    to = entity.toAddresses,
+                    cc = entity.ccAddresses,
+                    subject = entity.subject,
+                    body = entity.body,
+                )
+                val files = orderedAttachments(attachmentDir)
+                if (account.authType == AuthType.OAUTH_OUTLOOK) {
+                    sendOutlook(account, message, files)
+                } else {
+                    smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = message, attachments = files)
+                }
+            }.fold(
+                onSuccess = {
+                    outboxDao.delete(entity.id)
+                    attachmentDir.deleteRecursively()
+                },
+                onFailure = { e ->
+                    if (e is GraphSendException && e.mayHaveSent) {
+                        // Graph may already have delivered this; auto-retrying (or any other send)
+                        // would duplicate it, so leave it queued with a clear status and let the
+                        // user decide. Not counted as a failure, so WorkManager won't auto-retry.
+                        outboxDao.setError(entity.id, "Send status unknown — check your Sent folder, then retry or cancel")
+                    } else {
+                        outboxDao.setError(entity.id, e.message)
+                        anyFailed = true
+                    }
+                },
+            )
+        }
+        // Retry (with WorkManager backoff) so failed sends are reattempted when conditions improve.
+        return if (anyFailed) Result.retry() else Result.success()
+    }
+
+    /**
+     * Outlook prefers Microsoft Graph. Fall back to SMTP only when Graph definitely did NOT send
+     * (a rejection, a pre-send/transport error, or a token failure); never fall back when the Graph
+     * request may already have been accepted, or the message would be sent twice.
+     */
+    private suspend fun sendOutlook(account: Account, message: OutgoingMessage, files: List<File>) {
+        try {
+            val token = connectionFactory.graphTokenFor(account)
+            graphSender.send(token, message, files)
+        } catch (e: GraphSendException) {
+            if (e.mayHaveSent) throw e
+            smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = message, attachments = files)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Graph was never reached (e.g. token refresh failed) — SMTP cannot duplicate it.
+            smtpSender.send(connectionFactory.smtpParamsFor(account), from = account.email, message = message, attachments = files)
+        }
+    }
+
+    /** Attachments are staged one-per-indexed-subdirectory so their original order is preserved. */
+    private fun orderedAttachments(dir: File): List<File> =
+        dir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedBy { it.name.toIntOrNull() ?: Int.MAX_VALUE }
+            ?.mapNotNull { it.listFiles()?.firstOrNull() }
+            .orEmpty()
+}

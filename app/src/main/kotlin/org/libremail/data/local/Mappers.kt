@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+package org.libremail.data.local
+
+import org.libremail.data.local.entity.AccountEntity
+import org.libremail.data.local.entity.AttachmentEntity
+import org.libremail.data.local.entity.DraftEntity
+import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.OutboxEntity
+import org.libremail.data.local.entity.ServerConfigEmbedded
+import org.json.JSONArray
+import org.json.JSONObject
+import org.libremail.domain.model.Account
+import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.Draft
+import org.libremail.domain.model.OutboxMessage
+import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.ImapConnectionParams
+import org.libremail.domain.model.MailSecurity
+import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutgoingAttachment
+import org.libremail.domain.model.ServerConfig
+import org.libremail.domain.model.SmtpParams
+import org.libremail.mail.AttachmentPart
+import org.libremail.mail.FetchedMessage
+
+internal fun AccountEntity.toDomain(): Account = Account(
+    id = id,
+    email = email,
+    displayName = displayName,
+    authType = runCatching { AuthType.valueOf(authType) }.getOrDefault(AuthType.PASSWORD_IMAP),
+    imap = ServerConfig(imap.host, imap.port, imap.security.toMailSecurity()),
+    smtp = ServerConfig(smtp.host, smtp.port, smtp.security.toMailSecurity()),
+)
+
+internal fun Account.toEntity(): AccountEntity = AccountEntity(
+    id = id,
+    email = email,
+    displayName = displayName,
+    authType = authType.name,
+    imap = ServerConfigEmbedded(imap.host, imap.port, imap.security.name),
+    smtp = ServerConfigEmbedded(smtp.host, smtp.port, smtp.security.name),
+)
+
+internal fun Account.toImapParams(
+    secret: String,
+    useXoauth2: Boolean,
+    strictStartTls: Boolean = true,
+): ImapConnectionParams =
+    ImapConnectionParams(
+        host = imap.host,
+        port = imap.port,
+        security = imap.security,
+        username = email,
+        secret = secret,
+        useXoauth2 = useXoauth2,
+        strictStartTls = strictStartTls,
+    )
+
+internal fun Account.toSmtpParams(
+    secret: String,
+    useXoauth2: Boolean,
+    strictStartTls: Boolean = true,
+): SmtpParams =
+    SmtpParams(
+        host = smtp.host,
+        port = smtp.port,
+        security = smtp.security,
+        username = email,
+        secret = secret,
+        useXoauth2 = useXoauth2,
+        strictStartTls = strictStartTls,
+    )
+
+internal fun MessageEntity.toDomain(): Message = Message(
+    id = id,
+    accountId = accountId,
+    sender = sender,
+    senderEmail = senderEmail,
+    subject = subject,
+    snippet = snippet,
+    body = body,
+    isHtml = isHtml,
+    timestampMillis = timestampMillis,
+    isRead = isRead,
+    isStarred = isStarred,
+    inInbox = inInbox,
+)
+
+internal fun FetchedMessage.toEntity(accountId: String, inInbox: Boolean = true): MessageEntity = MessageEntity(
+    id = "$accountId:$uid",
+    accountId = accountId,
+    sender = sender,
+    senderEmail = senderEmail,
+    subject = subject,
+    snippet = "",
+    body = "",
+    isHtml = false,
+    timestampMillis = timestampMillis,
+    isRead = isRead,
+    isStarred = isFlagged,
+    inInbox = inInbox,
+    bodyFetched = false,
+)
+
+internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
+    messageId = messageId,
+    partIndex = partIndex,
+    filename = filename,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+)
+
+internal fun AttachmentPart.toEntity(messageId: String): AttachmentEntity = AttachmentEntity(
+    messageId = messageId,
+    partIndex = partIndex,
+    filename = filename,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+)
+
+internal fun DraftEntity.toDomain(): Draft = Draft(
+    id = id,
+    accountId = accountId,
+    to = toAddresses,
+    cc = ccAddresses,
+    subject = subject,
+    body = body,
+    updatedAt = updatedAt,
+    attachments = attachments.toOutgoingAttachments(),
+)
+
+internal fun Draft.toEntity(): DraftEntity = DraftEntity(
+    id = id,
+    accountId = accountId,
+    toAddresses = to,
+    ccAddresses = cc,
+    subject = subject,
+    body = body,
+    updatedAt = updatedAt,
+    attachments = attachments.toJson(),
+)
+
+/** Serializes draft attachments as a JSON array of {uri, name} objects ("" when empty). */
+private fun List<OutgoingAttachment>.toJson(): String {
+    if (isEmpty()) return ""
+    val array = JSONArray()
+    forEach { array.put(JSONObject().put("uri", it.uri).put("name", it.name)) }
+    return array.toString()
+}
+
+private fun String.toOutgoingAttachments(): List<OutgoingAttachment> {
+    if (isBlank()) return emptyList()
+    return runCatching {
+        val array = JSONArray(this)
+        (0 until array.length()).map { i ->
+            val obj = array.getJSONObject(i)
+            OutgoingAttachment(obj.getString("uri"), obj.optString("name"))
+        }
+    }.getOrDefault(emptyList())
+}
+
+internal fun OutboxEntity.toDomain(): OutboxMessage = OutboxMessage(
+    id = id,
+    to = toAddresses,
+    subject = subject,
+    body = body,
+    createdAt = createdAt,
+    lastError = lastError,
+)
+
+private fun String.toMailSecurity(): MailSecurity =
+    runCatching { MailSecurity.valueOf(this) }.getOrDefault(MailSecurity.SSL_TLS)

@@ -13,6 +13,15 @@ interface AccountDao {
     @Query("SELECT * FROM accounts ORDER BY email")
     fun observeAll(): Flow<List<AccountEntity>>
 
+    @Query("SELECT * FROM accounts ORDER BY email")
+    suspend fun getAll(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): AccountEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(account: AccountEntity)
+
+    @Query("DELETE FROM accounts WHERE id = :id")
+    suspend fun deleteById(id: String)
 }

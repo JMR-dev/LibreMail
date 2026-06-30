@@ -6,6 +6,11 @@
     <!-- Destinations -->
     <string name="title_mailbox">Inbox</string>
     <string name="title_reader">Message</string>
+    <string name="reader_star">Star</string>
+    <string name="reader_delete">Delete</string>
+    <string name="reader_empty">This message has no text content</string>
+    <string name="reader_images_blocked">Remote images are blocked</string>
+    <string name="reader_show_images">Show images</string>
     <string name="title_compose">Compose</string>
     <string name="title_settings">Settings</string>
     <string name="title_account_setup">Add account</string>
@@ -19,20 +24,81 @@
 
     <!-- Mailbox -->
     <string name="mailbox_empty">No messages yet</string>
-    <string name="mailbox_empty_subtitle">Add an account to start syncing your mail.</string>
+    <string name="mailbox_all_accounts">All</string>
+    <string name="search">Search</string>
+    <string name="search_close">Close search</string>
+    <string name="search_hint">Search mail</string>
+    <string name="search_no_results">No results</string>
+    <string name="mailbox_pull_to_refresh">Pull down to refresh</string>
+    <string name="mailbox_welcome_title">Welcome to LibreMail</string>
+    <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>
 
     <!-- Compose -->
+    <string name="compose_from">From</string>
     <string name="compose_to">To</string>
+    <string name="compose_cc">Cc</string>
     <string name="compose_subject">Subject</string>
     <string name="compose_body">Message</string>
-    <string name="compose_not_implemented">Sending is not available yet</string>
+    <string name="compose_no_account">Add an account before composing</string>
+    <string name="compose_attach">Attach file</string>
+    <string name="compose_attachment_remove">Remove attachment</string>
+
+    <!-- Drafts -->
+    <string name="drafts_title">Drafts</string>
+    <string name="drafts_empty">No drafts</string>
+    <string name="drafts_count">Drafts (%1$d)</string>
+    <string name="draft_no_subject">(no subject)</string>
+    <string name="draft_no_recipient">(no recipient)</string>
+    <string name="draft_delete">Delete draft</string>
+
+    <!-- Outbox -->
+    <string name="outbox_title">Outbox</string>
+    <string name="outbox_empty">Outbox is empty</string>
+    <string name="outbox_count">Outbox (%1$d)</string>
+    <string name="outbox_status_queued">Queued</string>
+    <string name="outbox_status_failed">Couldn\'t send — will retry</string>
+    <string name="outbox_cancel">Cancel send</string>
+    <string name="outbox_retry">Retry</string>
+
+    <!-- Reader -->
+    <string name="reader_reply">Reply</string>
+    <string name="attachments_title">Attachments</string>
+    <string name="attachment_download_failed">Couldn\'t download %1$s</string>
+    <string name="attachment_no_app">No app can open this file</string>
 
     <!-- Account setup -->
-    <string name="account_setup_gmail">Sign in with Google</string>
+    <string name="account_setup_outlook">Sign in with Microsoft</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose how you want to connect your mailbox.</string>
 
+    <!-- Manual IMAP/SMTP setup -->
+    <string name="manual_setup_title">IMAP / SMTP</string>
+    <string name="manual_email">Email address</string>
+    <string name="manual_password">Password or app password</string>
+    <string name="manual_incoming">Incoming mail (IMAP)</string>
+    <string name="manual_outgoing">Outgoing mail (SMTP)</string>
+    <string name="manual_imap_server">IMAP server</string>
+    <string name="manual_smtp_server">SMTP server</string>
+    <string name="manual_imap_port">IMAP port</string>
+    <string name="manual_smtp_port">SMTP port</string>
+    <string name="manual_imap_security">IMAP security</string>
+    <string name="manual_smtp_security">SMTP security</string>
+    <string name="manual_test_and_add">Test &amp; add account</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_new_mail">New mail</string>
+    <string name="notif_new_mail_count">%1$d new messages</string>
+    <string name="notif_channel_push_status">Push (IMAP IDLE)</string>
+    <string name="notif_push_status_title">Watching for new mail</string>
+    <string name="notif_push_status_text">Connected for instant delivery</string>
+
     <!-- Settings -->
+    <string name="settings_accounts">Accounts</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_new_mail">New-mail notifications</string>
+    <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
+    <string name="settings_no_accounts">No accounts yet</string>
+    <string name="account_remove">Remove</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_dynamic_color">Use wallpaper colors</string>
     <string name="settings_dynamic_color_summary">Material You dynamic theming (Android 12+)</string>
@@ -40,6 +106,9 @@
     <string name="settings_advanced">Advanced Settings</string>
     <string name="settings_advanced_summary">Power-user options for sync and connections</string>
     <string name="settings_adv_idle">Push mail (IMAP IDLE)</string>
-    <string name="settings_adv_starttls">Allow STARTTLS</string>
+    <string name="settings_adv_starttls">Allow insecure STARTTLS fallback</string>
+    <string name="settings_adv_starttls_summary">Connect even when the server can\'t upgrade to an encrypted (STARTTLS) connection. Leave this off unless a specific server requires it — while on, your username and password may be sent unencrypted.</string>
     <string name="settings_adv_remote_images">Load remote images by default</string>
+    <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
+    <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
 </resources>

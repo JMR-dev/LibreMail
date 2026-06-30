@@ -18,6 +18,26 @@ val secrets = Properties().apply {
 }
 val gmailOAuthClientId: String = secrets.getProperty("GMAIL_OAUTH_CLIENT_ID", "")
 
+// For a Google installed-app OAuth client, AppAuth's redirect is the reversed client
+// id as a custom URI scheme. Fall back to a placeholder so the manifest stays valid
+// until a real client id is set in secrets.properties.
+val gmailRedirectScheme: String = if (gmailOAuthClientId.endsWith(".apps.googleusercontent.com")) {
+    "com.googleusercontent.apps." + gmailOAuthClientId.removeSuffix(".apps.googleusercontent.com")
+} else {
+    "org.libremail.oauth"
+}
+
+// Microsoft (Outlook) OAuth public client id — a GUID, not a secret. Overridable via
+// secrets.properties; defaults to the app's registered client id.
+val outlookOAuthClientId: String = secrets.getProperty(
+    "OUTLOOK_OAUTH_CLIENT_ID",
+    "04e4aa5e-ed1f-47f9-b567-b99a0b29b3df",
+)
+
+// Optional release signing, configured via git-ignored secrets.properties. When absent, release
+// builds fall back to the debug key (installable for testing, but not publishable).
+val releaseStoreFile: String? = secrets.getProperty("RELEASE_STORE_FILE")
+
 android {
     namespace = "org.libremail"
     compileSdk = 37
@@ -32,17 +52,38 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "GMAIL_OAUTH_CLIENT_ID", "\"$gmailOAuthClientId\"")
-        // AppAuth redirect scheme (consumed when OAuth is wired up in a later increment).
-        manifestPlaceholders["appAuthRedirectScheme"] = "org.libremail.app"
+        buildConfigField("String", "GMAIL_OAUTH_REDIRECT_URI", "\"$gmailRedirectScheme:/oauth2redirect\"")
+        buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
+        buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"org.libremail.outlook://oauth2redirect\"")
+        // AppAuth captures the OAuth redirect via this custom scheme.
+        manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
+    }
+
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = secrets.getProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = secrets.getProperty("RELEASE_KEY_ALIAS")
+                keyPassword = secrets.getProperty("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Use a dedicated release keystore when configured in secrets.properties; otherwise fall
+            // back to the debug key so the build is still installable for local testing.
+            signingConfig = if (releaseStoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -65,6 +106,11 @@ android {
     }
 }
 
+// Export Room schemas so migrations can be validated by instrumented MigrationTestHelper tests.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -73,6 +119,10 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+
+    // Email transport (IMAP/SMTP) + OAuth
+    implementation(libs.angus.mail)
+    implementation(libs.appauth)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -85,17 +135,27 @@ dependencies {
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    compileOnly(libs.error.prone.annotations)
     implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
+
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.datastore.preferences)
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    implementation(libs.sqlcipher.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
+    testImplementation(libs.greenmail)
+    // The real org.json for unit tests (android.jar ships a stubbed, no-op version).
+    testImplementation("org.json:json:20231013")
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

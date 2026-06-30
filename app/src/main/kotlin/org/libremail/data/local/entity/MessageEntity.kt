@@ -17,7 +17,12 @@ data class MessageEntity(
     val subject: String,
     val snippet: String,
     val body: String,
+    val isHtml: Boolean = false,
     val timestampMillis: Long,
     val isRead: Boolean,
     val isStarred: Boolean,
+    /** True for inbox-synced rows; false for transient server-search hits (purged on search close). */
+    val inInbox: Boolean = true,
+    /** True once the body has been fetched from the server (distinguishes "not fetched" from "empty body"). */
+    val bodyFetched: Boolean = false,
 )

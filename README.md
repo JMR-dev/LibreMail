@@ -5,13 +5,25 @@ A free and open-source email client for Android, built with Kotlin, Jetpack
 Compose and Material 3 (Material You). LibreMail aims for a friendly default
 experience with power-user features tucked under an **Advanced Settings** group.
 
-> Status: **early scaffold.** The app builds and runs with a themed, navigable
-> shell and the full architecture skeleton in place. Account sign-in, IMAP/SMTP
-> sync and sending are implemented in subsequent increments.
+> Status: **in development.** Material You shell; **account setup** (Gmail OAuth via
+> AppAuth/PKCE and generic IMAP/SMTP, with a live connection test and Keystore-
+> encrypted credentials); **IMAP receive** — background sync (WorkManager) into a local
+> Room cache with pull-to-refresh; and **reading** — message bodies fetched on open and
+> rendered in a hardened WebView (JavaScript off, remote images blocked by default),
+> with mark-read, star, and delete; and **composing** — a compose screen with device-
+> contacts autocomplete that sends via a reliable background **outbox** (WorkManager-queued
+> and retried, with a viewable outbox folder), plus reply and **drafts** saved for
+> later; **on-device new-mail
+> notifications** (no push service) with persisted settings; **instant push** via a
+> foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
+> system viewer, and attach files when composing; **multiple accounts** — a unified inbox
+> with per-account filtering; and
+> **search** across cached mail and the server (IMAP SEARCH); and **Outlook/Microsoft**
+> accounts (OAuth 2.0 sign-in, IMAP receive + Microsoft Graph send, SMTP/XOAUTH2 fallback).
 
 ## Features (target MVP)
 
-- Send and receive email with **Gmail** (OAuth 2.0) and **any IMAP/SMTP** provider.
+- Send and receive email with **Gmail** and **Outlook/Microsoft** (OAuth 2.0) and **any IMAP/SMTP** provider.
 - Material You dynamic theming, light/dark, edge-to-edge.
 - Clean compose screen with phone/account contacts integration.
 - Modern security: OAuth 2.0 Authorization Code + PKCE, no stored passwords for Gmail.
@@ -76,6 +88,25 @@ assessment for the restricted scope.
    ```
 5. Copy `secrets.properties.example` to `secrets.properties` (git-ignored) and set
    `GMAIL_OAUTH_CLIENT_ID` to your client ID. The build injects it via `BuildConfig`.
+
+## Outlook / Microsoft account setup (OAuth client)
+
+Outlook uses the Microsoft identity platform with OAuth 2.0 + PKCE (no client secret). Send
+goes through Microsoft **Graph** (`sendMail`, their preferred API) with SMTP/XOAUTH2 as a
+fallback; receive is **IMAP**. Graph and Exchange Online are separate resources, so one
+consent grants every scope and per-resource access tokens are minted from the one refresh
+token. A working client ID ships with the build; to use your own Azure app registration:
+
+1. [Azure portal](https://portal.azure.com/) → **App registrations → New registration.**
+   Supported account types: *Accounts in any organizational directory and personal Microsoft
+   accounts*.
+2. **Authentication → Add a platform → Mobile and desktop applications**; add the redirect
+   URI `org.libremail.outlook://oauth2redirect` and enable **Allow public client flows**.
+3. **API permissions** (delegated): **Microsoft Graph → `Mail.Send`** (primary send), plus
+   **Office 365 Exchange Online → `IMAP.AccessAsUser.All` and `SMTP.Send`** (receive + SMTP
+   fallback). `openid`/`email`/`offline_access` come from OIDC.
+4. Copy the **Application (client) ID** into `secrets.properties` as
+   `OUTLOOK_OAUTH_CLIENT_ID` (it overrides the built-in default).
 
 ## Architecture
 
