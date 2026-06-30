@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.accountsetup
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -33,7 +35,22 @@ class AccountSetupViewModel @Inject constructor(
 
     val isOutlookConfigured: Boolean get() = outlookAuthManager.isConfigured
 
-    fun outlookAuthIntent(): Intent = outlookAuthManager.createAuthIntent()
+    /**
+     * Builds the Microsoft sign-in intent. Wrapped in [Result] because AppAuth throws
+     * (e.g. [ActivityNotFoundException] when no browser is available) while building it; the
+     * screen surfaces a failure as an error instead of letting it crash the app.
+     */
+    fun outlookAuthIntent(): Result<Intent> = runCatching { outlookAuthManager.createAuthIntent() }
+
+    /** Reports a failure to build or launch the sign-in intent through the error snackbar. */
+    fun onOutlookLaunchFailed(error: Throwable) {
+        val message = if (error is ActivityNotFoundException) {
+            "No web browser is available for Microsoft sign-in"
+        } else {
+            error.message ?: "Couldn't start Microsoft sign-in"
+        }
+        _state.update { it.copy(status = SetupStatus.IDLE, error = message) }
+    }
 
     fun onOutlookResult(data: Intent?) {
         if (data == null) {
@@ -47,10 +64,19 @@ class AccountSetupViewModel @Inject constructor(
                 accountRepository.addOutlookAccount(oauth.email, oauth.accessToken, oauth.authStateJson).getOrThrow()
             }.fold(
                 onSuccess = { _state.update { it.copy(status = SetupStatus.DONE) } },
-                onFailure = { e -> _state.update { it.copy(status = SetupStatus.IDLE, error = e.message ?: "Microsoft sign-in failed") } },
+                onFailure = { e ->
+                    // Stripped from release builds by the Log.d ProGuard rule (keeps any account
+                    // address / token detail out of shipped logs); visible in debug for diagnosis.
+                    Log.d(TAG, "Outlook sign-in failed after redirect", e)
+                    _state.update { it.copy(status = SetupStatus.IDLE, error = e.message ?: "Microsoft sign-in failed") }
+                },
             )
         }
     }
 
     fun consumeError() = _state.update { it.copy(error = null) }
+
+    private companion object {
+        const val TAG = "AccountSetupVM"
+    }
 }

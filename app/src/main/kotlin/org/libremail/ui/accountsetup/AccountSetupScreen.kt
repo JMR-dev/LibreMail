@@ -101,7 +101,15 @@ fun AccountSetupScreen(
                 )
                 Spacer(Modifier.height(24.dp))
                 Button(
-                    onClick = { outlookLauncher.launch(viewModel.outlookAuthIntent()) },
+                    onClick = {
+                        viewModel.outlookAuthIntent().fold(
+                            onSuccess = { intent ->
+                                runCatching { outlookLauncher.launch(intent) }
+                                    .onFailure { viewModel.onOutlookLaunchFailed(it) }
+                            },
+                            onFailure = { viewModel.onOutlookLaunchFailed(it) },
+                        )
+                    },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
