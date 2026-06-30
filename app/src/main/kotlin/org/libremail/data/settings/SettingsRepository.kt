@@ -23,6 +23,7 @@ data class AppSettings(
     val pushIdle: Boolean = true,
     val allowStartTls: Boolean = false,
     val loadRemoteImages: Boolean = false,
+    val encryptCache: Boolean = false,
 )
 
 @Singleton
@@ -36,6 +37,7 @@ class SettingsRepository @Inject constructor(
             pushIdle = prefs[PUSH_IDLE] ?: true,
             allowStartTls = prefs[ALLOW_STARTTLS] ?: false,
             loadRemoteImages = prefs[LOAD_REMOTE_IMAGES] ?: false,
+            encryptCache = prefs[ENCRYPT_CACHE] ?: false,
         )
     }
 
@@ -48,6 +50,7 @@ class SettingsRepository @Inject constructor(
     suspend fun setPushIdle(value: Boolean) = put(PUSH_IDLE, value)
     suspend fun setAllowStartTls(value: Boolean) = put(ALLOW_STARTTLS, value)
     suspend fun setLoadRemoteImages(value: Boolean) = put(LOAD_REMOTE_IMAGES, value)
+    suspend fun setEncryptCache(value: Boolean) = put(ENCRYPT_CACHE, value)
 
     private suspend fun put(key: Preferences.Key<Boolean>, value: Boolean) {
         context.settingsDataStore.edit { it[key] = value }
@@ -59,5 +62,6 @@ class SettingsRepository @Inject constructor(
         val PUSH_IDLE = booleanPreferencesKey("push_idle")
         val ALLOW_STARTTLS = booleanPreferencesKey("allow_starttls")
         val LOAD_REMOTE_IMAGES = booleanPreferencesKey("load_remote_images")
+        val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
     }
 }

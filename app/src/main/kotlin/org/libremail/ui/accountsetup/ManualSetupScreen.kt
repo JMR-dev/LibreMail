@@ -192,7 +192,10 @@ private fun SecuritySelector(label: String, selected: MailSecurity, onSelect: (M
         Text(label, style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MailSecurity.entries.forEach { security ->
+            // NONE (no transport security) is deliberately not offered in the UI: selecting it would
+            // send the account password/token in cleartext. It stays in the enum only for local
+            // test servers, which are configured in tests rather than through this screen.
+            MailSecurity.entries.filter { it != MailSecurity.NONE }.forEach { security ->
                 FilterChip(
                     selected = selected == security,
                     onClick = { onSelect(security) },

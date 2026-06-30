@@ -41,6 +41,7 @@ class SettingsViewModel @Inject constructor(
     fun setPushIdle(value: Boolean) = update { settingsRepository.setPushIdle(value) }
     fun setAllowStartTls(value: Boolean) = update { settingsRepository.setAllowStartTls(value) }
     fun setLoadRemoteImages(value: Boolean) = update { settingsRepository.setLoadRemoteImages(value) }
+    fun setEncryptCache(value: Boolean) = update { settingsRepository.setEncryptCache(value) }
 
     private inline fun update(crossinline action: suspend () -> Unit) {
         viewModelScope.launch { action() }

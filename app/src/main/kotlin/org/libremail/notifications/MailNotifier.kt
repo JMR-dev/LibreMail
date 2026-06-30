@@ -3,6 +3,7 @@ package org.libremail.notifications
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -95,7 +96,11 @@ class MailNotifier @Inject constructor(
             CHANNEL_ID,
             context.getString(R.string.notif_channel_new_mail),
             NotificationManager.IMPORTANCE_DEFAULT,
-        )
+        ).apply {
+            // Redact sender/subject on a secure lock screen (the system shows a generic placeholder
+            // instead). Applies on fresh installs; Android ignores channel changes after creation.
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
         NotificationManagerCompat.from(context).createNotificationChannel(channel)
     }
 

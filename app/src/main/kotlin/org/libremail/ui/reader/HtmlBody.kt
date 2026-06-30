@@ -82,6 +82,7 @@ private fun wrapHtml(body: String): String =
     <html>
     <head>
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: cid:; style-src 'unsafe-inline'; font-src data:">
       <style>
         body { font-family: sans-serif; line-height: 1.5; padding: 16px; word-wrap: break-word; }
         img { max-width: 100%; height: auto; }

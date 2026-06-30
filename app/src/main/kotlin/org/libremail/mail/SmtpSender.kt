@@ -45,6 +45,9 @@ class SmtpSender @Inject constructor() {
                     put("mail.$protocol.starttls.enable", "true")
                     put("mail.$protocol.starttls.required", params.strictStartTls.toString())
                 }
+                // Verify the server certificate matches the host whenever TLS is used (explicit so a
+                // future Angus default change can't silently disable it). No-op for MailSecurity.NONE.
+                put("mail.$protocol.ssl.checkserveridentity", "true")
                 if (params.useXoauth2) {
                     put("mail.$protocol.auth.mechanisms", "XOAUTH2")
                 }

@@ -223,7 +223,7 @@ class ImapClient @Inject constructor() {
                 runCatching { store.close() }
                 throw e
             }
-            Log.d(TAG, "IDLE connected for ${params.username}")
+            Log.d(TAG, "IDLE connected")
 
             val pushes = Channel<Unit>(Channel.CONFLATED)
             inbox.addMessageCountListener(object : MessageCountAdapter() {
@@ -353,6 +353,10 @@ class ImapClient @Inject constructor() {
             put("mail.$protocol.starttls.enable", "true")
             put("mail.$protocol.starttls.required", params.strictStartTls.toString())
         }
+        // Verify the server certificate matches the host whenever TLS is used. Angus already
+        // defaults this to true; set it explicitly so a future library-default change can't
+        // silently disable hostname checking and expose us to MITM. (No-op for MailSecurity.NONE.)
+        put("mail.$protocol.ssl.checkserveridentity", "true")
         if (params.useXoauth2) {
             put("mail.$protocol.auth.mechanisms", "XOAUTH2")
         }

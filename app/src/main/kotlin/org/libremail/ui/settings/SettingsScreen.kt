@@ -103,11 +103,18 @@ fun SettingsScreen(
                         title = stringResource(R.string.settings_adv_starttls),
                         checked = settings.allowStartTls,
                         onCheckedChange = viewModel::setAllowStartTls,
+                        subtitle = stringResource(R.string.settings_adv_starttls_summary),
                     )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_remote_images),
                         checked = settings.loadRemoteImages,
                         onCheckedChange = viewModel::setLoadRemoteImages,
+                    )
+                    SwitchRow(
+                        title = stringResource(R.string.settings_adv_encrypt_cache),
+                        checked = settings.encryptCache,
+                        onCheckedChange = viewModel::setEncryptCache,
+                        subtitle = stringResource(R.string.settings_adv_encrypt_cache_summary),
                     )
                 }
             }

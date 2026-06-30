@@ -17,3 +17,16 @@
 # AppAuth (de)serializes its models (AuthState, token responses) reflectively.
 -keep class net.openid.appauth.** { *; }
 -dontwarn net.openid.appauth.**
+
+# --- Strip debug/verbose logging from release builds ---
+# Drops Log.d/Log.v calls (and the evaluation of their arguments) so nothing like an
+# account address is ever written to logcat in a release build.
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+}
+
+# --- SQLCipher (opt-in encrypted cache) ---
+# JNI-bound classes referenced by the native library; keep them intact.
+-keep class net.zetetic.database.** { *; }
+-dontwarn net.zetetic.database.**

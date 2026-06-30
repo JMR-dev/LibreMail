@@ -106,6 +106,9 @@
     <string name="settings_advanced">Advanced Settings</string>
     <string name="settings_advanced_summary">Power-user options for sync and connections</string>
     <string name="settings_adv_idle">Push mail (IMAP IDLE)</string>
-    <string name="settings_adv_starttls">Allow STARTTLS</string>
+    <string name="settings_adv_starttls">Allow insecure STARTTLS fallback</string>
+    <string name="settings_adv_starttls_summary">Connect even when the server can\'t upgrade to an encrypted (STARTTLS) connection. Leave this off unless a specific server requires it — while on, your username and password may be sent unencrypted.</string>
     <string name="settings_adv_remote_images">Load remote images by default</string>
+    <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
+    <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
 </resources>
