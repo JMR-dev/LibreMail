@@ -11,12 +11,13 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
-private val LightColors = lightColorScheme(
+// Exposed as internal (not private) so the color-scheme contrast test can audit the role pairs.
+internal val LightColors = lightColorScheme(
     primary = BrandBlue,
     secondary = BrandTeal,
 )
 
-private val DarkColors = darkColorScheme(
+internal val DarkColors = darkColorScheme(
     primary = BrandBlueLight,
     secondary = BrandTealLight,
 )

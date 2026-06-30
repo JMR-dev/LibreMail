@@ -3,22 +3,33 @@ package org.libremail.ui.reader
 
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.graphics.Color
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
 /**
  * Renders an HTML email body in a hardened WebView: JavaScript and file/content access are
  * disabled, links open in the system browser, and remote content is blocked until the user
  * opts in (tracking-pixel protection).
+ *
+ * The email is wrapped with an explicit background/text/link color drawn from the active Material
+ * theme so it is always readable — in dark mode the previous transparent WebView showed the
+ * near-black app surface through emails whose own CSS left the text at the browser default of
+ * black, rendering them black-on-black. Where the platform supports it, algorithmic darkening is
+ * enabled as a backstop for emails that hardcode their own foreground colors.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -28,8 +39,24 @@ fun HtmlBody(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
+    val surface = colorScheme.surface
+    val onSurface = colorScheme.onSurface
+    val primary = colorScheme.primary
+    val isDark = surface.luminance() < 0.5f
+    val surfaceArgb = surface.toArgb()
+    val document = remember(html, surface, onSurface, primary) {
+        wrapHtml(
+            body = html,
+            backgroundHex = surface.toCssHex(),
+            textHex = onSurface.toCssHex(),
+            linkHex = primary.toCssHex(),
+            dark = isDark,
+        )
+    }
     // Tracks the content actually loaded so recompositions (star/attachment state changes) don't
-    // reload the page and throw away the user's scroll position.
+    // reload the page and throw away the user's scroll position. Keyed on the fully wrapped
+    // document so a theme (light/dark) change still re-renders with the new colors.
     val lastLoaded = remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     AndroidView(
         modifier = modifier,
@@ -45,7 +72,8 @@ fun HtmlBody(
                     builtInZoomControls = true
                     displayZoomControls = false
                 }
-                setBackgroundColor(Color.TRANSPARENT)
+                setBackgroundColor(surfaceArgb)
+                applyAlgorithmicDarkening(isDark)
                 isVerticalScrollBarEnabled = true
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -67,28 +95,56 @@ fun HtmlBody(
             }
         },
         update = { webView ->
+            // Re-apply theme-dependent state so toggling light/dark while the reader is open updates
+            // the chrome behind the (padding of the) page as well as the content.
+            webView.setBackgroundColor(surfaceArgb)
+            webView.applyAlgorithmicDarkening(isDark)
             webView.settings.blockNetworkLoads = !loadRemoteImages
-            val key = html to loadRemoteImages
+            val key = document to loadRemoteImages
             if (lastLoaded.value != key) {
                 lastLoaded.value = key
-                webView.loadDataWithBaseURL(null, wrapHtml(html), "text/html", "UTF-8", null)
+                webView.loadDataWithBaseURL(null, document, "text/html", "UTF-8", null)
             }
         },
     )
 }
 
-private fun wrapHtml(body: String): String =
-    """
+/**
+ * Lets the WebView algorithmically darken email content that does not declare its own dark support,
+ * but only in dark mode and only where the installed WebView supports the feature. This is a
+ * best-effort backstop; readability is already guaranteed by the explicit colors in [wrapHtml].
+ */
+private fun WebView.applyAlgorithmicDarkening(dark: Boolean) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, dark)
+    }
+}
+
+/** The color as a CSS `#RRGGBB` string (alpha dropped — email backgrounds/text are opaque). */
+internal fun Color.toCssHex(): String = "#%06X".format(toArgb() and 0xFFFFFF)
+
+internal fun wrapHtml(
+    body: String,
+    backgroundHex: String,
+    textHex: String,
+    linkHex: String,
+    dark: Boolean,
+): String {
+    val scheme = if (dark) "dark" else "light"
+    return """
     <html>
     <head>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: cid:; style-src 'unsafe-inline'; font-src data:">
       <style>
+        :root { color-scheme: $scheme; }
+        html, body { background-color: $backgroundHex; color: $textHex; }
         body { font-family: sans-serif; line-height: 1.5; padding: 16px; word-wrap: break-word; }
         img { max-width: 100%; height: auto; }
-        a { color: #0B57D0; }
+        a { color: $linkHex; }
       </style>
     </head>
     <body>$body</body>
     </html>
     """.trimIndent()
+}

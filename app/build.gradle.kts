@@ -146,6 +146,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.coroutines.android)
 
     // Email transport (IMAP/SMTP) + OAuth

@@ -101,7 +101,7 @@ jobs:
         # new Android ships, add it and drop the oldest level that has aged out of ~7 years. API 37
         # (preview) is NOT in this matrix because emulator-runner can't provision its nonstandard
         # android-37.0 / google_apis_ps16k image (it would wedge the gate) — it's covered separately
-        # by the custom-provisioned, non-blocking `e2e-preview` job below. Keep in sync with
+        # by the custom-provisioned `e2e-preview` job below. Keep in sync with
         # testOptions.managedDevices in app/build.gradle.kts.
         api-level: [29, 30, 31, 32, 33, 34, 35, 36]
     steps:
@@ -175,12 +175,12 @@ jobs:
   # API 37 (Android 17, preview) E2E. Its only system image is the nonstandard
   # android-37.0 / google_apis_ps16k (16 KB page size), which reactivecircus/android-emulator-runner
   # can't provision (it builds android-37 / google_apis, neither of which exists), so this job
-  # CUSTOM-PROVISIONS the emulator with sdkmanager/avdmanager/emulator directly. Deliberately
-  # NON-BLOCKING: it is NOT in the "CI passed" gate's needs and not a required status check, so a
-  # flaky preview can never block merges — it's signal only. When a stable, emulator-runner-friendly
-  # API 37 image ships, fold 37 into the main `e2e` matrix and delete this job.
+  # CUSTOM-PROVISIONS the emulator with sdkmanager/avdmanager/emulator directly. It is REQUIRED:
+  # part of the "CI passed" gate's needs (the preview emulator has proven stable in practice), so a
+  # genuine failure blocks merges. When a stable, emulator-runner-friendly API 37 image ships, fold
+  # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
-    name: E2E (API 37 preview, non-blocking)
+    name: E2E (API 37 preview)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -291,7 +291,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [debug-build, unit-tests, e2e]
+    needs: [debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every required job succeeded
@@ -301,4 +301,5 @@ jobs:
           echo "  debug-build: ${{ needs.debug-build.result }}"
           echo "  unit-tests:  ${{ needs.unit-tests.result }}"
           echo "  e2e:         ${{ needs.e2e.result }}"
+          echo "  e2e-preview: ${{ needs.e2e-preview.result }}"
           exit 1
