@@ -113,6 +113,15 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
+            SectionHeader(stringResource(R.string.settings_backup))
+            SwitchRow(
+                title = stringResource(R.string.settings_backup_include),
+                checked = settings.includeInBackup,
+                onCheckedChange = viewModel::setIncludeInBackup,
+                subtitle = stringResource(R.string.settings_backup_include_summary),
+            )
+            HorizontalDivider()
+
             AdvancedHeader(expanded = advancedExpanded, onToggle = viewModel::toggleAdvanced)
             AnimatedVisibility(visible = advancedExpanded) {
                 Column {

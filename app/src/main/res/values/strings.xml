@@ -167,6 +167,11 @@
     <string name="settings_no_accounts">No accounts yet</string>
     <string name="account_remove">Remove account</string>
 
+    <!-- Backup -->
+    <string name="settings_backup">Backup</string>
+    <string name="settings_backup_include">Include settings in Android Backup</string>
+    <string name="settings_backup_include_summary">Let Android back up your LibreMail preferences (Google Auto Backup) so they restore when you set up a new device. Your mail, accounts, passwords, and encryption keys are never backed up — only app settings. Off by default; uses Google infrastructure.</string>
+
     <!-- Per-account settings -->
     <string name="settings_account_title">Account</string>
     <string name="settings_signature">Signature</string>
