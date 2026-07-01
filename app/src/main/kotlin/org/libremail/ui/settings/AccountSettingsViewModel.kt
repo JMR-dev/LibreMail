@@ -5,15 +5,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.repository.AccountRepository
@@ -26,6 +24,7 @@ class AccountSettingsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val accountRepository: AccountRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
+    signatureRepository: SignatureRepository,
 ) : ViewModel() {
 
     private val accountId: String =
@@ -38,25 +37,19 @@ class AccountSettingsViewModel @Inject constructor(
     val settings: StateFlow<AccountSettings> = accountSettingsRepository.observe(accountId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AccountSettings(accountId))
 
-    // The signature text is edited locally (seeded once from persistence) so the field stays
-    // responsive — a fully DB-driven value would lag each keystroke and jump the cursor.
-    private val _signature = MutableStateFlow<String?>(null)
-    val signature: StateFlow<String?> = _signature.asStateFlow()
+    private val signaturesFlow = signatureRepository.observeForAccount(accountId)
+
+    val signatureCount: StateFlow<Int> = signaturesFlow
+        .map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** The name of the account's default signature (for the settings summary line), or "". */
+    val defaultSignatureName: StateFlow<String> = signaturesFlow
+        .map { list -> list.firstOrNull { it.isDefault }?.name ?: list.firstOrNull()?.name ?: "" }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
     /** This account's notification channel id, for deep-linking into Android's system settings. */
     val notificationChannelId: String = MailNotifier.channelId(accountId)
-
-    init {
-        viewModelScope.launch {
-            val loaded = accountSettingsRepository.get(accountId).signature
-            _signature.update { it ?: loaded } // don't clobber any text typed before the load returned
-        }
-    }
-
-    fun onSignatureChange(value: String) {
-        _signature.value = value
-        viewModelScope.launch { accountSettingsRepository.setSignature(accountId, value) }
-    }
 
     fun setSignatureEnabled(value: Boolean) {
         viewModelScope.launch { accountSettingsRepository.setSignatureEnabled(accountId, value) }

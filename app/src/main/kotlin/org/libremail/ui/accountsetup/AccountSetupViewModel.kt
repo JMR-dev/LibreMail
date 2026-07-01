@@ -13,13 +13,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.auth.OutlookAuthManager
+import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
 import javax.inject.Inject
 
 /** Stage of an account-setup attempt, shared by the Outlook and manual flows. */
 enum class SetupStatus { IDLE, CONNECTING, DONE }
 
-data class AccountSetupUiState(val status: SetupStatus = SetupStatus.IDLE, val error: String? = null)
+data class AccountSetupUiState(
+    val status: SetupStatus = SetupStatus.IDLE,
+    val error: String? = null,
+    /** Set alongside [SetupStatus.DONE]: the id of the account that was just added. */
+    val addedAccountId: String? = null,
+)
 
 @HiltViewModel
 class AccountSetupViewModel @Inject constructor(
@@ -59,8 +65,11 @@ class AccountSetupViewModel @Inject constructor(
             runCatching {
                 val oauth = outlookAuthManager.exchangeToken(data)
                 accountRepository.addOutlookAccount(oauth.email, oauth.accessToken, oauth.authStateJson).getOrThrow()
+                Account.outlook(oauth.email).id
             }.fold(
-                onSuccess = { _state.update { it.copy(status = SetupStatus.DONE) } },
+                onSuccess = { accountId ->
+                    _state.update { it.copy(status = SetupStatus.DONE, addedAccountId = accountId) }
+                },
                 onFailure = { e ->
                     // Stripped from release builds by the Log.d ProGuard rule (keeps any account
                     // address / token detail out of shipped logs); visible in debug for diagnosis.

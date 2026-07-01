@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.settings
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,6 +21,7 @@ import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.push.BatteryOptimizationManager
 import javax.inject.Inject
 
 @HiltViewModel
@@ -28,6 +30,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val appLockManager: AppLockManager,
     private val databaseKeyStore: DatabaseKeyStore,
+    private val batteryOptimizationManager: BatteryOptimizationManager,
 ) : ViewModel() {
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
@@ -43,7 +46,20 @@ class SettingsViewModel @Inject constructor(
     private val _appLockMessage = MutableStateFlow<Int?>(null)
     val appLockMessage: StateFlow<Int?> = _appLockMessage.asStateFlow()
 
+    private val _batteryUnrestricted = MutableStateFlow(batteryOptimizationManager.isIgnoringBatteryOptimizations())
+
+    /** Whether this app is exempt from battery optimization ("Unrestricted"). */
+    val batteryUnrestricted: StateFlow<Boolean> = _batteryUnrestricted.asStateFlow()
+
     fun toggleAdvanced() = _advancedExpanded.update { !it }
+
+    /** Re-read the battery-optimization status; call when the screen resumes (e.g. back from Settings). */
+    fun refreshBatteryStatus() {
+        _batteryUnrestricted.value = batteryOptimizationManager.isIgnoringBatteryOptimizations()
+    }
+
+    /** Intent to the system screen where the user flips this app to "Unrestricted". */
+    fun batterySettingsIntent(): Intent = batteryOptimizationManager.settingsIntent()
 
     fun setDynamicColor(value: Boolean) = update { settingsRepository.setDynamicColor(value) }
     fun setNewMailNotifications(value: Boolean) = update { settingsRepository.setNewMailNotifications(value) }
@@ -51,6 +67,7 @@ class SettingsViewModel @Inject constructor(
     fun setAllowStartTls(value: Boolean) = update { settingsRepository.setAllowStartTls(value) }
     fun setLoadRemoteImages(value: Boolean) = update { settingsRepository.setLoadRemoteImages(value) }
     fun setEncryptCache(value: Boolean) = update { settingsRepository.setEncryptCache(value) }
+    fun setIncludeInBackup(value: Boolean) = update { settingsRepository.setIncludeInBackup(value) }
     fun setFetchPolicy(value: FetchPolicy) = update { settingsRepository.setFetchPolicy(value) }
 
     /**

@@ -5,28 +5,37 @@ A free and open-source email client for Android, built with Kotlin, Jetpack
 Compose and Material 3 (Material You). LibreMail aims for a friendly default
 experience with power-user features tucked under an **Advanced Settings** group.
 
-> Status: **in development.** Material You shell; **account setup** (Gmail OAuth via
-> AppAuth/PKCE and generic IMAP/SMTP, with a live connection test and Keystore-
-> encrypted credentials); **IMAP receive** — background sync (WorkManager) into a local
-> Room cache with pull-to-refresh; and **reading** — message bodies fetched on open and
-> rendered in a hardened WebView (JavaScript off, remote images blocked by default),
-> with mark-read, star, and delete; and **composing** — a compose screen with device-
-> contacts autocomplete that sends via a reliable background **outbox** (WorkManager-queued
-> and retried, with a viewable outbox folder), plus reply and **drafts** saved for
-> later; **on-device new-mail
-> notifications** (no push service) with persisted settings; **instant push** via a
-> foreground **IMAP IDLE** service; **attachments** — downloaded on demand and opened in a
-> system viewer, and attach files when composing; **multiple accounts** — a unified inbox
-> with per-account filtering; and
-> **search** across cached mail and the server (IMAP SEARCH); and **Outlook/Microsoft**
-> accounts (OAuth 2.0 sign-in, IMAP receive + Microsoft Graph send, SMTP/XOAUTH2 fallback).
+> Status: **in development.** Material You shell; **onboarding** — a first-run flow from a
+> welcome screen through a vendor picker (Outlook/Hotmail, Gmail, Yahoo, iCloud, or Other) and
+> per-vendor setup to your first account's inbox; **account setup** — Outlook/Microsoft via
+> OAuth 2.0 (AppAuth/PKCE), Gmail/Yahoo/iCloud via app password, and generic IMAP/SMTP, all
+> with a live connection test and Keystore-encrypted credentials; **IMAP receive** — background
+> sync (WorkManager) into a local Room cache with pull-to-refresh, backfilling your **entire**
+> mail history (resumable) with an optional device-only retention cap; **reading** — message
+> bodies fetched on open and rendered in a hardened WebView (JavaScript off, remote images
+> blocked by default), with mark-read, star, and delete; **composing** — a rich-text HTML
+> editor with a formatting toolbar and per-account signatures that sends
+> `multipart/alternative` (HTML with a plaintext fallback) through a reliable background
+> **outbox** (WorkManager-queued and retried, with a viewable outbox folder), plus
+> device-contacts autocomplete, reply, and **drafts**; **on-device new-mail notifications** (no
+> push service) with persisted settings; **instant push** via a foreground **IMAP IDLE**
+> service; **attachments** — downloaded on demand and opened in a system viewer, and attach
+> files when composing; **multiple accounts** — a unified inbox with per-account filtering;
+> **search** across cached mail and the server (IMAP SEARCH); Outlook/Microsoft send via
+> Microsoft **Graph** with an SMTP/XOAUTH2 fallback; an opt-in **app lock**
+> (biometric/device-credential) that binds the encrypted cache key to your unlock; **mailto:**
+> link handling with optional default-mail-app registration; and opt-in, F-Droid-safe **debug
+> reporting** — local crash/error capture that you review (with a PII disclaimer) and submit
+> only on an explicit action.
 
 ## Features (target MVP)
 
-- Send and receive email with **Gmail** and **Outlook/Microsoft** (OAuth 2.0) and **any IMAP/SMTP** provider.
+- Send and receive email with **Outlook/Microsoft** (OAuth 2.0), **Gmail, Yahoo and iCloud** (app password), and **any other IMAP/SMTP** provider.
+- Guided first-run onboarding: welcome → vendor picker → per-vendor setup → your inbox.
 - Material You dynamic theming, light/dark, edge-to-edge.
-- Clean compose screen with phone/account contacts integration.
-- Modern security: OAuth 2.0 Authorization Code + PKCE, no stored passwords for Gmail.
+- Rich-text compose with a formatting toolbar, per-account signatures, and phone/account contacts integration.
+- Offline-first: a local Room cache with full-history backfill and an optional device-only retention limit.
+- Modern, opt-in security: OAuth 2.0 (Authorization Code + PKCE) for Outlook, Keystore-encrypted credentials, optional SQLCipher cache encryption, and a biometric/device-credential app lock.
 
 ## Tech stack
 
@@ -67,27 +76,27 @@ sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
 `local.properties` (git-ignored) must point `sdk.dir` at your Android SDK; Android
 Studio creates it automatically.
 
-## Gmail account setup (OAuth client)
+## Accounts and onboarding
 
-Gmail IMAP/SMTP requires the restricted `https://mail.google.com/` scope. While the
-app is unpublished you can use it in **Testing** mode with up to 100 test users and
-no security assessment; a public Play Store release later requires a Google CASA
-assessment for the restricted scope.
+On first launch LibreMail runs a short onboarding flow: a welcome screen, a **vendor picker**
+(Outlook/Hotmail, Gmail, Yahoo, iCloud, or **Other**), per-vendor setup, and an "add another
+account?" prompt before it drops you on your first account's inbox. You can add more accounts
+later from settings; a unified inbox merges them with per-account filtering.
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a
-   project (e.g. *LibreMail*).
-2. **APIs & Services → Library →** enable the **Gmail API**.
-3. **OAuth consent screen:** user type *External*; add the scope
-   `https://mail.google.com/`; under **Test users**, add your Google address.
-   Leave the app in **Testing**.
-4. **Credentials → Create credentials → OAuth client ID → Android.** Use package
-   name `org.libremail.app` and your debug keystore SHA-1:
-   ```bash
-   keytool -list -v -keystore "$HOME/.android/debug.keystore" \
-     -alias androiddebugkey -storepass android -keypass android
-   ```
-5. Copy `secrets.properties.example` to `secrets.properties` (git-ignored) and set
-   `GMAIL_OAUTH_CLIENT_ID` to your client ID. The build injects it via `BuildConfig`.
+LibreMail supports three kinds of account:
+
+- **Outlook / Hotmail** — signs in with **OAuth 2.0** through Microsoft (AppAuth); no password
+  is stored. See [Outlook / Microsoft account setup](#outlook--microsoft-account-setup-oauth-client)
+  below.
+- **Gmail, Yahoo and iCloud** — preconfigured IMAP/SMTP that authenticate with a provider
+  **app password** (not your normal account password), preferring STARTTLS where the provider
+  supports it. Onboarding links you to each vendor's app-password page. **Gmail requires
+  2-Step Verification to be enabled** before Google will issue an app password.
+- **Other** — a manual IMAP/SMTP form (host, port, security, and credentials) for any other
+  provider.
+
+App passwords and OAuth tokens are held in a credential store encrypted with the Android
+Keystore, and every account runs a live connection test before it is saved.
 
 ## Outlook / Microsoft account setup (OAuth client)
 
@@ -108,6 +117,25 @@ token. A working client ID ships with the build; to use your own Azure app regis
 4. Copy the **Application (client) ID** into `secrets.properties` as
    `OUTLOOK_OAUTH_CLIENT_ID` (it overrides the built-in default).
 
+## Privacy and data flow
+
+LibreMail is offline-first: your mail lives in a local cache, and by default network traffic
+goes only to your mail providers (IMAP/SMTP, plus Microsoft's OAuth and Graph endpoints for
+Outlook). There is no analytics SDK and no always-on telemetry. The privacy-sensitive extras
+are all **opt-in**:
+
+- **Cache encryption** — the Room cache can be encrypted at rest with **SQLCipher**. With the
+  optional **app lock** (biometric or device credential) enabled, the cache key is bound to
+  your authentication, so the database is only decrypted after you unlock the app.
+- **Debug reporting** — **off by default.** When enabled, crashes and errors are captured
+  **locally**; you review the full report — shown with a plain-language **PII disclaimer** —
+  and it is sent only when you explicitly submit it, to a configurable (optional) endpoint.
+  There is no hosted crash pipeline collecting reports in the background.
+- **Android Backup** — **off by default.** When you turn it on, only safe app settings are
+  backed up; the encrypted-database key, account credentials, and the mail cache are
+  **excluded**. Because Android's backup transport can route data through Google, it stays
+  disabled unless you opt in — the kind of optional behavior F-Droid lists as an anti-feature.
+
 ## Architecture
 
 Offline-first, unidirectional, layered:
@@ -119,9 +147,9 @@ data/      Room (entities, DAOs, database) + repository implementation (source o
 di/        Hilt modules
 ```
 
-The UI observes Room via `Flow`; later increments add a sync engine (Angus Mail
-over IMAP/SMTP) that writes into Room, and an auth layer (AppAuth + an Android
-Keystore-backed credential store).
+The UI observes Room via `Flow`; a sync engine (Angus Mail over IMAP/SMTP, plus Microsoft
+Graph for Outlook send) writes into Room, and an auth layer (AppAuth for OAuth and an Android
+Keystore-backed credential store for app passwords) handles sign-in.
 
 ## License
 

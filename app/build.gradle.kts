@@ -14,20 +14,11 @@ plugins {
     alias(libs.plugins.detekt)
 }
 
-// Read the Gmail OAuth client id from secrets.properties (git-ignored). Empty when absent.
+// Read optional build secrets (Outlook client id, release signing) from secrets.properties
+// (git-ignored). Absent values fall back to the defaults below.
 val secretsFile = rootProject.file("secrets.properties")
 val secrets = Properties().apply {
     if (secretsFile.exists()) secretsFile.inputStream().use { load(it) }
-}
-val gmailOAuthClientId: String = secrets.getProperty("GMAIL_OAUTH_CLIENT_ID", "")
-
-// For a Google installed-app OAuth client, AppAuth's redirect is the reversed client
-// id as a custom URI scheme. Fall back to a placeholder so the manifest stays valid
-// until a real client id is set in secrets.properties.
-val gmailRedirectScheme: String = if (gmailOAuthClientId.endsWith(".apps.googleusercontent.com")) {
-    "com.googleusercontent.apps." + gmailOAuthClientId.removeSuffix(".apps.googleusercontent.com")
-} else {
-    "org.libremail.oauth"
 }
 
 // Microsoft (Outlook) OAuth public client id — a GUID, not a secret. Overridable via
@@ -36,6 +27,15 @@ val outlookOAuthClientId: String = secrets.getProperty(
     "OUTLOOK_OAUTH_CLIENT_ID",
     "04e4aa5e-ed1f-47f9-b567-b99a0b29b3df",
 )
+
+// Custom URI scheme AppAuth uses to capture the Outlook OAuth redirect. Must match the scheme of
+// OUTLOOK_OAUTH_REDIRECT_URI and the redirect URI registered in the Azure app registration.
+val outlookRedirectScheme = "org.libremail.outlook"
+
+// Debug-report ingest endpoint (issue #34, out of scope for this repo). Empty by default: the debug
+// reporting client is strictly opt-in and never sends anything unless the user taps Submit AND an
+// endpoint is configured here (overridable via git-ignored secrets.properties).
+val debugReportEndpoint: String = secrets.getProperty("DEBUG_REPORT_ENDPOINT", "")
 
 // Optional release signing, configured via git-ignored secrets.properties. When absent, release
 // builds fall back to the debug key (installable for testing, but not publishable).
@@ -55,12 +55,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "GMAIL_OAUTH_CLIENT_ID", "\"$gmailOAuthClientId\"")
-        buildConfigField("String", "GMAIL_OAUTH_REDIRECT_URI", "\"$gmailRedirectScheme:/oauth2redirect\"")
         buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
-        buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"org.libremail.outlook://oauth2redirect\"")
-        // AppAuth captures the OAuth redirect via this custom scheme.
-        manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
+        buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"$outlookRedirectScheme://oauth2redirect\"")
+        buildConfigField("String", "DEBUG_REPORT_ENDPOINT", "\"$debugReportEndpoint\"")
+        // AppAuth's bundled manifest requires this placeholder; it registers the redirect scheme on
+        // RedirectUriReceiverActivity so the Outlook sign-in redirect returns to the app.
+        manifestPlaceholders["appAuthRedirectScheme"] = outlookRedirectScheme
     }
 
     signingConfigs {
@@ -198,6 +198,7 @@ dependencies {
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.espresso.intents)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }

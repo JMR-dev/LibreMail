@@ -35,7 +35,7 @@ class ManualSetupScreenTest {
     // Build the view model once and capture it, so recomposition doesn't recreate it.
     private fun setContent(
         repository: FakeAccountRepository = FakeAccountRepository(),
-        onAccountAdded: () -> Unit = {},
+        onAccountAdded: (String) -> Unit = {},
     ) {
         val viewModel = ManualSetupViewModel(repository)
         composeTestRule.setContent {

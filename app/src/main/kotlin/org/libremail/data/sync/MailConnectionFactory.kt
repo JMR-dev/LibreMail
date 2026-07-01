@@ -5,7 +5,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.libremail.auth.FreshToken
-import org.libremail.auth.GmailAuthManager
 import org.libremail.auth.OutlookAuthManager
 import org.libremail.data.local.toImapParams
 import org.libremail.data.local.toSmtpParams
@@ -23,7 +22,6 @@ import javax.inject.Singleton
 @Singleton
 class MailConnectionFactory @Inject constructor(
     private val credentialStore: CredentialStore,
-    private val gmailAuthManager: GmailAuthManager,
     private val outlookAuthManager: OutlookAuthManager,
     private val settingsRepository: SettingsRepository,
 ) {
@@ -54,8 +52,6 @@ class MailConnectionFactory @Inject constructor(
     private suspend fun resolveSecret(account: Account): String = when (account.authType) {
         AuthType.PASSWORD_IMAP ->
             credentialStore.loadSecret(account.id) ?: error("No stored credentials for ${account.email}")
-        AuthType.OAUTH_GMAIL ->
-            cachedAccessToken(account.id, SCOPE_GMAIL, gmailAuthManager::freshAccessToken)
         AuthType.OAUTH_OUTLOOK ->
             cachedAccessToken(account.id, SCOPE_OUTLOOK, outlookAuthManager::freshOutlookToken)
     }
@@ -91,7 +87,6 @@ class MailConnectionFactory @Inject constructor(
     private suspend fun strictStartTls(): Boolean = !settingsRepository.settings.first().allowStartTls
 
     private companion object {
-        const val SCOPE_GMAIL = "gmail"
         const val SCOPE_OUTLOOK = "outlook"
         const val SCOPE_GRAPH = "graph"
         const val EXPIRY_BUFFER_MS = 60_000L

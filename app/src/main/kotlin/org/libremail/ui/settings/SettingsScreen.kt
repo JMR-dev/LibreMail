@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
 import org.libremail.data.settings.FetchPolicy
@@ -46,21 +48,26 @@ fun SettingsScreen(
     onAddAccount: () -> Unit,
     onOpenAccount: (String) -> Unit,
     onSelectTab: (TopDest) -> Unit,
+    onReportProblem: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val advancedExpanded by viewModel.advancedExpanded.collectAsStateWithLifecycle()
     val appLockMessage by viewModel.appLockMessage.collectAsStateWithLifecycle()
-
+    val batteryUnrestricted by viewModel.batteryUnrestricted.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val resources = LocalResources.current
+
     LaunchedEffect(appLockMessage) {
         appLockMessage?.let {
             Toast.makeText(context, resources.getString(it), Toast.LENGTH_LONG).show()
             viewModel.clearAppLockMessage()
         }
     }
+
+    // Re-read the battery status on resume so it reflects any change made in system settings.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshBatteryStatus() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
@@ -127,6 +134,23 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
+            SectionHeader(stringResource(R.string.settings_diagnostics))
+            ClickRow(
+                title = stringResource(R.string.settings_report_problem),
+                subtitle = stringResource(R.string.settings_report_problem_summary),
+                onClick = onReportProblem,
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_backup))
+            SwitchRow(
+                title = stringResource(R.string.settings_backup_include),
+                checked = settings.includeInBackup,
+                onCheckedChange = viewModel::setIncludeInBackup,
+                subtitle = stringResource(R.string.settings_backup_include_summary),
+            )
+            HorizontalDivider()
+
             AdvancedHeader(expanded = advancedExpanded, onToggle = viewModel::toggleAdvanced)
             AnimatedVisibility(visible = advancedExpanded) {
                 Column {
@@ -134,6 +158,17 @@ fun SettingsScreen(
                         title = stringResource(R.string.settings_adv_idle),
                         checked = settings.pushIdle,
                         onCheckedChange = viewModel::setPushIdle,
+                    )
+                    ClickRow(
+                        title = stringResource(R.string.settings_adv_battery),
+                        subtitle = stringResource(
+                            if (batteryUnrestricted) {
+                                R.string.settings_adv_battery_unrestricted
+                            } else {
+                                R.string.settings_adv_battery_optimized
+                            },
+                        ),
+                        onClick = { runCatching { context.startActivity(viewModel.batterySettingsIntent()) } },
                     )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_starttls),

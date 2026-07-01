@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.SavedStateHandle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -19,6 +18,7 @@ import org.libremail.R
 import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
@@ -48,6 +48,8 @@ class AccountSettingsScreenTest {
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
+    private var manageSignaturesClicked = false
+
     private fun setContent(): AccountSettingsRepository {
         val context = ApplicationProvider.getApplicationContext<Context>()
         // Intentionally not closed in an @After: the ViewModel's `settings` Room Flow (kept alive by
@@ -64,24 +66,27 @@ class AccountSettingsScreenTest {
             savedStateHandle = SavedStateHandle(mapOf(Routes.ACCOUNT_SETTINGS_ARG_ID to account.id)),
             accountRepository = FakeAccountRepository(accounts = listOf(account)),
             accountSettingsRepository = repository,
+            signatureRepository = SignatureRepository(db.signatureDao()),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
-                AccountSettingsScreen(onBack = {}, viewModel = viewModel)
+                AccountSettingsScreen(
+                    onBack = {},
+                    onManageSignatures = { manageSignaturesClicked = true },
+                    viewModel = viewModel,
+                )
             }
         }
         return repository
     }
 
     @Test
-    fun editingSignature_persistsThroughTheRepository() {
-        val repository = setContent()
+    fun manageSignatures_opensTheSignaturesScreen() {
+        setContent()
 
-        composeTestRule.onNodeWithText(string(R.string.settings_signature_hint)).performTextInput("Cheers")
+        composeTestRule.onNodeWithText(string(R.string.settings_signatures_manage)).performClick()
 
-        composeTestRule.waitUntil(5_000) {
-            runBlocking { repository.get(account.id).signature } == "Cheers"
-        }
+        composeTestRule.waitUntil(5_000) { manageSignaturesClicked }
     }
 
     @Test

@@ -10,10 +10,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- Android Backup is opt-in and OFF by default (issue #21). allowBackup can't be toggled at
+         runtime, so LibreMailBackupAgent gates it on the "Include settings in Android Backup"
+         preference: with backup disabled the agent ships nothing. When enabled, only the settings
+         DataStore is backed up per the allowlist in data_extraction_rules (API 31+) /
+         backup_rules (API 29-30) — never credentials, the mail cache, or the Keystore-sealed cache
+         passphrase. fullBackupOnly keeps this to Auto Backup (full-data) only. -->
     <application
         android:name=".LibreMailApplication"
-        android:allowBackup="false"
+        android:allowBackup="true"
+        android:backupAgent=".backup.LibreMailBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:fullBackupOnly="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -28,6 +37,38 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Handle mailto: links tapped in browsers and other apps (ACTION_VIEW), which is also
+                 what makes LibreMail appear on the system "Open by default" / default-apps screen
+                 where the platform exposes an email association. Android has no public RoleManager
+                 email role, so becoming the system default is OEM-dependent — hence "where supported". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+
+            <!-- "Send email to <address>" targets from other apps (contacts, dialer, etc.). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+
+            <!-- Share-to-email: text and RFC-822 email payloads with recipients/subject/body extras. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="message/rfc822" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="message/rfc822" />
             </intent-filter>
         </activity>
 
@@ -61,25 +102,20 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Captures the Microsoft OAuth redirect for Outlook sign-in. AppAuth registers the
-             Gmail scheme via ${appAuthRedirectScheme}; this adds the Outlook scheme. The redirect
-             URI org.libremail.outlook://oauth2redirect must be registered as a public-client
-             (mobile/desktop) redirect in the Azure app registration.
-             AppAuth's RedirectUriReceiverActivity extends AppCompatActivity, so it needs an
-             AppCompat theme; without this it inherits the app's Theme.Material shell and crashes
-             ("You need to use a Theme.AppCompat theme") when the redirect launches it. We reuse the
-             translucent theme AppAuth itself applies to AuthorizationManagementActivity. -->
+        <!-- Captures the Microsoft OAuth redirect for Outlook sign-in. AppAuth's bundled manifest
+             already declares RedirectUriReceiverActivity with an intent-filter for
+             ${appAuthRedirectScheme}, which build.gradle.kts sets to the Outlook scheme
+             (org.libremail.outlook); the redirect URI org.libremail.outlook://oauth2redirect must
+             be registered as a public-client (mobile/desktop) redirect in the Azure app
+             registration. We only merge a theme onto that activity here: AppAuth declares no theme
+             and RedirectUriReceiverActivity extends AppCompatActivity, so without an AppCompat theme
+             it inherits the app's Theme.Material shell and crashes ("You need to use a Theme.AppCompat
+             theme") when the redirect launches it. We reuse the translucent theme AppAuth itself
+             applies to AuthorizationManagementActivity. -->
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
             android:exported="true"
             android:theme="@style/Theme.AppCompat.Translucent.NoTitleBar"
-            tools:node="merge">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="org.libremail.outlook" />
-            </intent-filter>
-        </activity>
+            tools:node="merge" />
     </application>
 </manifest>

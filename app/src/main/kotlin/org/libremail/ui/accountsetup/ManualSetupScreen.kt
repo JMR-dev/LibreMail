@@ -52,14 +52,16 @@ import org.libremail.domain.model.MailSecurity
 @Composable
 fun ManualSetupScreen(
     onBack: () -> Unit,
-    onAccountAdded: () -> Unit,
+    onAccountAdded: (String) -> Unit,
     viewModel: ManualSetupViewModel = hiltViewModel(),
 ) {
     val form by viewModel.form.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(form.status) {
-        if (form.status == SetupStatus.DONE) onAccountAdded()
+    LaunchedEffect(form.status, form.addedAccountId) {
+        if (form.status == SetupStatus.DONE) {
+            form.addedAccountId?.let(onAccountAdded)
+        }
     }
     LaunchedEffect(form.error) {
         form.error?.let {

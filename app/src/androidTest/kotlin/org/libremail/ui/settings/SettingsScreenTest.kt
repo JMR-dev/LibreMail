@@ -21,6 +21,7 @@ import org.libremail.data.security.KeystoreCrypto
 import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.theme.LibreMailTheme
 
@@ -46,11 +47,23 @@ class SettingsScreenTest {
             override fun availability() = AppLockAvailability.NONE_ENROLLED
         }
         val keyStore = DatabaseKeyStore(context, KeystoreCrypto(), DatabaseKeyCipher(), PassphraseSession())
-        val viewModel = SettingsViewModel(FakeAccountRepository(), settingsRepository, appLockManager, keyStore)
+        val viewModel = SettingsViewModel(
+            FakeAccountRepository(),
+            settingsRepository,
+            appLockManager,
+            keyStore,
+            BatteryOptimizationManager(context),
+        )
 
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
-                SettingsScreen(onAddAccount = {}, onOpenAccount = {}, onSelectTab = {}, viewModel = viewModel)
+                SettingsScreen(
+                    onAddAccount = {},
+                    onOpenAccount = {},
+                    onSelectTab = {},
+                    onReportProblem = {},
+                    viewModel = viewModel,
+                )
             }
         }
 

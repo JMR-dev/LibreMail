@@ -171,3 +171,48 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         )
     }
 }
+
+/**
+ * v9 -> v10: bcc support for outgoing mail (preserves existing data). Adds a `bccAddresses` column
+ * to `outbox` and `drafts` so a `mailto:`-launched (or manually addressed) blind-copy recipient
+ * survives being queued and saved. The `DEFAULT ''` matches the entities' `@ColumnInfo(defaultValue)`
+ * so the fresh-install schema validates identically to the migrated one (the MIGRATION_7_8 pattern).
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `outbox` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `drafts` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/**
+ * v10 -> v11: rich composition (preserves existing data).
+ *  - `drafts`/`outbox`: add a nullable `bodyHtml` column carrying the HTML form of the body when a
+ *    message was composed with formatting (null = plaintext-only, sent/kept exactly as before).
+ *  - add the `signatures` table (multiple named signatures per account, one default), with a
+ *    cascading foreign key to `accounts`, and backfill each account's existing per-account settings
+ *    signature as its default signature so nobody loses one on upgrade.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `drafts` ADD COLUMN `bodyHtml` TEXT")
+        db.execSQL("ALTER TABLE `outbox` ADD COLUMN `bodyHtml` TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `signatures` (" +
+                "`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                "`contentHtml` TEXT NOT NULL, `isDefault` INTEGER NOT NULL, PRIMARY KEY(`id`), " +
+                "FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_signatures_accountId` ON `signatures` (`accountId`)")
+        // Preserve any existing plain-text per-account signature as that account's default signature.
+        // Newlines become <br> so the HTML keeps the original line breaks; other characters are rare
+        // in signatures and pass through unescaped.
+        db.execSQL(
+            "INSERT INTO `signatures` (`id`, `accountId`, `name`, `contentHtml`, `isDefault`) " +
+                "SELECT `accountId` || ':default-signature', `accountId`, 'Signature', " +
+                "replace(`signature`, char(10), '<br>'), 1 " +
+                "FROM `account_settings` WHERE `signature` <> ''",
+        )
+    }
+}
