@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.libremail.data.local.DatabaseEncryption
 import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.local.MIGRATION_10_11
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
@@ -21,6 +22,7 @@ import org.libremail.data.local.MIGRATION_5_6
 import org.libremail.data.local.MIGRATION_6_7
 import org.libremail.data.local.MIGRATION_7_8
 import org.libremail.data.local.MIGRATION_8_9
+import org.libremail.data.local.MIGRATION_9_10
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -29,6 +31,7 @@ import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.SettingsRepository
 import javax.inject.Singleton
@@ -54,6 +57,8 @@ object DatabaseModule {
                 MIGRATION_6_7,
                 MIGRATION_7_8,
                 MIGRATION_8_9,
+                MIGRATION_9_10,
+                MIGRATION_10_11,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
         // accounts/credentials/mail tables would lose stored secrets. A missing migration should
@@ -99,6 +104,9 @@ object DatabaseModule {
 
     @Provides
     fun provideFolderDao(database: LibreMailDatabase): FolderDao = database.folderDao()
+
+    @Provides
+    fun provideSignatureDao(database: LibreMailDatabase): SignatureDao = database.signatureDao()
 
     private const val DB_NAME = "libremail.db"
 }

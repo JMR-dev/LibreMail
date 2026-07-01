@@ -25,6 +25,7 @@ import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.FolderRole
@@ -54,6 +55,7 @@ class MailRepositoryImplTest {
     private val connectionFactory = mockk<MailConnectionFactory>()
     private val context = mockk<Context>(relaxed = true)
     private val accountSettingsRepository = mockk<AccountSettingsRepository>()
+    private val signatureRepository = mockk<SignatureRepository>()
     private val repository = MailRepositoryImpl(
         context = context,
         messageDao = messageDao,
@@ -66,6 +68,7 @@ class MailRepositoryImplTest {
         connectionFactory = connectionFactory,
         sendScheduler = mockk(),
         accountSettingsRepository = accountSettingsRepository,
+        signatureRepository = signatureRepository,
     )
 
     @Test
@@ -202,6 +205,7 @@ class MailRepositoryImplTest {
         coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
+        coEvery { signatureRepository.getDefault(any()) } returns null
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { imapClient.fetchForReply(any(), "INBOX", "2") } returns ReplyContext(
             fromEmail = "boss@example.org",
@@ -220,6 +224,42 @@ class MailRepositoryImplTest {
         assertTrue(result.isSuccess)
         assertEquals("boss@example.org", draft.captured.toAddresses)
         assertEquals("Re: Plan", draft.captured.subject)
+        // The reply carries an HTML alternative with the quote rendered as a blockquote.
+        assertTrue(draft.captured.bodyHtml?.contains("<blockquote>") == true, "html=${draft.captured.bodyHtml}")
+    }
+
+    @Test
+    fun `buildReplyDraft bakes the account default signature above the quote`() = runTest {
+        val id = "acct:INBOX:3"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
+        coEvery { signatureRepository.getDefault("acct") } returns org.libremail.domain.model.Signature(
+            id = "acct:sig",
+            accountId = "acct",
+            name = "Signature",
+            html = "Regards, Ada",
+            isDefault = true,
+        )
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchForReply(any(), "INBOX", "3") } returns ReplyContext(
+            fromEmail = "boss@example.org",
+            toRecipients = listOf("ada@example.org"),
+            ccRecipients = emptyList(),
+            subject = "Plan",
+            sentDateMillis = 0L,
+            body = "Original",
+            isHtml = false,
+        )
+        val draft = slot<DraftEntity>()
+        coEvery { draftDao.upsert(capture(draft)) } just Runs
+
+        repository.buildReplyDraft(id, ReplyMode.REPLY)
+
+        val body = draft.captured.body
+        // Signature is placed before (above) the quoted original.
+        assertTrue(body.contains("Regards, Ada"), "body=$body")
+        assertTrue(body.indexOf("Regards, Ada") < body.indexOf("> Original"), "body=$body")
     }
 
     @Test

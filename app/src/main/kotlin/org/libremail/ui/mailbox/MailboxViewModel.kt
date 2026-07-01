@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.mailbox
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +30,7 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.ui.navigation.Routes
 import javax.inject.Inject
 
 const val INBOX = "INBOX"
@@ -42,7 +44,13 @@ class MailboxViewModel @Inject constructor(
     private val mailRepository: MailRepository,
     accountRepository: AccountRepository,
     private val mailSyncer: Syncer,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    // Optional "open filtered to this account" arg — set when onboarding lands the user on the
+    // first account they added, so the mailbox opens that account's inbox rather than the unified view.
+    private val initialAccountId: String? =
+        savedStateHandle.get<String>(Routes.MAILBOX_ARG_ACCOUNT)?.takeIf { it.isNotBlank() }
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -52,7 +60,7 @@ class MailboxViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** null = unified "All inboxes"; otherwise the account whose mail is shown. */
-    private val _selectedAccountId = MutableStateFlow<String?>(null)
+    private val _selectedAccountId = MutableStateFlow(initialAccountId)
     val selectedAccountId: StateFlow<String?> = _selectedAccountId.asStateFlow()
 
     /** The folder whose mail is shown (always a concrete folder; defaults to the inbox). */
@@ -60,7 +68,7 @@ class MailboxViewModel @Inject constructor(
     val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
 
     /** Which account's folders the drawer lists. null follows the mailbox selection / first account. */
-    private val explicitDrawerAccountId = MutableStateFlow<String?>(null)
+    private val explicitDrawerAccountId = MutableStateFlow(initialAccountId)
 
     /** The account the drawer is browsing: explicit drawer pick, else the filtered account, else the first. */
     val drawerAccount: StateFlow<Account?> =
@@ -241,11 +249,13 @@ class MailboxViewModel @Inject constructor(
     }
 
     init {
-        // Fall back to the unified inbox if the filtered account is removed.
+        // Fall back to the unified inbox if the filtered account is removed. The list.isNotEmpty()
+        // guard avoids clobbering a seeded account filter during the initial empty emission (before
+        // the account list first loads from the database).
         viewModelScope.launch {
             accounts.collect { list ->
                 val selected = _selectedAccountId.value
-                if (selected != null && list.none { it.id == selected }) {
+                if (selected != null && list.isNotEmpty() && list.none { it.id == selected }) {
                     _selectedAccountId.value = null
                     _selectedFolder.value = INBOX
                 }

@@ -42,6 +42,7 @@ fun SettingsScreen(
     onAddAccount: () -> Unit,
     onOpenAccount: (String) -> Unit,
     onSelectTab: (TopDest) -> Unit,
+    onReportProblem: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -110,6 +111,23 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.fetch_on_demand_summary),
                 selected = settings.fetchPolicy == FetchPolicy.ON_DEMAND,
                 onClick = { viewModel.setFetchPolicy(FetchPolicy.ON_DEMAND) },
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_diagnostics))
+            ClickRow(
+                title = stringResource(R.string.settings_report_problem),
+                subtitle = stringResource(R.string.settings_report_problem_summary),
+                onClick = onReportProblem,
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_backup))
+            SwitchRow(
+                title = stringResource(R.string.settings_backup_include),
+                checked = settings.includeInBackup,
+                onCheckedChange = viewModel::setIncludeInBackup,
+                subtitle = stringResource(R.string.settings_backup_include_summary),
             )
             HorizontalDivider()
 

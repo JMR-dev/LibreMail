@@ -3,9 +3,6 @@ package org.libremail.domain.model
 
 /** How an account authenticates with its mail server. */
 enum class AuthType {
-    /** Gmail via OAuth 2.0 (XOAUTH2 over IMAP/SMTP). */
-    OAUTH_GMAIL,
-
     /** Outlook / Microsoft via OAuth 2.0 (XOAUTH2 over IMAP/SMTP). */
     OAUTH_OUTLOOK,
 

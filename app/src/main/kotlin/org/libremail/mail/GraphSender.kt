@@ -84,12 +84,22 @@ class GraphSender @Inject constructor() {
 
 /** Builds the Graph `sendMail` JSON body (a pure function, so it is unit-testable without a network). */
 internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<File>): String {
+    // Graph carries a single body object: send HTML when the message was formatted (Outlook renders
+    // it and derives its own plaintext), otherwise plain text so unformatted mail is unchanged.
+    val body = if (message.bodyHtml != null) {
+        JSONObject().put("contentType", "HTML").put("content", message.bodyHtml)
+    } else {
+        JSONObject().put("contentType", "Text").put("content", message.body)
+    }
     val mail = JSONObject()
         .put("subject", message.subject)
-        .put("body", JSONObject().put("contentType", "Text").put("content", message.body))
+        .put("body", body)
         .put("toRecipients", recipientsJson(message.to))
     if (message.cc.isNotBlank()) {
         mail.put("ccRecipients", recipientsJson(message.cc))
+    }
+    if (message.bcc.isNotBlank()) {
+        mail.put("bccRecipients", recipientsJson(message.bcc))
     }
     if (attachments.isNotEmpty()) {
         val items = JSONArray()
