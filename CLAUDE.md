@@ -15,6 +15,7 @@ Use a **JDK 17–21** for the Gradle daemon. AGP 9.2 does **not** support JDK 25
 ./gradlew :app:assembleDebug        # build debug APK
 ./gradlew :app:testDebugUnitTest    # JVM unit tests
 ./gradlew :app:lintDebug            # Android lint
+./gradlew :app:ktlintCheck :app:detekt   # static analysis (CI's "Static analysis" gate)
 # single unit test:
 ./gradlew :app:testDebugUnitTest --tests "org.libremail.data.SomeClassTest"
 ```
@@ -25,8 +26,10 @@ or via Gradle Managed Devices `./gradlew e2eGroupDebugAndroidTest` (whole matrix
 `app/build.gradle.kts` must stay in lockstep with the E2E matrix in `.github/workflows/ci.yml`.
 
 **Before treating a change as done**, run the fast CI gate: `assembleDebug` +
-`testDebugUnitTest` + `lintDebug` (the `/preflight` skill does this). Emulator E2E is
-left to CI unless asked.
+`testDebugUnitTest` + `lintDebug` + `ktlintCheck` + `detekt` (the `/preflight` skill does
+this). `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that `lintDebug`
+skips, so they catch style violations that would otherwise fail CI's Static analysis gate.
+Emulator E2E is left to CI unless asked.
 
 ## Build-config gotchas
 
