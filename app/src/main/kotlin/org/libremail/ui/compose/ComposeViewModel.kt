@@ -98,6 +98,7 @@ class ComposeViewModel @Inject constructor(
                         it.copy(
                             to = draft.to,
                             cc = draft.cc,
+                            bcc = draft.bcc,
                             subject = draft.subject,
                             body = draft.body,
                             bodyHtml = draft.bodyHtml,
