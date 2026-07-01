@@ -33,6 +33,7 @@ data class AppSettings(
     val allowStartTls: Boolean = false,
     val loadRemoteImages: Boolean = false,
     val encryptCache: Boolean = false,
+    val appLock: Boolean = false,
     val fetchPolicy: FetchPolicy = FetchPolicy.ALWAYS,
 )
 
@@ -46,6 +47,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
             allowStartTls = prefs[ALLOW_STARTTLS] ?: false,
             loadRemoteImages = prefs[LOAD_REMOTE_IMAGES] ?: false,
             encryptCache = prefs[ENCRYPT_CACHE] ?: false,
+            appLock = prefs[APP_LOCK] ?: false,
             fetchPolicy = prefs[FETCH_POLICY]?.let { runCatching { FetchPolicy.valueOf(it) }.getOrNull() }
                 ?: FetchPolicy.ALWAYS,
         )
@@ -63,6 +65,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun setAllowStartTls(value: Boolean) = put(ALLOW_STARTTLS, value)
     suspend fun setLoadRemoteImages(value: Boolean) = put(LOAD_REMOTE_IMAGES, value)
     suspend fun setEncryptCache(value: Boolean) = put(ENCRYPT_CACHE, value)
+    suspend fun setAppLock(value: Boolean) = put(APP_LOCK, value)
     suspend fun setFetchPolicy(value: FetchPolicy) {
         context.settingsDataStore.edit { it[FETCH_POLICY] = value.name }
     }
@@ -78,6 +81,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         val ALLOW_STARTTLS = booleanPreferencesKey("allow_starttls")
         val LOAD_REMOTE_IMAGES = booleanPreferencesKey("load_remote_images")
         val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
+        val APP_LOCK = booleanPreferencesKey("app_lock")
         val FETCH_POLICY = stringPreferencesKey("fetch_policy")
     }
 }

@@ -165,4 +165,15 @@
     <string name="settings_adv_remote_images">Load remote images by default</string>
     <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
     <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
+    <string name="settings_adv_app_lock">Require screen lock</string>
+    <string name="settings_adv_app_lock_summary">Require your device screen lock (fingerprint, face, PIN, pattern, or password) to open LibreMail. When the local cache is encrypted, it is only decrypted after you authenticate. Applies the next time you open LibreMail. You must have a device lock set up first.</string>
+
+    <!-- App lock -->
+    <string name="app_lock_title">LibreMail is locked</string>
+    <string name="app_lock_locked_body">Authenticate with your device screen lock to continue.</string>
+    <string name="app_lock_unlock">Unlock</string>
+    <string name="app_lock_prompt_title">Unlock LibreMail</string>
+    <string name="app_lock_prompt_subtitle">Confirm your screen lock to decrypt your mail.</string>
+    <string name="app_lock_needs_device_lock">Set up a device screen lock in Android settings before enabling this.</string>
+    <string name="app_lock_disable_failed">Couldn\'t turn off the screen lock right now. Please try again.</string>
 </resources>

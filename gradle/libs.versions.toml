@@ -9,6 +9,7 @@ lifecycle = "2.9.4"
 activityCompose = "1.12.4"
 navigationCompose = "2.9.8"
 webkit = "1.12.1"
+biometric = "1.1.0"
 composeBom = "2026.06.00"
 room = "2.8.4"
 sqlcipher = "4.16.0"
@@ -38,6 +39,8 @@ androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "l
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+# Biometric / device-credential auth for the opt-in app-lock + encrypted-cache unlock.
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 
 # Compose (versions managed by the BOM)
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }

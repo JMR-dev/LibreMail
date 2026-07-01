@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.libremail.data.local.DatabaseEncryption
+import org.libremail.data.local.DatabaseFiles
 import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
@@ -30,6 +31,7 @@ import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.security.DatabaseKeyStore
+import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.SettingsRepository
 import javax.inject.Singleton
 
@@ -42,6 +44,7 @@ object DatabaseModule {
     fun provideDatabase(
         @ApplicationContext context: Context,
         keyStore: DatabaseKeyStore,
+        passphraseSession: PassphraseSession,
         settingsRepository: SettingsRepository,
     ): LibreMailDatabase {
         val builder = Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
@@ -62,16 +65,39 @@ object DatabaseModule {
         // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
         // before the database is opened — so it never races an open connection; toggling the setting
         // therefore takes effect on the next app start. The passphrase is sealed by the Keystore.
+        //
+        // When app-lock is ON the sealing key is auth-bound, so the passphrase can only be resolved
+        // AFTER the user authenticates at the lock screen. We read it from PassphraseSession, which
+        // blocks (this runs on a background DI thread, never the UI thread) until the unlock flow in
+        // AppLockViewModel unwraps it. This is what makes the encrypted cache "only readable after
+        // authentication". With app-lock OFF the master-sealed passphrase auto-unwraps as before.
         val dbFile = context.getDatabasePath(DB_NAME)
-        if (runBlocking { settingsRepository.settings.first().encryptCache }) {
-            val passphrase = runBlocking { keyStore.passphrase() }
+
+        // A screen-lock change (biometric re-enrollment / lock removal) can invalidate the auth-bound
+        // key so the encrypted cache is no longer decryptable. AppLockViewModel records that and
+        // restarts the app; we wipe the cache HERE — at cold start, before Room opens — so the file is
+        // never deleted from under an open connection. A re-sync then repopulates it. No corruption.
+        if (runBlocking { keyStore.consumeClearPending() }) {
+            DatabaseFiles.clear(context)
+            runBlocking { keyStore.resetSealedPassphrase() }
+        }
+
+        val settings = runBlocking { settingsRepository.settings.first() }
+        val appLock = settings.appLock
+        if (settings.encryptCache) {
+            val passphrase = runBlocking {
+                if (appLock) passphraseSession.await() else keyStore.passphrase()
+            }
             DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
             builder.openHelperFactory(
                 SupportOpenHelperFactory(passphrase.toByteArray(Charsets.US_ASCII), null, false),
             )
         } else if (DatabaseEncryption.isEncrypted(dbFile)) {
             // Encryption was turned back off — decrypt so the default (unkeyed) open succeeds.
-            DatabaseEncryption.ensurePlaintext(dbFile, runBlocking { keyStore.passphrase() })
+            val passphrase = runBlocking {
+                if (appLock) passphraseSession.await() else keyStore.passphrase()
+            }
+            DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
         }
         return builder.build()
     }
@@ -100,5 +126,5 @@ object DatabaseModule {
     @Provides
     fun provideFolderDao(database: LibreMailDatabase): FolderDao = database.folderDao()
 
-    private const val DB_NAME = "libremail.db"
+    private const val DB_NAME = DatabaseFiles.NAME
 }

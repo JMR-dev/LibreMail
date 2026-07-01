@@ -5,7 +5,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,15 +14,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.ui.LibreMailApp
+import org.libremail.ui.lock.AppLockGateHost
 import org.libremail.ui.theme.LibreMailTheme
 import javax.inject.Inject
 
+// FragmentActivity (not ComponentActivity) because BiometricPrompt requires one for the app-lock
+// flow. FragmentActivity extends androidx.activity.ComponentActivity, so setContent / enableEdgeToEdge
+// and Hilt injection keep working unchanged.
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
@@ -41,7 +45,11 @@ class MainActivity : ComponentActivity() {
             val dynamicColor by settingsRepository.dynamicColor.collectAsStateWithLifecycle(initialValue = true)
             LibreMailTheme(dynamicColor = dynamicColor) {
                 NotificationPermissionEffect()
-                LibreMailApp()
+                // Gate the whole app behind the screen-lock when app-lock is enabled. When it is off
+                // the gate resolves straight to the content, so this is a no-op for most users.
+                AppLockGateHost {
+                    LibreMailApp()
+                }
             }
         }
     }
