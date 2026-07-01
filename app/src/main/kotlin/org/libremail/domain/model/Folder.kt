@@ -11,6 +11,11 @@ data class Folder(
     val role: FolderRole,
     /** False for \Noselect containers (e.g. Gmail's "[Gmail]" parent) that hold no messages. */
     val selectable: Boolean,
+    /**
+     * True when the server advertises this as a special-use folder (RFC 6154). Lets the drawer tell
+     * a provider's built-in folder from a same-named user folder when de-duplicating labels.
+     */
+    val specialUse: Boolean = false,
 )
 
 /**
@@ -46,6 +51,17 @@ enum class FolderRole {
             }
             return byAttribute ?: roleFromDisplayName(displayName)
         }
+
+        /**
+         * The RFC 6154 SPECIAL-USE attributes (plus Gmail's `\All`) that mark a folder as one the
+         * server provisions itself, as opposed to a user-created folder.
+         */
+        private val SPECIAL_USE_ATTRIBUTES =
+            setOf("\\all", "\\archive", "\\drafts", "\\flagged", "\\junk", "\\sent", "\\trash")
+
+        /** True when the server advertises any SPECIAL-USE attribute for the folder (RFC 6154). */
+        fun isServerSpecial(attributes: List<String>): Boolean =
+            attributes.any { it.lowercase() in SPECIAL_USE_ATTRIBUTES }
 
         /** Best-effort role from a folder's display name, for servers without SPECIAL-USE flags. */
         private fun roleFromDisplayName(displayName: String): FolderRole = when (displayName.lowercase().trim()) {

@@ -150,6 +150,7 @@ internal fun FolderEntity.toDomain(): Folder = Folder(
     displayName = displayName,
     role = runCatching { FolderRole.valueOf(role) }.getOrDefault(FolderRole.NORMAL),
     selectable = selectable,
+    specialUse = specialUse,
 )
 
 internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEntity = FolderEntity(
@@ -159,6 +160,7 @@ internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEn
     role = FolderRole.roleOf(fullName, displayName, attributes).name,
     selectable = selectable,
     sortOrder = sortOrder,
+    specialUse = FolderRole.isServerSpecial(attributes),
 )
 
 internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
