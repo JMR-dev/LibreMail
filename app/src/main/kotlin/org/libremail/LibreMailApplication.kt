@@ -16,6 +16,10 @@ import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.push.IdlePushManager
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.CrashReporter
+import org.libremail.reporting.DiagnosticsCollector
+import org.libremail.reporting.RingLogBuffer
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -33,6 +37,12 @@ class LibreMailApplication :
 
     @Inject lateinit var idlePushManager: IdlePushManager
 
+    @Inject lateinit var ringLogBuffer: RingLogBuffer
+
+    @Inject lateinit var crashReporter: CrashReporter
+
+    @Inject lateinit var diagnosticsCollector: DiagnosticsCollector
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Whether the IDLE push service should currently be running (push enabled AND an account exists). */
@@ -46,6 +56,13 @@ class LibreMailApplication :
 
     override fun onCreate() {
         super.onCreate()
+        // Wire up debug reporting first so crashes during the rest of startup are still captured.
+        AppLog.install(ringLogBuffer)
+        crashReporter.install()
+        AppLog.i(TAG, "Application created")
+        // Warm the settings cache so a later crash report can include non-PII settings without
+        // touching DataStore on the crashing thread.
+        appScope.launch { runCatching { diagnosticsCollector.warmSettingsCache() } }
         syncScheduler.schedulePeriodicSync()
         // Run the IMAP IDLE push service only while it has something to do: the push setting is on
         // AND at least one account exists. This starts it when the first account is added and stops
@@ -71,5 +88,9 @@ class LibreMailApplication :
      */
     fun ensurePushStarted() {
         if (pushShouldBeActive) idlePushManager.start()
+    }
+
+    private companion object {
+        const val TAG = "LibreMail"
     }
 }

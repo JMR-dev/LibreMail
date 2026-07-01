@@ -32,6 +32,11 @@ val outlookOAuthClientId: String = secrets.getProperty(
 // OUTLOOK_OAUTH_REDIRECT_URI and the redirect URI registered in the Azure app registration.
 val outlookRedirectScheme = "org.libremail.outlook"
 
+// Debug-report ingest endpoint (issue #34, out of scope for this repo). Empty by default: the debug
+// reporting client is strictly opt-in and never sends anything unless the user taps Submit AND an
+// endpoint is configured here (overridable via git-ignored secrets.properties).
+val debugReportEndpoint: String = secrets.getProperty("DEBUG_REPORT_ENDPOINT", "")
+
 // Optional release signing, configured via git-ignored secrets.properties. When absent, release
 // builds fall back to the debug key (installable for testing, but not publishable).
 val releaseStoreFile: String? = secrets.getProperty("RELEASE_STORE_FILE")
@@ -52,6 +57,7 @@ android {
 
         buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
         buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"$outlookRedirectScheme://oauth2redirect\"")
+        buildConfigField("String", "DEBUG_REPORT_ENDPOINT", "\"$debugReportEndpoint\"")
         // AppAuth's bundled manifest requires this placeholder; it registers the redirect scheme on
         // RedirectUriReceiverActivity so the Outlook sign-in redirect returns to the app.
         manifestPlaceholders["appAuthRedirectScheme"] = outlookRedirectScheme

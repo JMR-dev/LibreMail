@@ -194,4 +194,34 @@
     <string name="settings_adv_remote_images">Load remote images by default</string>
     <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
     <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
+
+    <!-- Diagnostics / debug reporting -->
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_report_problem">Report a problem</string>
+    <string name="settings_report_problem_summary">Capture diagnostics you can review and optionally send</string>
+    <string name="reports_title">Problem reports</string>
+    <string name="reports_empty">No problem reports yet</string>
+    <string name="reports_create">Create a report</string>
+    <string name="report_kind_crash">Crash report</string>
+    <string name="report_kind_manual">Manual report</string>
+    <string name="report_review_title">Review report</string>
+    <string name="report_pii_disclaimer_title">May contain personal information</string>
+    <string name="report_pii_disclaimer">This report can include email addresses, server names, and other details from your device. Read the whole thing below before sending. Nothing is sent unless you tap Submit.</string>
+    <string name="report_comment_label">What went wrong? (optional)</string>
+    <string name="report_payload_label">Exactly what will be sent</string>
+    <string name="report_submit">Submit</string>
+    <string name="report_discard">Discard report</string>
+    <string name="report_copy">Copy</string>
+    <string name="report_save">Save to file</string>
+    <string name="report_submitting">Submitting…</string>
+    <string name="report_submitted">Report sent. Thank you!</string>
+    <string name="report_submit_failed">Couldn\'t send — it will be retried.</string>
+    <string name="report_submit_unavailable">Online submission isn\'t available in this build. Use Copy or Save to share the report.</string>
+    <string name="report_copied">Copied to clipboard</string>
+    <string name="report_saved">Saved</string>
+    <string name="crash_prompt_title">LibreMail closed unexpectedly</string>
+    <string name="crash_prompt_message">A problem report from the last crash is ready for you to review. Nothing is sent automatically.</string>
+    <string name="crash_prompt_review">Review</string>
+    <string name="crash_prompt_later">Not now</string>
+    <string name="crash_prompt_discard">Discard</string>
 </resources>
