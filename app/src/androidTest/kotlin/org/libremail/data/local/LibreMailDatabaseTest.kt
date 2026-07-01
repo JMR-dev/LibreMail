@@ -102,8 +102,28 @@ class LibreMailDatabaseTest {
         assertEquals(listOf("acct:1"), messageDao.getSyncedIds("acct", "INBOX"))
 
         messageDao.deleteSearchRows()
-        val remaining = messageDao.observeAll().first().map { it.id }
+        val remaining = messageDao.observeSummaries().first().map { it.id }
         assertEquals(listOf("acct:1"), remaining)
+    }
+
+    @Test
+    fun observeSummariesReadsRowsWhoseBodiesExceedTheCursorWindow() = runBlocking {
+        val messageDao = db.messageDao()
+        // Each body is larger than SQLite's shared (~2 MB) CursorWindow. The old list query did
+        // SELECT * and dragged these bodies through the window, overflowing it with
+        // "Couldn't read row … from CursorWindow" (issue #51). observeSummaries omits body, so the
+        // rows stay tiny and read fine.
+        val hugeBody = "x".repeat(3 * 1024 * 1024)
+        messageDao.insertNew(
+            listOf(
+                message("acct:1", body = hugeBody),
+                message("acct:2", body = hugeBody),
+            ),
+        )
+
+        val ids = messageDao.observeSummaries().first().map { it.id }.toSet()
+
+        assertEquals(setOf("acct:1", "acct:2"), ids)
     }
 
     @Test
@@ -146,7 +166,7 @@ class LibreMailDatabaseTest {
         messageDao.deleteSyncedNotIn("acct", "INBOX", listOf("acct:INBOX:1"))
         assertEquals(
             setOf("acct:INBOX:1", "acct:Archive:1"),
-            messageDao.observeAll().first().map { it.id }.toSet(),
+            messageDao.observeSummaries().first().map { it.id }.toSet(),
         )
     }
 }

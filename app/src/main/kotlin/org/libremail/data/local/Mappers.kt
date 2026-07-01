@@ -9,6 +9,7 @@ import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.domain.model.Account
@@ -95,6 +96,28 @@ internal fun MessageEntity.toDomain(): Message = Message(
     snippet = snippet,
     body = body,
     isHtml = isHtml,
+    timestampMillis = timestampMillis,
+    isRead = isRead,
+    isStarred = isStarred,
+    folder = folder,
+    inInbox = inInbox,
+    bodyFetched = bodyFetched,
+)
+
+/**
+ * Maps a mailbox-list projection to the domain model. [Message.body]/[Message.isHtml] are left
+ * empty because the list never renders them — the reader loads the body on demand (see
+ * [MessageSummary]).
+ */
+internal fun MessageSummary.toDomain(): Message = Message(
+    id = id,
+    accountId = accountId,
+    sender = sender,
+    senderEmail = senderEmail,
+    subject = subject,
+    snippet = snippet,
+    body = "",
+    isHtml = false,
     timestampMillis = timestampMillis,
     isRead = isRead,
     isStarred = isStarred,
