@@ -65,6 +65,10 @@ class MailBackfillerTest {
     private val cached = mutableListOf<MessageEntity>()
     private val progress = mutableMapOf<Pair<String, String>, BackfillProgressEntity>()
 
+    // Rows offered to insertNew, counted BEFORE de-dupe: a re-fetched page inflates this even
+    // though `cached` would silently absorb it. Isolates the "no message fetched twice" guarantee.
+    private var totalOffered = 0
+
     @Before
     fun setUp() {
         greenMail = GreenMail(ServerSetupTest.SMTP_IMAP)
@@ -96,6 +100,7 @@ class MailBackfillerTest {
         while (backfiller.runBackfill() && guard++ < 10) { /* keep going until no more work */ }
 
         assertEquals(TOTAL, distinctCachedUids().size, "backfill must cache every message")
+        assertEquals(TOTAL - WINDOW, totalOffered, "each backfilled message fetched exactly once")
         assertTrue(cached.size > WINDOW, "that is strictly more than the foreground window")
         assertEquals(true, progress["acct" to "INBOX"]?.complete)
         assertNoDeletes()
@@ -120,7 +125,8 @@ class MailBackfillerTest {
         while (resumed.runBackfill() && guard++ < 10) { /* finish */ }
 
         assertEquals(TOTAL, distinctCachedUids().size, "resume completes the full history")
-        assertEquals(TOTAL, cached.size, "no message is fetched twice")
+        assertEquals(TOTAL - WINDOW, totalOffered, "no re-fetch across the interruption")
+        assertEquals(TOTAL, cached.size, "and nothing is double-inserted")
         assertNoDeletes()
     }
 
@@ -151,7 +157,9 @@ class MailBackfillerTest {
 
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.insertNew(any()) } answers {
-            firstArg<List<MessageEntity>>().forEach { e -> if (cached.none { it.id == e.id }) cached += e }
+            val batch = firstArg<List<MessageEntity>>()
+            totalOffered += batch.size // count BEFORE de-dupe (see field)
+            batch.forEach { e -> if (cached.none { it.id == e.id }) cached += e }
         }
         coEvery { messageDao.syncedFolders("acct") } answers {
             cached.filter { it.inInbox }.map { it.folder }.distinct()
