@@ -28,7 +28,7 @@ object RichTextEditing {
         val updated = if (isFullyStyled(sameKind.filter { it.style == style }, start, end)) {
             cleared
         } else {
-            mergeSameValue(cleared + RichSpan(start, end, style))
+            mergeSameValueSpans(cleared + RichSpan(start, end, style))
         }
         return content.copy(spans = (otherKinds + updated).sortedBy { it.start })
     }
@@ -158,20 +158,6 @@ private fun subtractRange(spans: List<RichSpan>, start: Int, end: Int): List<Ric
             if (span.end > end) add(span.copy(start = end))
         }
     }
-}
-
-/** Merges spans with the exact same style value that touch or overlap. */
-private fun mergeSameValue(spans: List<RichSpan>): List<RichSpan> {
-    val merged = ArrayList<RichSpan>()
-    for (span in spans.sortedWith(compareBy({ it.start }, { it.end }))) {
-        val i = merged.indexOfLast { it.style == span.style && span.start <= it.end }
-        if (i >= 0) {
-            merged[i] = merged[i].copy(end = maxOf(merged[i].end, span.end))
-        } else {
-            merged.add(span)
-        }
-    }
-    return merged
 }
 
 // --- block marker helpers ---

@@ -300,7 +300,7 @@ private fun applyBlock(
     value: TextFieldValue,
     marker: BlockMarker,
     linkColor: Color,
-    resolveFont: (String) -> FontFamily? = { null },
+    resolveFont: (String) -> FontFamily?,
 ): TextFieldValue {
     val result = RichTextEditing.toggleBlock(
         value.annotatedString.toRichContent(),
@@ -318,7 +318,7 @@ private fun applyLink(
     value: TextFieldValue,
     url: String,
     linkColor: Color,
-    resolveFont: (String) -> FontFamily? = { null },
+    resolveFont: (String) -> FontFamily?,
 ): TextFieldValue {
     val updated = RichTextEditing.applyLink(
         value.annotatedString.toRichContent(),

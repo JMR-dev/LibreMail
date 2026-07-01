@@ -102,3 +102,20 @@ internal fun lineMarker(line: String): String? = when {
     line.startsWith(QUOTE_PREFIX) -> QUOTE_PREFIX
     else -> ORDERED_PREFIX.find(line)?.value
 }
+
+/**
+ * Merges spans with the exact same style value that touch or overlap, yielding the canonical
+ * maximal-run form. Shared by the HTML parser and the editing ops so the two can never drift.
+ */
+internal fun mergeSameValueSpans(spans: List<RichSpan>): List<RichSpan> {
+    val merged = ArrayList<RichSpan>()
+    for (span in spans.sortedWith(compareBy({ it.start }, { it.end }))) {
+        val i = merged.indexOfLast { it.style == span.style && span.start <= it.end }
+        if (i >= 0) {
+            merged[i] = merged[i].copy(end = maxOf(merged[i].end, span.end))
+        } else {
+            merged.add(span)
+        }
+    }
+    return merged
+}

@@ -218,7 +218,7 @@ internal class RichTextHtmlParser(private val html: String) {
         val len = out.length
         return RichTextContent(
             text = out,
-            spans = mergedSpans(spans.mapNotNull { it.clampedTo(len) }),
+            spans = mergeSameValueSpans(spans.mapNotNull { it.clampedTo(len) }),
             links = links.mapNotNull { it.clampedTo(len) },
             alignments = mergedAlignments(alignments.mapNotNull { it.clampedTo(len) }),
             images = images.filter { it.end <= len },
@@ -240,20 +240,6 @@ private fun RichLink.clampedTo(len: Int): RichLink? {
 private fun RichAlignment.clampedTo(len: Int): RichAlignment? {
     val e = minOf(end, len)
     return if (start < e) copy(end = e) else null
-}
-
-/** Merges same-style spans that touch or overlap, yielding the canonical maximal-run form. */
-private fun mergedSpans(spans: List<RichSpan>): List<RichSpan> {
-    val merged = ArrayList<RichSpan>()
-    for (span in spans.sortedWith(compareBy({ it.start }, { it.end }))) {
-        val i = merged.indexOfLast { it.style == span.style && span.start <= it.end }
-        if (i >= 0) {
-            merged[i] = merged[i].copy(end = maxOf(merged[i].end, span.end))
-        } else {
-            merged.add(span)
-        }
-    }
-    return merged
 }
 
 /** Merges same-alignment runs on adjacent lines (ranges separated by exactly the newline). */

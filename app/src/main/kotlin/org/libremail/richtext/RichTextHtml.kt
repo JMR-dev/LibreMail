@@ -122,12 +122,17 @@ private fun emitQuote(sb: StringBuilder, content: RichTextContent, lines: List<L
 private fun emitParagraph(sb: StringBuilder, content: RichTextContent, lines: List<Line>, from: Int): Int {
     val align = alignFor(content, lines[from])
     sb.append(openBlockTag("p", align))
+    val inner = StringBuilder()
     var i = from
     while (i < lines.size && lines[i].kind == Kind.PARAGRAPH && alignFor(content, lines[i]) == align) {
-        if (i > from) sb.append("<br>")
-        sb.append(renderInline(content, lines[i].contentStart, lines[i].contentEnd))
+        if (i > from) inner.append("<br>")
+        inner.append(renderInline(content, lines[i].contentStart, lines[i].contentEnd))
         i++
     }
+    // A group of only empty lines would otherwise vanish on parse (the closing tag's newline is a
+    // no-op at a line start), so it emits one <br> per line to keep the blank lines round-trippable.
+    val allEmpty = (from until i).all { lines[it].contentStart >= lines[it].contentEnd }
+    sb.append(if (allEmpty) "<br>".repeat(i - from) else inner)
     sb.append("</p>")
     return i
 }

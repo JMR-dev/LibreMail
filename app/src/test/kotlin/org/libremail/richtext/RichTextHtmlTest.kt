@@ -188,6 +188,20 @@ class RichTextHtmlTest {
     }
 
     @Test
+    fun `blank line between differently aligned paragraphs survives round-trip`() {
+        val content = RichTextContent(
+            text = "a\n\nb",
+            alignments = listOf(RichAlignment(0, 1, RichAlign.CENTER), RichAlignment(3, 4, RichAlign.CENTER)),
+        )
+        // The empty middle group must emit an explicit <br> or the blank line vanishes on parse.
+        assertEquals(
+            "<p style=\"text-align:center\">a</p><p><br></p><p style=\"text-align:center\">b</p>",
+            RichTextHtml.toHtml(content),
+        )
+        assertRoundTrips(content)
+    }
+
+    @Test
     fun `parser accepts start and end alignment synonyms`() {
         val restored = RichTextHtml.fromHtml("<p style=\"text-align:start\">a</p><p style=\"text-align:end\">b</p>")
         assertEquals("a\nb", restored.text)
