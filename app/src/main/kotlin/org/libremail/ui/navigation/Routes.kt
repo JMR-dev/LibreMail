@@ -11,6 +11,7 @@ object Routes {
     const val MANUAL_SETUP = "manual_setup"
     const val DRAFTS = "drafts"
     const val OUTBOX = "outbox"
+    const val PROBLEM_REPORTS = "problem_reports"
 
     const val READER_ARG_ID = "messageId"
     const val READER_PATTERN = "reader/{$READER_ARG_ID}"
@@ -19,6 +20,10 @@ object Routes {
     const val ACCOUNT_SETTINGS_ARG_ID = "accountId"
     const val ACCOUNT_SETTINGS_PATTERN = "account_settings/{$ACCOUNT_SETTINGS_ARG_ID}"
     fun accountSettings(accountId: String) = "account_settings/${Uri.encode(accountId)}"
+
+    const val REPORT_REVIEW_ARG_ID = "reportId"
+    const val REPORT_REVIEW_PATTERN = "report_review/{$REPORT_REVIEW_ARG_ID}"
+    fun reportReview(reportId: String) = "report_review/${Uri.encode(reportId)}"
 
     const val COMPOSE_ARG_TO = "to"
     const val COMPOSE_ARG_SUBJECT = "subject"

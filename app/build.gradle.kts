@@ -37,6 +37,11 @@ val outlookOAuthClientId: String = secrets.getProperty(
     "04e4aa5e-ed1f-47f9-b567-b99a0b29b3df",
 )
 
+// Debug-report ingest endpoint (issue #34, out of scope for this repo). Empty by default: the debug
+// reporting client is strictly opt-in and never sends anything unless the user taps Submit AND an
+// endpoint is configured here (overridable via git-ignored secrets.properties).
+val debugReportEndpoint: String = secrets.getProperty("DEBUG_REPORT_ENDPOINT", "")
+
 // Optional release signing, configured via git-ignored secrets.properties. When absent, release
 // builds fall back to the debug key (installable for testing, but not publishable).
 val releaseStoreFile: String? = secrets.getProperty("RELEASE_STORE_FILE")
@@ -59,6 +64,7 @@ android {
         buildConfigField("String", "GMAIL_OAUTH_REDIRECT_URI", "\"$gmailRedirectScheme:/oauth2redirect\"")
         buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
         buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"org.libremail.outlook://oauth2redirect\"")
+        buildConfigField("String", "DEBUG_REPORT_ENDPOINT", "\"$debugReportEndpoint\"")
         // AppAuth captures the OAuth redirect via this custom scheme.
         manifestPlaceholders["appAuthRedirectScheme"] = gmailRedirectScheme
     }
