@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.mailbox
 
+import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -29,6 +30,7 @@ import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.ui.navigation.Routes
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -374,12 +376,27 @@ class MailboxViewModelTest {
         coVerify { repo.buildReplyDraft("imap:a:INBOX:1", ReplyMode.REPLY_ALL) }
     }
 
+    @Test
+    fun `opens filtered to the account passed as a nav argument`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice, bob),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:b:INBOX:1", "imap:b", "INBOX")),
+            initialAccountId = "imap:a",
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+
+        assertEquals("imap:a", vm.selectedAccountId.value)
+        assertEquals("INBOX", vm.selectedFolder.value)
+        assertEquals(listOf("imap:a:INBOX:1"), vm.messages.value.map { it.id })
+    }
+
     private fun createViewModel(
         accounts: List<Account>,
         messages: List<Message>,
         folders: Map<String, List<Folder>> = emptyMap(),
         syncer: MailSyncer = mockk(relaxed = true),
         repo: MailRepository = mockk(relaxed = true),
+        initialAccountId: String? = null,
     ): MailboxViewModel {
         every { repo.observeMessages() } returns MutableStateFlow(messages)
         every { repo.observeDrafts() } returns flowOf(emptyList())
@@ -389,7 +406,10 @@ class MailboxViewModelTest {
         }
         val accountRepository = mockk<AccountRepository>(relaxed = true)
         every { accountRepository.observeAccounts() } returns MutableStateFlow(accounts)
-        return MailboxViewModel(repo, accountRepository, syncer)
+        val savedState = initialAccountId?.let {
+            SavedStateHandle(mapOf(Routes.MAILBOX_ARG_ACCOUNT to it))
+        } ?: SavedStateHandle()
+        return MailboxViewModel(repo, accountRepository, syncer, savedState)
     }
 
     private fun account(id: String, email: String) = Account(

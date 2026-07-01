@@ -28,6 +28,8 @@ data class ManualSetupForm(
     val advancedExpanded: Boolean = false,
     val status: SetupStatus = SetupStatus.IDLE,
     val error: String? = null,
+    /** Set alongside [SetupStatus.DONE]: the id of the account that was just added. */
+    val addedAccountId: String? = null,
 ) {
     val isValid: Boolean
         get() = email.isNotBlank() && password.isNotBlank() && imapHost.isNotBlank() && smtpHost.isNotBlank()
@@ -73,7 +75,7 @@ class ManualSetupViewModel @Inject constructor(private val accountRepository: Ac
         viewModelScope.launch {
             _form.update { it.copy(status = SetupStatus.CONNECTING, error = null) }
             accountRepository.addImapAccount(account, f.password).fold(
-                onSuccess = { _form.update { it.copy(status = SetupStatus.DONE) } },
+                onSuccess = { _form.update { it.copy(status = SetupStatus.DONE, addedAccountId = account.id) } },
                 onFailure = { e ->
                     _form.update {
                         it.copy(

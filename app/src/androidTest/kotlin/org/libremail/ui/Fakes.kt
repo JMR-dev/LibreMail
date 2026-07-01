@@ -41,6 +41,11 @@ class FakeAccountRepository(
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> {
         addedAccount = account
         addedPassword = password
+        // Mirror the real repository: a successful add makes the account observable, so screens that
+        // react to the account list (e.g. the mailbox after onboarding) see it appear.
+        if (result.isSuccess) {
+            accountsFlow.value = accountsFlow.value.filterNot { it.id == account.id } + account
+        }
         return result
     }
 
