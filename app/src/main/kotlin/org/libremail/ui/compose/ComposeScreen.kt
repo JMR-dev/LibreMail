@@ -10,6 +10,8 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -28,6 +30,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -182,6 +186,8 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                 )
                 AttachmentsSection(
                     attachments = state.attachments,
+                    highlight = state.highlightAttach,
+                    onHighlightShown = viewModel::consumeAttachHighlight,
                     onAttach = { attachmentPicker.launch(arrayOf("*/*")) },
                     onRemove = viewModel::removeAttachment,
                 )
@@ -207,6 +213,29 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
             }
         }
     }
+
+    if (state.showAttachmentPrompt) {
+        AttachmentPromptDialog(
+            onAttach = viewModel::attachInstead,
+            onSendAnyway = viewModel::sendAnyway,
+            onDismiss = viewModel::dismissAttachmentPrompt,
+        )
+    }
+}
+
+/**
+ * Shown when Send is tapped on a message that mentions an attachment but carries none. "Yes"
+ * returns to composing with the attach button highlighted; "No" sends the message as-is.
+ */
+@Composable
+private fun AttachmentPromptDialog(onAttach: () -> Unit, onSendAnyway: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.confirm_attachment_title)) },
+        text = { Text(stringResource(R.string.confirm_attachment_text)) },
+        confirmButton = { TextButton(onClick = onAttach) { Text(stringResource(R.string.action_yes)) } },
+        dismissButton = { TextButton(onClick = onSendAnyway) { Text(stringResource(R.string.action_no)) } },
+    )
 }
 
 @Composable
@@ -249,11 +278,32 @@ private fun FromRow(accounts: List<Account>, selectedId: String?, onSelect: (Str
 @Composable
 private fun AttachmentsSection(
     attachments: List<OutgoingAttachment>,
+    highlight: Boolean,
+    onHighlightShown: () -> Unit,
     onAttach: () -> Unit,
     onRemove: (String) -> Unit,
 ) {
+    // Answering "Yes" on the attachment prompt lands back here: pulse the attach button a few
+    // times to draw the eye, then report the highlight as consumed.
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(highlight) {
+        if (highlight) {
+            repeat(3) {
+                pulse.animateTo(1f, tween(durationMillis = 300))
+                pulse.animateTo(0f, tween(durationMillis = 300))
+            }
+            onHighlightShown()
+        } else {
+            pulse.snapTo(0f)
+        }
+    }
     Column(Modifier.fillMaxWidth()) {
-        TextButton(onClick = onAttach) {
+        TextButton(
+            onClick = onAttach,
+            colors = ButtonDefaults.textButtonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = pulse.value),
+            ),
+        ) {
             Icon(Icons.Filled.Add, contentDescription = null)
             Spacer(Modifier.width(4.dp))
             Text(stringResource(R.string.compose_attach))

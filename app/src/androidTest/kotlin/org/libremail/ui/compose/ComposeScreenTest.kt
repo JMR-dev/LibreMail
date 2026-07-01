@@ -3,6 +3,7 @@ package org.libremail.ui.compose
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -16,6 +17,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -117,5 +119,27 @@ class ComposeScreenTest {
         assertEquals(account.id, sent.accountId)
 
         composeTestRule.waitUntil(timeoutMillis = 5_000) { closed }
+    }
+
+    @Test
+    fun send_whenBodyMentionsAttachmentWithoutOne_promptsBeforeSending() {
+        val mailRepository = FakeMailRepository()
+        setContent(mailRepository)
+
+        composeTestRule.onNodeWithText(string(R.string.compose_to)).performTextInput("you@example.com")
+        composeTestRule.onNodeWithText(string(R.string.compose_body)).performTextInput("I attached the report")
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+
+        // "Yes" returns to composing: the dialog closes and nothing is sent.
+        composeTestRule.onNodeWithText(string(R.string.confirm_attachment_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.action_yes)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.confirm_attachment_title)).assertDoesNotExist()
+        assertTrue(mailRepository.sentMessages.isEmpty())
+
+        // Sending again and answering "No" delivers the message as-is.
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.action_no)).performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { mailRepository.sentMessages.isNotEmpty() }
+        assertEquals("I attached the report", mailRepository.sentMessages.single().body)
     }
 }
