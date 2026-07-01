@@ -132,15 +132,22 @@ class LibreMailDatabaseTest {
         folderDao.replaceForAccount(
             "acct",
             listOf(
-                FolderEntity("acct", "[Gmail]/Sent Mail", "Sent Mail", "SENT", selectable = true, sortOrder = 1),
+                FolderEntity(
+                    accountId = "acct",
+                    fullName = "[Gmail]/Sent Mail",
+                    displayName = "Sent Mail",
+                    role = "SENT",
+                    selectable = true,
+                    sortOrder = 1,
+                    specialUse = true,
+                ),
                 FolderEntity("acct", "INBOX", "INBOX", "INBOX", selectable = true, sortOrder = 0),
             ),
         )
-        // observeForAccount returns folders ordered by sortOrder.
-        assertEquals(
-            listOf("INBOX", "[Gmail]/Sent Mail"),
-            folderDao.observeForAccount("acct").first().map { it.fullName },
-        )
+        // observeForAccount returns folders ordered by sortOrder, with specialUse round-tripped.
+        val stored = folderDao.observeForAccount("acct").first()
+        assertEquals(listOf("INBOX", "[Gmail]/Sent Mail"), stored.map { it.fullName })
+        assertEquals(listOf(false, true), stored.map { it.specialUse })
 
         // replaceForAccount swaps the whole set (delete + insert).
         folderDao.replaceForAccount("acct", listOf(FolderEntity("acct", "Archive", "Archive", "ARCHIVE", true, 0)))

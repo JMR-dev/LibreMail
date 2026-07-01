@@ -86,5 +86,9 @@ enum class MailProvider(
     companion object {
         /** Resolves a provider by its [key], or null if none matches (case-insensitive). */
         fun fromKey(key: String): MailProvider? = entries.firstOrNull { it.key.equals(key, ignoreCase = true) }
+
+        /** Resolves a provider by its IMAP host, or null if none matches (case-insensitive). */
+        fun forImapHost(host: String): MailProvider? =
+            entries.firstOrNull { it.imapHost.equals(host, ignoreCase = true) }
     }
 }

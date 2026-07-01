@@ -3,6 +3,8 @@ package org.libremail.domain.model
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class FolderRoleTest {
 
@@ -29,5 +31,15 @@ class FolderRoleTest {
         assertEquals(FolderRole.TRASH, FolderRole.roleOf("Deleted Items", "Deleted Items", emptyList()))
         assertEquals(FolderRole.ARCHIVE, FolderRole.roleOf("Archive", "Archive", emptyList()))
         assertEquals(FolderRole.NORMAL, FolderRole.roleOf("Receipts", "Receipts", emptyList()))
+    }
+
+    @Test
+    fun `isServerSpecial is true only for special-use attributes`() {
+        assertTrue(FolderRole.isServerSpecial(listOf("\\Junk")))
+        assertTrue(FolderRole.isServerSpecial(listOf("\\All")))
+        // Case-insensitive, and ignores non-special-use flags mixed in.
+        assertTrue(FolderRole.isServerSpecial(listOf("\\HasNoChildren", "\\drafts")))
+        assertFalse(FolderRole.isServerSpecial(emptyList()))
+        assertFalse(FolderRole.isServerSpecial(listOf("\\HasNoChildren")))
     }
 }
