@@ -48,6 +48,10 @@ data class ComposeUiState(
     val contactsAllowed: Boolean = false,
     val sending: Boolean = false,
     val error: String? = null,
+    /** Send was tapped while the text mentions an attachment but none is attached: ask first. */
+    val showAttachmentPrompt: Boolean = false,
+    /** Draw the eye to the attach button — the user answered the attachment prompt with "Yes". */
+    val highlightAttach: Boolean = false,
 )
 
 @HiltViewModel
@@ -89,6 +93,9 @@ class ComposeViewModel @Inject constructor(
 
     /** The signature block last appended to the body, so a From-change can swap it out cleanly. */
     private var appliedSignatureBlock = SignatureBlock.EMPTY
+
+    /** Word-bounded "attach" and variants (attached, attachment(s), attaching, attaches). */
+    private val attachmentMention = Regex("""\battach(?:ed|ment|ments|ing|es)?\b""", RegexOption.IGNORE_CASE)
 
     init {
         if (draftId != null) {
@@ -261,7 +268,24 @@ class ComposeViewModel @Inject constructor(
         }
     }
 
-    fun send() {
+    fun send() = trySend(checkAttachments = true)
+
+    /** "No" on the attachment prompt — the user confirmed nothing needs attaching, so send as-is. */
+    fun sendAnyway() {
+        _state.update { it.copy(showAttachmentPrompt = false) }
+        trySend(checkAttachments = false)
+    }
+
+    /** "Yes" on the attachment prompt — back to composing, with the attach button highlighted. */
+    fun attachInstead() = _state.update { it.copy(showAttachmentPrompt = false, highlightAttach = true) }
+
+    /** The prompt was dismissed without choosing: stay composing, no send, no highlight. */
+    fun dismissAttachmentPrompt() = _state.update { it.copy(showAttachmentPrompt = false) }
+
+    /** The attach-button highlight has finished animating. */
+    fun consumeAttachHighlight() = _state.update { it.copy(highlightAttach = false) }
+
+    private fun trySend(checkAttachments: Boolean) {
         viewModelScope.launch {
             val s = _state.value
             // Await the account list if it hasn't emitted yet, so an early tap doesn't wrongly
@@ -271,37 +295,39 @@ class ComposeViewModel @Inject constructor(
             when {
                 account == null -> _state.update { it.copy(error = "Add an account first") }
                 s.to.isBlank() -> _state.update { it.copy(error = "Add a recipient") }
-                else -> {
-                    _state.update { it.copy(sending = true, error = null) }
-                    mailRepository.sendMessage(
-                        OutgoingMessage(
-                            accountId = account.id,
-                            to = s.to,
-                            cc = s.cc,
-                            bcc = s.bcc,
-                            subject = s.subject,
-                            body = s.body,
-                            bodyHtml = s.bodyHtml,
-                            attachments = s.attachments,
-                        ),
-                    ).fold(
-                        onSuccess = {
-                            draftId?.let { mailRepository.deleteDraft(it) }
-                            _state.update { it.copy(sending = false) }
-                            finish()
-                        },
-                        onFailure = { e ->
-                            _state.update {
-                                it.copy(
-                                    sending = false,
-                                    error =
-                                    e.message ?: "Could not send",
-                                )
-                            }
-                        },
-                    )
-                }
+                checkAttachments && s.attachments.isEmpty() && mentionsAttachment(s) ->
+                    _state.update { it.copy(showAttachmentPrompt = true) }
+                else -> performSend(account, s)
             }
         }
+    }
+
+    /** The classic forgotten-attachment guard: does the subject or body talk about attaching? */
+    private fun mentionsAttachment(s: ComposeUiState): Boolean =
+        attachmentMention.containsMatchIn(s.subject) || attachmentMention.containsMatchIn(s.body)
+
+    private suspend fun performSend(account: Account, s: ComposeUiState) {
+        _state.update { it.copy(sending = true, error = null) }
+        mailRepository.sendMessage(
+            OutgoingMessage(
+                accountId = account.id,
+                to = s.to,
+                cc = s.cc,
+                bcc = s.bcc,
+                subject = s.subject,
+                body = s.body,
+                bodyHtml = s.bodyHtml,
+                attachments = s.attachments,
+            ),
+        ).fold(
+            onSuccess = {
+                draftId?.let { mailRepository.deleteDraft(it) }
+                _state.update { it.copy(sending = false) }
+                finish()
+            },
+            onFailure = { e ->
+                _state.update { it.copy(sending = false, error = e.message ?: "Could not send") }
+            },
+        )
     }
 }
