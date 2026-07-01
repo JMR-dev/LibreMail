@@ -27,6 +27,7 @@ import org.libremail.ui.mailbox.MailboxScreen
 import org.libremail.ui.navigation.Routes
 import org.libremail.ui.outbox.OutboxScreen
 import org.libremail.ui.reader.ReaderScreen
+import org.libremail.ui.settings.AccountSettingsScreen
 import org.libremail.ui.settings.SettingsScreen
 
 /** Top-level destinations shown in the bottom navigation bar. */
@@ -77,8 +78,15 @@ fun LibreMailApp() {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onAddAccount = { navController.navigate(Routes.ACCOUNT_SETUP) },
+                onOpenAccount = { accountId -> navController.navigate(Routes.accountSettings(accountId)) },
                 onSelectTab = navController::navigateTab,
             )
+        }
+        composable(
+            route = Routes.ACCOUNT_SETTINGS_PATTERN,
+            arguments = listOf(navArgument(Routes.ACCOUNT_SETTINGS_ARG_ID) { type = NavType.StringType }),
+        ) {
+            AccountSettingsScreen(onBack = navController::popBackStack)
         }
         composable(Routes.ACCOUNT_SETUP) {
             AccountSetupScreen(

@@ -35,8 +35,6 @@ class SettingsViewModel @Inject constructor(
 
     fun toggleAdvanced() = _advancedExpanded.update { !it }
 
-    fun removeAccount(id: String) = viewModelScope.launch { accountRepository.deleteAccount(id) }.let {}
-
     fun setDynamicColor(value: Boolean) = update { settingsRepository.setDynamicColor(value) }
     fun setNewMailNotifications(value: Boolean) = update { settingsRepository.setNewMailNotifications(value) }
     fun setPushIdle(value: Boolean) = update { settingsRepository.setPushIdle(value) }

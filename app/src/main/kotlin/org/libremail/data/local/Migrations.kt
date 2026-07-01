@@ -145,3 +145,29 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         )
     }
 }
+
+/**
+ * v8 -> v9: per-account settings (preserves existing data). Adds the `account_settings` table with a
+ * cascading foreign key to `accounts`, and backfills a default row for every existing account.
+ *
+ * Columns are declared without SQL DEFAULTs and the backfill lists every column explicitly (the
+ * MIGRATION_4_5/5_6 pattern), so the fresh-install schema matches the migrated one — avoiding the
+ * `@ColumnInfo(defaultValue)` mismatch that MIGRATION_6_7 had to repair.
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `account_settings` (" +
+                "`accountId` TEXT NOT NULL, `signature` TEXT NOT NULL, " +
+                "`signatureEnabled` INTEGER NOT NULL, `notificationsEnabled` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`accountId`), " +
+                "FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)",
+        )
+        db.execSQL(
+            "INSERT INTO `account_settings` " +
+                "(`accountId`, `signature`, `signatureEnabled`, `notificationsEnabled`) " +
+                "SELECT `id`, '', 1, 1 FROM `accounts`",
+        )
+    }
+}

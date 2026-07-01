@@ -28,7 +28,9 @@ import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.sync.MailConnectionFactory
+import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
@@ -50,6 +52,7 @@ class MailRepositoryImplTest {
     private val imapClient = mockk<ImapClient>(relaxed = true)
     private val connectionFactory = mockk<MailConnectionFactory>()
     private val context = mockk<Context>(relaxed = true)
+    private val accountSettingsRepository = mockk<AccountSettingsRepository>()
     private val repository = MailRepositoryImpl(
         context = context,
         messageDao = messageDao,
@@ -61,6 +64,7 @@ class MailRepositoryImplTest {
         imapClient = imapClient,
         connectionFactory = connectionFactory,
         sendScheduler = mockk(),
+        accountSettingsRepository = accountSettingsRepository,
     )
 
     @Test
@@ -195,6 +199,7 @@ class MailRepositoryImplTest {
         val id = "acct:INBOX:2"
         coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { imapClient.fetchForReply(any(), "INBOX", "2") } returns ReplyContext(
             fromEmail = "boss@example.org",

@@ -23,6 +23,7 @@ import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Attachment
@@ -50,6 +51,7 @@ class MailRepositoryImpl @Inject constructor(
     private val imapClient: ImapClient,
     private val connectionFactory: MailConnectionFactory,
     private val sendScheduler: SendScheduler,
+    private val accountSettingsRepository: AccountSettingsRepository,
 ) : MailRepository {
 
     override fun observeMessages(): Flow<List<Message>> =
@@ -178,6 +180,9 @@ class MailRepositoryImpl @Inject constructor(
         val params = connectionFactory.imapParamsFor(account)
         val context = imapClient.fetchForReply(params, entity.folder, uidOf(messageId))
         val content = ReplyBuilder.build(context, mode, account.email)
+        // Bake the sending account's signature into the reply/forward body so it round-trips as part
+        // of the draft (compose won't re-append for drafts).
+        val signature = accountSettingsRepository.get(entity.accountId).signatureBlock()
         val draftId = UUID.randomUUID().toString()
         saveDraft(
             Draft(
@@ -186,7 +191,7 @@ class MailRepositoryImpl @Inject constructor(
                 to = content.to,
                 cc = content.cc,
                 subject = content.subject,
-                body = content.body,
+                body = content.body + signature,
                 updatedAt = System.currentTimeMillis(),
                 attachments = emptyList(),
             ),

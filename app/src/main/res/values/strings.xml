@@ -141,7 +141,18 @@
     <string name="settings_new_mail">New-mail notifications</string>
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
-    <string name="account_remove">Remove</string>
+    <string name="account_remove">Remove account</string>
+
+    <!-- Per-account settings -->
+    <string name="settings_account_title">Account</string>
+    <string name="settings_signature">Signature</string>
+    <string name="settings_signature_enable">Append signature</string>
+    <string name="settings_signature_hint">Your signature</string>
+    <string name="settings_account_notifications">Notifications</string>
+    <string name="settings_account_new_mail">New mail notifications</string>
+    <string name="settings_account_new_mail_summary">Show notifications for this account</string>
+    <string name="settings_account_system_notif">Sound &amp; vibration</string>
+    <string name="settings_account_system_notif_summary">Manage sound, vibration, and importance in Android settings</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_dynamic_color">Use wallpaper colors</string>
     <string name="settings_dynamic_color_summary">Material You dynamic theming (Android 12+)</string>

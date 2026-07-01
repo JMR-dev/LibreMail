@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.contacts.ContactSuggestion
 import org.libremail.contacts.ContactsRepository
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.OutgoingAttachment
@@ -47,6 +48,7 @@ class ComposeViewModel @Inject constructor(
     private val mailRepository: MailRepository,
     private val accountRepository: AccountRepository,
     private val contactsRepository: ContactsRepository,
+    private val accountSettingsRepository: AccountSettingsRepository,
 ) : ViewModel() {
 
     private val draftId: String? =
@@ -73,6 +75,9 @@ class ComposeViewModel @Inject constructor(
     /** Guards against double-navigation and against saving a draft for an already-sent message. */
     @Volatile private var navigated = false
 
+    /** The signature block last appended to the body, so a From-change can swap it out cleanly. */
+    private var appliedSignatureBlock = ""
+
     init {
         if (draftId != null) {
             viewModelScope.launch {
@@ -89,6 +94,14 @@ class ComposeViewModel @Inject constructor(
                     }
                 }
             }
+        } else {
+            // New composition (incl. reader-reply, which prefills From): append the sending account's
+            // signature. Reply/forward drafts already carry theirs, so they take the draft branch above.
+            viewModelScope.launch {
+                val available = accountRepository.observeAccounts().first { it.isNotEmpty() }
+                val effectiveId = _state.value.fromAccountId ?: available.first().id
+                applySignature(effectiveId)
+            }
         }
     }
 
@@ -100,7 +113,26 @@ class ComposeViewModel @Inject constructor(
     fun onCcChange(value: String) = _state.update { it.copy(cc = value) }
     fun onSubjectChange(value: String) = _state.update { it.copy(subject = value) }
     fun onBodyChange(value: String) = _state.update { it.copy(body = value) }
-    fun selectFrom(accountId: String) = _state.update { it.copy(fromAccountId = accountId) }
+    fun selectFrom(accountId: String) {
+        viewModelScope.launch { applySignature(accountId) }
+    }
+
+    /**
+     * Sets the sending account and swaps its signature into the body: strips the previously-appended
+     * signature block (when the body still ends with it) and appends the newly-selected account's.
+     */
+    private suspend fun applySignature(accountId: String) {
+        val block = accountSettingsRepository.get(accountId).signatureBlock()
+        _state.update { s ->
+            val base = if (appliedSignatureBlock.isNotEmpty() && s.body.endsWith(appliedSignatureBlock)) {
+                s.body.removeSuffix(appliedSignatureBlock)
+            } else {
+                s.body
+            }
+            s.copy(fromAccountId = accountId, body = base + block)
+        }
+        appliedSignatureBlock = block
+    }
     fun addAttachments(items: List<OutgoingAttachment>) =
         _state.update { it.copy(attachments = it.attachments + items) }
     fun removeAttachment(uri: String) =

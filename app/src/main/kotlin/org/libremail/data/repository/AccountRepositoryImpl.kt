@@ -12,11 +12,13 @@ import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.local.toImapParams
 import org.libremail.data.security.CredentialStore
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.mail.ImapClient
+import org.libremail.notifications.MailNotifier
 
 @Singleton
 class AccountRepositoryImpl @Inject constructor(
@@ -26,6 +28,8 @@ class AccountRepositoryImpl @Inject constructor(
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
     private val syncScheduler: SyncScheduler,
+    private val accountSettingsRepository: AccountSettingsRepository,
+    private val mailNotifier: MailNotifier,
 ) : AccountRepository {
 
     override fun observeAccounts(): Flow<List<Account>> =
@@ -37,7 +41,9 @@ class AccountRepositoryImpl @Inject constructor(
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
         accountDao.upsert(account.toEntity())
+        accountSettingsRepository.ensureDefaults(account.id)
         credentialStore.saveSecret(account.id, password)
+        mailNotifier.ensureAccountChannel(account)
         syncScheduler.syncNow()
         folders.map { it.fullName }
     }
@@ -50,7 +56,9 @@ class AccountRepositoryImpl @Inject constructor(
         val account = Account.outlook(email)
         val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
         accountDao.upsert(account.toEntity())
+        accountSettingsRepository.ensureDefaults(account.id)
         credentialStore.saveSecret(account.id, authStateJson)
+        mailNotifier.ensureAccountChannel(account)
         syncScheduler.syncNow()
         folders.map { it.fullName }
     }
@@ -58,7 +66,9 @@ class AccountRepositoryImpl @Inject constructor(
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)
         credentialStore.delete(id)
+        mailNotifier.deleteAccountChannel(id)
         // Remove the account's cached mail (attachment rows cascade via the foreign key) and folders.
+        // The account_settings row is removed automatically by its cascading foreign key.
         messageDao.deleteByAccount(id)
         folderDao.deleteForAccount(id)
     }
