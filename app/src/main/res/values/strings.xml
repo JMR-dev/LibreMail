@@ -123,6 +123,16 @@
     <string name="onboarding_add_another_yes">Add another account</string>
     <string name="onboarding_add_another_no">No, take me to my inbox</string>
 
+    <!-- Onboarding: unrestricted background/battery opt-in (#49) -->
+    <string name="onboarding_battery_title">Get mail the instant it arrives</string>
+    <string name="onboarding_battery_body">LibreMail keeps a lightweight connection open to deliver mail the moment it lands. Android\'s battery optimization can pause or close that connection, so messages may show up late — or only when you open the app.</string>
+    <string name="onboarding_battery_guidance">On the next screen, open Battery and choose “Unrestricted”.</string>
+    <string name="onboarding_battery_take_me">Take me there</string>
+    <string name="onboarding_battery_not_now">Not now</string>
+    <string name="onboarding_battery_done_title">You\'re all set</string>
+    <string name="onboarding_battery_done_body">Background usage is unrestricted — new mail will arrive instantly.</string>
+    <string name="onboarding_battery_continue">Continue to inbox</string>
+
     <!-- Account setup (vendor picker) -->
     <string name="account_setup_outlook">Outlook or Hotmail</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
@@ -225,6 +235,9 @@
     <string name="settings_adv_remote_images">Load remote images by default</string>
     <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
     <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
+    <string name="settings_adv_battery">Background battery usage</string>
+    <string name="settings_adv_battery_unrestricted">Unrestricted — instant background mail is allowed.</string>
+    <string name="settings_adv_battery_optimized">Optimized by Android — new mail may be delayed. Tap to allow unrestricted background usage.</string>
 
     <!-- Diagnostics / debug reporting -->
     <string name="settings_diagnostics">Diagnostics</string>

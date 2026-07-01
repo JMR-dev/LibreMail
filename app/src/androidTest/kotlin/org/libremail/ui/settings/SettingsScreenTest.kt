@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.theme.LibreMailTheme
 
@@ -35,7 +36,11 @@ class SettingsScreenTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val settingsRepository = SettingsRepository(context)
         runBlocking { settingsRepository.setFetchPolicy(FetchPolicy.ALWAYS) } // known starting state
-        val viewModel = SettingsViewModel(FakeAccountRepository(), settingsRepository)
+        val viewModel = SettingsViewModel(
+            FakeAccountRepository(),
+            settingsRepository,
+            BatteryOptimizationManager(context),
+        )
 
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {

@@ -55,6 +55,7 @@ private object Keys {
     val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
     val INCLUDE_IN_BACKUP = booleanPreferencesKey("include_in_backup")
     val FETCH_POLICY = stringPreferencesKey("fetch_policy")
+    val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
 }
 
 /**
@@ -82,6 +83,18 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun isNewMailNotificationsEnabled(): Boolean = settings.first().newMailNotifications
 
     suspend fun fetchPolicy(): FetchPolicy = settings.first().fetchPolicy
+
+    /**
+     * One-time onboarding flag: whether the user has already seen/acted on the "unrestricted battery"
+     * opt-in, so onboarding asks at most once (see #49). Not part of [AppSettings] — it is internal
+     * onboarding state, not a user-facing preference. It rides along in Android Backup (the whole
+     * settings DataStore is one file); a restore therefore may skip the prompt on a device that isn't
+     * yet allowlisted — the Advanced Settings battery row is the recovery path there.
+     */
+    suspend fun isBatteryPromptHandled(): Boolean =
+        context.settingsDataStore.data.map { it[Keys.BATTERY_PROMPT_HANDLED] ?: false }.first()
+
+    suspend fun setBatteryPromptHandled(value: Boolean) = put(Keys.BATTERY_PROMPT_HANDLED, value)
 
     suspend fun setDynamicColor(value: Boolean) = put(Keys.DYNAMIC_COLOR, value)
     suspend fun setNewMailNotifications(value: Boolean) = put(Keys.NEW_MAIL_NOTIFICATIONS, value)

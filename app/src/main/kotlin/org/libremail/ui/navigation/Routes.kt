@@ -35,6 +35,12 @@ object Routes {
     const val ONBOARDING_PICKER = "onboarding/picker"
     const val ONBOARDING_MANUAL = "onboarding/manual"
     const val ONBOARDING_ADD_ANOTHER = "onboarding/add_another"
+
+    // Optional final onboarding step: invites the user to allow unrestricted background/battery usage
+    // so push (IMAP IDLE) and periodic sync aren't throttled by Doze (#49). Shown only when the app
+    // isn't already exempt and the user hasn't handled it before; otherwise onboarding skips straight
+    // to the inbox.
+    const val ONBOARDING_BATTERY = "onboarding/battery"
     const val ONBOARDING_APP_PASSWORD_PATTERN = "onboarding/app_password/{$APP_PASSWORD_ARG_PROVIDER}"
     fun onboardingAppPassword(provider: String) = "onboarding/app_password/${Uri.encode(provider)}"
 

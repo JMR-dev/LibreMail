@@ -86,6 +86,7 @@ mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 greenmail = { group = "com.icegreen", name = "greenmail", version.ref = "greenmail" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
+androidx-espresso-intents = { group = "androidx.test.espresso", name = "espresso-intents", version.ref = "espresso" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

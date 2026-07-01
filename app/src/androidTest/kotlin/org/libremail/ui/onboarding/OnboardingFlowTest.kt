@@ -23,7 +23,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.auth.OutlookAuthManager
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Message
+import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.FakeMailRepository
 import org.libremail.ui.FakeMailSyncer
@@ -77,7 +79,14 @@ class OnboardingFlowTest {
     )
 
     private fun setOnboardingContent(accountRepo: FakeAccountRepository, mailRepo: FakeMailRepository) {
-        val onboarding = OnboardingViewModel()
+        // Real collaborators are cheap here: the manager just wraps PowerManager and the repository
+        // reads the on-device settings DataStore. This test drives its own nav graph (without the
+        // battery step), so the onboarding view model's battery decision is inert for this flow.
+        val appContext = composeTestRule.activity.applicationContext
+        val onboarding = OnboardingViewModel(
+            BatteryOptimizationManager(appContext),
+            SettingsRepository(appContext),
+        )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
                 val navController = rememberNavController()

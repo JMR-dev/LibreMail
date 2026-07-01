@@ -36,6 +36,7 @@ import org.libremail.ui.drafts.DraftsScreen
 import org.libremail.ui.mailbox.MailboxScreen
 import org.libremail.ui.navigation.Routes
 import org.libremail.ui.onboarding.AddAnotherAccountScreen
+import org.libremail.ui.onboarding.BatteryOptimizationScreen
 import org.libremail.ui.onboarding.OnboardingViewModel
 import org.libremail.ui.onboarding.OnboardingWelcomeScreen
 import org.libremail.ui.outbox.OutboxScreen
@@ -310,25 +311,54 @@ private fun NavGraphBuilder.onboardingGraph(navController: NavHostController) {
                 onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
             )
         }
-        composable(Routes.ONBOARDING_ADD_ANOTHER) { entry ->
-            val onboarding = onboardingViewModel(navController, entry)
-            AddAnotherAccountScreen(
-                onAddAnother = {
-                    // Return to a fresh picker, clearing the prompt and the prior setup screen.
-                    navController.navigate(Routes.ONBOARDING_PICKER) {
-                        popUpTo(Routes.ONBOARDING_PICKER) { inclusive = true }
-                    }
-                },
-                onFinish = {
-                    val firstId = onboarding.firstAddedAccountId
-                    val dest = if (firstId != null) Routes.mailboxForAccount(firstId) else Routes.MAILBOX
-                    navController.navigate(dest) {
-                        // Leave onboarding entirely; the mailbox becomes the new back-stack root.
-                        popUpTo(Routes.ONBOARDING) { inclusive = true }
-                    }
-                },
-            )
-        }
+        onboardingFinishDestinations(navController)
+    }
+}
+
+/**
+ * The tail of onboarding: the "add another?" prompt and the optional battery opt-in step. Split out of
+ * [onboardingGraph] so each stays a readable length; both share the graph-scoped [OnboardingViewModel].
+ */
+private fun NavGraphBuilder.onboardingFinishDestinations(navController: NavHostController) {
+    composable(Routes.ONBOARDING_ADD_ANOTHER) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        val batteryPromptNeeded by onboarding.batteryPromptNeeded.collectAsStateWithLifecycle()
+        AddAnotherAccountScreen(
+            onAddAnother = {
+                // Return to a fresh picker, clearing the prompt and the prior setup screen.
+                navController.navigate(Routes.ONBOARDING_PICKER) {
+                    popUpTo(Routes.ONBOARDING_PICKER) { inclusive = true }
+                }
+            },
+            onFinish = {
+                // Offer the battery opt-in as a final step when it's needed; otherwise go straight to
+                // the inbox. A still-undecided (null) decision fails open to finishing.
+                if (batteryPromptNeeded == true) {
+                    navController.navigate(Routes.ONBOARDING_BATTERY)
+                } else {
+                    navController.finishOnboarding(onboarding.firstAddedAccountId)
+                }
+            },
+        )
+    }
+    composable(Routes.ONBOARDING_BATTERY) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        BatteryOptimizationScreen(
+            viewModel = onboarding,
+            onFinish = {
+                onboarding.markBatteryPromptHandled()
+                navController.finishOnboarding(onboarding.firstAddedAccountId)
+            },
+        )
+    }
+}
+
+/** Leaves onboarding for the inbox — the first account added this session, or the unfiltered mailbox. */
+private fun NavController.finishOnboarding(firstAccountId: String?) {
+    val dest = if (firstAccountId != null) Routes.mailboxForAccount(firstAccountId) else Routes.MAILBOX
+    navigate(dest) {
+        // Leave onboarding entirely; the mailbox becomes the new back-stack root.
+        popUpTo(Routes.ONBOARDING) { inclusive = true }
     }
 }
 
