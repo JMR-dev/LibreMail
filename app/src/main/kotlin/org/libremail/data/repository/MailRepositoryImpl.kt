@@ -342,6 +342,7 @@ class MailRepositoryImpl @Inject constructor(
                             senderEmail = it.senderEmail,
                             subject = it.subject,
                             timestampMillis = it.timestampMillis,
+                            uid = it.uid,
                         )
                     }
                 }

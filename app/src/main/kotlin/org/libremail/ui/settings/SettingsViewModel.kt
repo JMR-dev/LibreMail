@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.push.BatteryOptimizationManager
@@ -25,6 +26,7 @@ class SettingsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val settingsRepository: SettingsRepository,
     private val batteryOptimizationManager: BatteryOptimizationManager,
+    private val syncScheduler: SyncScheduler,
 ) : ViewModel() {
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
@@ -59,6 +61,17 @@ class SettingsViewModel @Inject constructor(
     fun setEncryptCache(value: Boolean) = update { settingsRepository.setEncryptCache(value) }
     fun setIncludeInBackup(value: Boolean) = update { settingsRepository.setIncludeInBackup(value) }
     fun setFetchPolicy(value: FetchPolicy) = update { settingsRepository.setFetchPolicy(value) }
+
+    /** Global retention defaults; kick a prune so a newly-tightened limit takes effect promptly (#13). */
+    fun setRetentionCount(value: Int) = update {
+        settingsRepository.setRetentionCount(value)
+        syncScheduler.pruneNow()
+    }
+
+    fun setRetentionMonths(value: Int) = update {
+        settingsRepository.setRetentionMonths(value)
+        syncScheduler.pruneNow()
+    }
 
     private inline fun update(crossinline action: suspend () -> Unit) {
         viewModelScope.launch { action() }

@@ -96,6 +96,9 @@ android {
         buildConfig = true
     }
 
+    // Ship the exported Room schemas as androidTest assets so MigrationTestHelper can load them.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     packaging {
         resources {
             // Angus Mail / Jakarta Activation (added later) ship duplicate META-INF entries.
@@ -200,4 +203,5 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.intents)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.room.testing)
 }

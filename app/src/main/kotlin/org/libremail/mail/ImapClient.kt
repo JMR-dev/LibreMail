@@ -134,6 +134,72 @@ class ImapClient @Inject constructor() {
             }
         }
 
+    /**
+     * Fetches up to [limit] headers of [folder] immediately older than [beforeUid] (i.e. with a
+     * server UID strictly less than it), newest-first — the backwards page used by the full-history
+     * backfill (issue #12). Pass [Long.MAX_VALUE] to start from the newest message.
+     *
+     * Bounded in both memory and network cost: the boundary message number is located with a
+     * binary search over message numbers by UID (UIDs increase monotonically with message number),
+     * costing O(log n) tiny `UID FETCH` round trips, and only the [limit]-sized batch is materialized.
+     * Returns empty when nothing older exists, which the caller treats as "folder fully backfilled".
+     */
+    suspend fun fetchOlderThan(
+        params: ImapConnectionParams,
+        folder: String,
+        beforeUid: Long,
+        limit: Int,
+    ): List<FetchedMessage> = withContext(Dispatchers.IO) {
+        withStore(params) { store ->
+            val mailbox = store.getFolder(folder)
+            mailbox.open(Folder.READ_ONLY)
+            try {
+                val total = mailbox.messageCount
+                if (total == 0 || beforeUid <= 1L) return@withStore emptyList()
+                val uidFolder = mailbox as UIDFolder
+                // Highest message number whose UID < beforeUid (0 when nothing is older).
+                val boundary = highestMessageNumberBelowUid(mailbox, uidFolder, total, beforeUid)
+                if (boundary == 0) return@withStore emptyList()
+
+                val start = maxOf(1, boundary - limit + 1)
+                val messages = mailbox.getMessages(start, boundary)
+                mailbox.fetch(
+                    messages,
+                    FetchProfile().apply {
+                        add(FetchProfile.Item.ENVELOPE)
+                        add(FetchProfile.Item.FLAGS)
+                        add(UIDFolder.FetchProfileItem.UID)
+                    },
+                )
+                messages.reversed().map { it.toFetchedMessage(uidFolder) }
+            } finally {
+                runCatching { mailbox.close(false) }
+            }
+        }
+    }
+
+    /**
+     * Binary-searches message numbers `1..total` for the highest one whose UID is `< beforeUid`.
+     * Robust to expunges (it reads live UIDs), so it works even if the message that had exactly
+     * [beforeUid] has since been removed. Returns 0 when every message's UID is `>= beforeUid`.
+     */
+    private fun highestMessageNumberBelowUid(mailbox: Folder, uidFolder: UIDFolder, total: Int, beforeUid: Long): Int {
+        var lo = 1
+        var hi = total
+        var boundary = 0
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            val midUid = uidFolder.getUID(mailbox.getMessage(mid))
+            if (midUid < beforeUid) {
+                boundary = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return boundary
+    }
+
     /** Runs an IMAP SEARCH over [folder] (subject/from/body) and returns matching headers. */
     suspend fun search(params: ImapConnectionParams, folder: String, query: String, limit: Int): List<FetchedMessage> =
         withContext(Dispatchers.IO) {

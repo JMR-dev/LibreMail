@@ -8,6 +8,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -17,6 +18,7 @@ import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.FetchPolicy
+import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.MailRepository
@@ -87,7 +89,10 @@ class MailSyncer @Inject constructor(
     private suspend fun syncFolderHeaders(account: Account, folder: String, notify: Boolean): Result<Int> =
         runCatching {
             val params = connectionFactory.imapParamsFor(account)
-            val fetched = imapClient.fetchRecent(params, folder, FETCH_LIMIT) // cancellable network I/O
+            // Never fetch more of the recent window than device-only retention (#13) would keep. Without
+            // this, a count limit BELOW the window would make foreground sync re-download the same rows
+            // the pruner just trimmed, on every sync — an endless re-download/re-prune fight.
+            val fetched = imapClient.fetchRecent(params, folder, recentWindowFor(account)) // cancellable network I/O
             val entities = fetched.map { it.toEntity(account.id, folder) }
 
             // Persist and notify atomically with respect to cancellation: an IDLE renewal that cancels
@@ -102,6 +107,8 @@ class MailSyncer @Inject constructor(
                 }
 
                 if (entities.isEmpty()) {
+                    // An empty recent window means the server folder itself is empty, so nothing (not
+                    // even backfilled history) should remain cached for it.
                     messageDao.deleteSyncedByAccountFolder(account.id, folder)
                 } else {
                     val ids = entities.map { it.id }
@@ -116,9 +123,14 @@ class MailSyncer @Inject constructor(
                             senderEmail = it.senderEmail,
                             subject = it.subject,
                             timestampMillis = it.timestampMillis,
+                            uid = it.uid,
                         )
                     }
-                    messageDao.deleteSyncedNotIn(account.id, folder, ids)
+                    // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older
+                    // history paged in by the background backfill (issue #12) survives each foreground sync
+                    // instead of being wiped by a whole-folder "not in the recent 50" delete.
+                    val minWindowUid = entities.minOf { it.uid }
+                    messageDao.deleteSyncedInWindowNotIn(account.id, folder, minWindowUid, ids)
                 }
 
                 val shouldNotify = notify &&
@@ -131,6 +143,23 @@ class MailSyncer @Inject constructor(
             }
             fetched.size
         }
+
+    /**
+     * The number of recent headers to fetch: the standard [FETCH_LIMIT], but capped by the account's
+     * effective device-only retention count so foreground sync never re-downloads rows the pruner
+     * would immediately trim. Age-only or unlimited retention leaves the full window in place.
+     */
+    private suspend fun recentWindowFor(account: Account): Int {
+        val accountSettings = accountSettingsRepository.get(account.id)
+        val global = settingsRepository.settings.first()
+        val policy = RetentionPolicy.resolve(
+            accountCount = accountSettings.retentionCount,
+            accountMonths = accountSettings.retentionMonths,
+            defaultCount = global.retentionCount,
+            defaultMonths = global.retentionMonths,
+        )
+        return policy.countLimit?.let { minOf(FETCH_LIMIT, it) } ?: FETCH_LIMIT
+    }
 
     /**
      * Aggressively pre-caches each not-yet-fetched message's full content (body + attachments) per the
@@ -159,6 +188,13 @@ class MailSyncer @Inject constructor(
 
     private companion object {
         const val INBOX = "INBOX"
+
+        /**
+         * Size of the "recent window" each foreground sync / pull-to-refresh fetches (newest N headers).
+         * This is no longer the history cap — the background backfill ([MailBackfiller], issue #12)
+         * pages in everything older; foreground sync just keeps this recent window fresh and reconciles
+         * deletions within it.
+         */
         const val FETCH_LIMIT = 50
     }
 }

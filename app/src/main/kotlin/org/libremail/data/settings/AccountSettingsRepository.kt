@@ -40,6 +40,15 @@ class AccountSettingsRepository @Inject constructor(private val dao: AccountSett
         it.copy(notificationsEnabled = enabled)
     }
 
+    /** Per-account device-only retention overrides (null = inherit the global default; 0 = keep everything). */
+    suspend fun setRetentionCount(accountId: String, count: Int?) = update(accountId) {
+        it.copy(retentionCount = count?.coerceAtLeast(0))
+    }
+
+    suspend fun setRetentionMonths(accountId: String, months: Int?) = update(accountId) {
+        it.copy(retentionMonths = months?.coerceAtLeast(0))
+    }
+
     private suspend inline fun update(accountId: String, transform: (AccountSettings) -> AccountSettings) {
         dao.upsert(transform(get(accountId)).toEntity())
     }

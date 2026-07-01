@@ -216,3 +216,35 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         )
     }
 }
+
+/**
+ * v11 -> v12: full-history backfill + device-only retention (issues #12/#13; preserves existing data).
+ *  - `messages`: add the materialized `uid` column (`DEFAULT 0`, matching the entity's
+ *    `@ColumnInfo(defaultValue = "0")`) and backfill it from the numeric tail of the existing
+ *    "accountId:folder:uid" id. `rtrim(id, '0123456789')` strips the trailing digits, leaving the
+ *    prefix up to and including the final ':'; the remainder is the UID. Non-numeric tails cast to 0
+ *    and are refreshed to the real UID on the next sync.
+ *  - `account_settings`: add nullable `retentionCount` / `retentionMonths` overrides (NULL = inherit
+ *    the global default), declared without SQL defaults to match the entity's nullable columns.
+ *  - add the `backfill_progress` table tracking each folder's paging boundary so the backfill resumes
+ *    after process death / network loss.
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `uid` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL(
+            "UPDATE `messages` SET `uid` = " +
+                "CAST(substr(`id`, length(rtrim(`id`, '0123456789')) + 1) AS INTEGER)",
+        )
+
+        db.execSQL("ALTER TABLE `account_settings` ADD COLUMN `retentionCount` INTEGER")
+        db.execSQL("ALTER TABLE `account_settings` ADD COLUMN `retentionMonths` INTEGER")
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `backfill_progress` (" +
+                "`accountId` TEXT NOT NULL, `folder` TEXT NOT NULL, " +
+                "`nextBeforeUid` INTEGER NOT NULL, `complete` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`accountId`, `folder`))",
+        )
+    }
+}

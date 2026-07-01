@@ -28,4 +28,11 @@ data class MessageEntity(
     val inInbox: Boolean = true,
     /** True once the body has been fetched from the server (distinguishes "not fetched" from "empty body"). */
     val bodyFetched: Boolean = false,
+    /**
+     * The server IMAP UID as a number (also embedded in [id]). Materialized as a column so full-history
+     * backfill can page by "lowest cached UID" and foreground sync can reconcile only the recent UID
+     * window without deleting older, backfilled history. 0 for rows migrated before this column existed
+     * (refreshed to the real UID on the next sync).
+     */
+    @ColumnInfo(defaultValue = "0") val uid: Long = 0L,
 )
