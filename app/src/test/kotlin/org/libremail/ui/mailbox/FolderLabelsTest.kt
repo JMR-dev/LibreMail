@@ -19,15 +19,14 @@ class FolderLabelsTest {
         specialUse: Boolean = false,
     ) = Folder("acct", fullName, displayName, role, selectable = true, specialUse = specialUse)
 
-    private fun account(email: String, imapHost: String, authType: AuthType = AuthType.PASSWORD_IMAP) =
-        Account(
-            id = "acct",
-            email = email,
-            displayName = email,
-            authType = authType,
-            imap = ServerConfig(imapHost, 993, MailSecurity.SSL_TLS),
-            smtp = ServerConfig("smtp", 587, MailSecurity.STARTTLS),
-        )
+    private fun account(email: String, imapHost: String, authType: AuthType = AuthType.PASSWORD_IMAP) = Account(
+        id = "acct",
+        email = email,
+        displayName = email,
+        authType = authType,
+        imap = ServerConfig(imapHost, 993, MailSecurity.SSL_TLS),
+        smtp = ServerConfig("smtp", 587, MailSecurity.STARTTLS),
+    )
 
     /** Builds base labels the way the drawer does: the friendly role name, else the raw display name. */
     private fun baseLabelsOf(folders: List<Folder>, friendly: Map<FolderRole, String>) =
