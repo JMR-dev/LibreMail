@@ -27,9 +27,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
 import org.libremail.data.settings.FetchPolicy
@@ -48,6 +51,11 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val advancedExpanded by viewModel.advancedExpanded.collectAsStateWithLifecycle()
+    val batteryUnrestricted by viewModel.batteryUnrestricted.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Re-read the battery status on resume so it reflects any change made in system settings.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshBatteryStatus() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
@@ -138,6 +146,17 @@ fun SettingsScreen(
                         title = stringResource(R.string.settings_adv_idle),
                         checked = settings.pushIdle,
                         onCheckedChange = viewModel::setPushIdle,
+                    )
+                    ClickRow(
+                        title = stringResource(R.string.settings_adv_battery),
+                        subtitle = stringResource(
+                            if (batteryUnrestricted) {
+                                R.string.settings_adv_battery_unrestricted
+                            } else {
+                                R.string.settings_adv_battery_optimized
+                            },
+                        ),
+                        onClick = { runCatching { context.startActivity(viewModel.batterySettingsIntent()) } },
                     )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_starttls),

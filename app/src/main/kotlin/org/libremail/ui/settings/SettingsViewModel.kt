@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.settings
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -16,12 +17,14 @@ import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.push.BatteryOptimizationManager
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val settingsRepository: SettingsRepository,
+    private val batteryOptimizationManager: BatteryOptimizationManager,
 ) : ViewModel() {
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
@@ -33,7 +36,20 @@ class SettingsViewModel @Inject constructor(
     private val _advancedExpanded = MutableStateFlow(false)
     val advancedExpanded: StateFlow<Boolean> = _advancedExpanded.asStateFlow()
 
+    private val _batteryUnrestricted = MutableStateFlow(batteryOptimizationManager.isIgnoringBatteryOptimizations())
+
+    /** Whether this app is exempt from battery optimization ("Unrestricted"). */
+    val batteryUnrestricted: StateFlow<Boolean> = _batteryUnrestricted.asStateFlow()
+
     fun toggleAdvanced() = _advancedExpanded.update { !it }
+
+    /** Re-read the battery-optimization status; call when the screen resumes (e.g. back from Settings). */
+    fun refreshBatteryStatus() {
+        _batteryUnrestricted.value = batteryOptimizationManager.isIgnoringBatteryOptimizations()
+    }
+
+    /** Intent to the system screen where the user flips this app to "Unrestricted". */
+    fun batterySettingsIntent(): Intent = batteryOptimizationManager.settingsIntent()
 
     fun setDynamicColor(value: Boolean) = update { settingsRepository.setDynamicColor(value) }
     fun setNewMailNotifications(value: Boolean) = update { settingsRepository.setNewMailNotifications(value) }
