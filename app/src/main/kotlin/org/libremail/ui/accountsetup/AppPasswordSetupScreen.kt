@@ -19,13 +19,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -36,27 +38,46 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import org.libremail.R
+import org.libremail.domain.model.MailProvider
 import org.libremail.domain.model.MailSecurity
+import org.libremail.domain.model.ServerConfig
 
+/**
+ * Guided app-password setup for the preset vendors (Gmail/Yahoo/iCloud). Explains what an app
+ * password is, warns to keep it safe, links out to the provider's app-password page, and collects
+ * only an email + app password (the servers come from the [MailProvider] preset). Verifies and
+ * persists via the same repository path as manual setup, surfacing failures as an inline snackbar.
+ *
+ * @param onAccountAdded invoked with the new account id after a successful add.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManualSetupScreen(
+fun AppPasswordSetupScreen(
     onBack: () -> Unit,
     onAccountAdded: (String) -> Unit,
-    viewModel: ManualSetupViewModel = hiltViewModel(),
+    viewModel: AppPasswordViewModel = hiltViewModel(),
 ) {
     val form by viewModel.form.collectAsStateWithLifecycle()
+    val provider = viewModel.provider
     val snackbarHostState = remember { SnackbarHostState() }
+    val uriHandler = LocalUriHandler.current
+    val scope = rememberCoroutineScope()
+    // Resolved up front so the failure handler (a non-composable lambda) can use it.
+    val openFailedMessage = stringResource(R.string.app_password_open_failed)
 
     LaunchedEffect(form.status, form.addedAccountId) {
         if (form.status == SetupStatus.DONE) {
@@ -75,7 +96,12 @@ fun ManualSetupScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.manual_setup_title)) },
+                title = {
+                    Text(
+                        provider?.let { stringResource(R.string.app_password_title, it.displayName) }
+                            ?: stringResource(R.string.title_account_setup),
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -88,6 +114,14 @@ fun ManualSetupScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
+        if (provider == null) {
+            // Defensive: onboarding only ever routes valid provider keys here.
+            Text(
+                text = stringResource(R.string.app_password_unknown_provider),
+                modifier = Modifier.padding(padding).padding(24.dp),
+            )
+            return@Scaffold
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -95,82 +129,61 @@ fun ManualSetupScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
         ) {
+            InfoCard(
+                icon = Icons.Filled.Info,
+                text = stringResource(providerIntro(provider)),
+            )
+            Spacer(Modifier.height(8.dp))
+            InfoCard(
+                icon = Icons.Filled.Info,
+                text = stringResource(R.string.app_password_what_is),
+            )
+            Spacer(Modifier.height(8.dp))
+            InfoCard(
+                icon = Icons.Filled.Warning,
+                text = stringResource(R.string.app_password_warning),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = {
+                    // openUri throws if no browser/handler is installed; surface it instead of crashing.
+                    runCatching { uriHandler.openUri(provider.appPasswordHelpUrl) }
+                        .onFailure { scope.launch { snackbarHostState.showSnackbar(openFailedMessage) } }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.app_password_open_page, provider.displayName))
+            }
+
+            Spacer(Modifier.height(20.dp))
             OutlinedTextField(
                 value = form.email,
                 onValueChange = viewModel::onEmail,
-                label = { Text(stringResource(R.string.manual_email)) },
+                label = { Text(stringResource(R.string.app_password_email)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
-                value = form.password,
-                onValueChange = viewModel::onPassword,
-                label = { Text(stringResource(R.string.manual_password)) },
+                value = form.appPassword,
+                onValueChange = viewModel::onAppPassword,
+                label = { Text(stringResource(R.string.app_password_field)) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(20.dp))
-            SectionLabel(stringResource(R.string.manual_incoming))
-            OutlinedTextField(
-                value = form.imapHost,
-                onValueChange = viewModel::onImapHost,
-                label = { Text(stringResource(R.string.manual_imap_server)) },
-                placeholder = { Text("imap.example.com") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(Modifier.height(16.dp))
-            SectionLabel(stringResource(R.string.manual_outgoing))
-            OutlinedTextField(
-                value = form.smtpHost,
-                onValueChange = viewModel::onSmtpHost,
-                label = { Text(stringResource(R.string.manual_smtp_server)) },
-                placeholder = { Text("smtp.example.com") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
             Spacer(Modifier.height(8.dp))
-            AdvancedToggle(expanded = form.advancedExpanded, onToggle = viewModel::toggleAdvanced)
-            AnimatedVisibility(visible = form.advancedExpanded) {
-                Column {
-                    OutlinedTextField(
-                        value = form.imapPort,
-                        onValueChange = viewModel::onImapPort,
-                        label = { Text(stringResource(R.string.manual_imap_port)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    SecuritySelector(
-                        stringResource(R.string.manual_imap_security),
-                        form.imapSecurity,
-                        viewModel::onImapSecurity,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = form.smtpPort,
-                        onValueChange = viewModel::onSmtpPort,
-                        label = { Text(stringResource(R.string.manual_smtp_port)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    SecuritySelector(
-                        stringResource(R.string.manual_smtp_security),
-                        form.smtpSecurity,
-                        viewModel::onSmtpSecurity,
-                    )
-                }
-            }
+            val account = remember(provider) { provider.createAccount("") }
+            AdvancedServers(
+                expanded = form.advancedExpanded,
+                onToggle = viewModel::toggleAdvanced,
+                imap = account.imap,
+                smtp = account.smtp,
+            )
 
             Spacer(Modifier.height(24.dp))
             Button(
@@ -182,51 +195,35 @@ fun ManualSetupScreen(
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
                 }
-                Text(stringResource(R.string.manual_test_and_add))
+                Text(stringResource(R.string.app_password_test_and_add))
             }
         }
     }
 }
 
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(vertical = 4.dp),
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SecuritySelector(label: String, selected: MailSecurity, onSelect: (MailSecurity) -> Unit) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // NONE (no transport security) is deliberately not offered in the UI: selecting it would
-            // send the account password/token in cleartext. It stays in the enum only for local
-            // test servers, which are configured in tests rather than through this screen.
-            MailSecurity.entries.filter { it != MailSecurity.NONE }.forEach { security ->
-                FilterChip(
-                    selected = selected == security,
-                    onClick = { onSelect(security) },
-                    label = { Text(security.label()) },
-                )
-            }
-        }
+private fun InfoCard(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp).padding(top = 2.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
+/** A collapsible, read-only view of the preset servers for users who want to confirm them. */
 @Composable
-private fun AdvancedToggle(expanded: Boolean, onToggle: () -> Unit) {
+private fun AdvancedServers(expanded: Boolean, onToggle: () -> Unit, imap: ServerConfig, smtp: ServerConfig) {
     Row(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            stringResource(R.string.settings_advanced),
+            stringResource(R.string.app_password_show_servers),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.weight(1f),
         )
@@ -236,6 +233,26 @@ private fun AdvancedToggle(expanded: Boolean, onToggle: () -> Unit) {
             modifier = Modifier.rotate(if (expanded) 180f else 0f),
         )
     }
+    AnimatedVisibility(visible = expanded) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                stringResource(R.string.app_password_server_imap, imap.host, imap.port, imap.security.label()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(R.string.app_password_server_smtp, smtp.host, smtp.port, smtp.security.label()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun providerIntro(provider: MailProvider): Int = when (provider) {
+    MailProvider.GMAIL -> R.string.app_password_intro_gmail
+    MailProvider.YAHOO -> R.string.app_password_intro_yahoo
+    MailProvider.ICLOUD -> R.string.app_password_intro_icloud
 }
 
 private fun MailSecurity.label(): String = when (this) {
