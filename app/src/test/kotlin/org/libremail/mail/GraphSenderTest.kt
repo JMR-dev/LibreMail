@@ -35,6 +35,28 @@ class GraphSenderTest {
     }
 
     @Test
+    fun `payload uses the HTML content type when a formatted body is present`() {
+        val message = OutgoingMessage(
+            accountId = "outlook:me@example.com",
+            to = "a@x.com",
+            subject = "Hi",
+            body = "Hello world",
+            bodyHtml = "<p>Hello <b>world</b></p>",
+        )
+        val body = JSONObject(buildSendMailPayload(message, emptyList()))
+            .getJSONObject("message").getJSONObject("body")
+        assertEquals("HTML", body.getString("contentType"))
+        assertEquals("<p>Hello <b>world</b></p>", body.getString("content"))
+    }
+
+    @Test
+    fun `payload falls back to plain text when there is no HTML body`() {
+        val body = JSONObject(buildSendMailPayload(message(to = "a@x.com"), emptyList()))
+            .getJSONObject("message").getJSONObject("body")
+        assertEquals("Text", body.getString("contentType"))
+    }
+
+    @Test
     fun `recipients parse RFC822 display names into bare addresses`() {
         val json = JSONObject(
             buildSendMailPayload(

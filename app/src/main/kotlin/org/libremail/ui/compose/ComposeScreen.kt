@@ -145,6 +145,7 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     label = { Text(stringResource(R.string.compose_to)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (state.suggestions.isNotEmpty()) {
@@ -158,6 +159,7 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     label = { Text(stringResource(R.string.compose_cc)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -175,6 +177,7 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     onValueChange = viewModel::onSubjectChange,
                     label = { Text(stringResource(R.string.compose_subject)) },
                     singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 AttachmentsSection(
@@ -183,10 +186,11 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     onRemove = viewModel::removeAttachment,
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.body,
-                    onValueChange = viewModel::onBodyChange,
-                    label = { Text(stringResource(R.string.compose_body)) },
+                RichTextBodyField(
+                    body = state.body,
+                    bodyHtml = state.bodyHtml,
+                    onBodyChange = viewModel::onBodyChange,
+                    label = stringResource(R.string.compose_body),
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
             }

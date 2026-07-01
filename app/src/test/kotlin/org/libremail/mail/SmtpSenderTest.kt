@@ -63,7 +63,7 @@ class SmtpSenderTest {
     }
 
     @Test
-    fun `send delivers to bcc recipients without leaking them in the headers`() = runTest {
+    fun `a formatted message is sent as multipart alternative with both parts`() = runTest {
         val params = SmtpParams(
             host = "127.0.0.1",
             port = greenMail.smtp.port,
@@ -79,18 +79,55 @@ class SmtpSenderTest {
             message = OutgoingMessage(
                 accountId = "x",
                 to = "bob@example.org",
-                bcc = "eve@example.org",
-                subject = "FYI",
-                body = "Blind copy test.",
+                subject = "Rich",
+                body = "Hello world",
+                bodyHtml = "<p>Hello <b>world</b></p>",
             ),
         )
 
-        // Both the To and Bcc recipients are in the SMTP envelope, so GreenMail delivers two copies.
-        greenMail.waitForIncomingEmail(2)
-        val received = greenMail.receivedMessages
-        assertEquals(2, received.size)
-        // Jakarta Mail strips the Bcc header before transmission, so it must not appear on the wire.
-        received.forEach { assertNull(it.getHeader("Bcc")) }
+        greenMail.waitForIncomingEmail(1)
+        val received = greenMail.receivedMessages.single()
+        assertTrue(received.contentType.contains("multipart/alternative", ignoreCase = true), received.contentType)
+        val raw = GreenMailUtil.getWholeMessage(received)
+        assertTrue(raw.contains("text/plain", ignoreCase = true), "missing text/plain")
+        assertTrue(raw.contains("text/html", ignoreCase = true), "missing text/html")
+        assertTrue(raw.contains("<b>world</b>"), "missing html body")
+        assertTrue(raw.contains("Hello world"), "missing plaintext fallback")
+    }
+
+    @Test
+    fun `a formatted message with an attachment nests the alternative inside mixed`() = runTest {
+        val file = File.createTempFile("libremail-note", ".txt").apply { writeText("attached note") }
+        val params = SmtpParams(
+            host = "127.0.0.1",
+            port = greenMail.smtp.port,
+            security = MailSecurity.NONE,
+            username = "sender@example.org",
+            secret = "secret",
+            useXoauth2 = false,
+        )
+
+        sender.send(
+            params = params,
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                subject = "Rich + file",
+                body = "Body",
+                bodyHtml = "<p><b>Body</b></p>",
+            ),
+            attachments = listOf(file),
+        )
+
+        greenMail.waitForIncomingEmail(1)
+        val received = greenMail.receivedMessages.single()
+        assertTrue(received.contentType.contains("multipart/mixed", ignoreCase = true), received.contentType)
+        val raw = GreenMailUtil.getWholeMessage(received)
+        assertTrue(raw.contains("multipart/alternative", ignoreCase = true), "missing alternative part")
+        assertTrue(raw.contains(file.name), "missing attachment")
+        assertTrue(raw.contains("<b>Body</b>"), "missing html body")
+        file.delete()
     }
 
     @Test
@@ -124,5 +161,36 @@ class SmtpSenderTest {
         assertTrue(raw.contains("See the attached report."))
         assertTrue(raw.contains(file.name))
         file.delete()
+    }
+
+    @Test
+    fun `send delivers to bcc recipients without leaking them in the headers`() = runTest {
+        val params = SmtpParams(
+            host = "127.0.0.1",
+            port = greenMail.smtp.port,
+            security = MailSecurity.NONE,
+            username = "sender@example.org",
+            secret = "secret",
+            useXoauth2 = false,
+        )
+
+        sender.send(
+            params = params,
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                bcc = "eve@example.org",
+                subject = "FYI",
+                body = "Blind copy test.",
+            ),
+        )
+
+        // Both the To and Bcc recipients are in the SMTP envelope, so GreenMail delivers two copies.
+        greenMail.waitForIncomingEmail(2)
+        val received = greenMail.receivedMessages
+        assertEquals(2, received.size)
+        // Jakarta Mail strips the Bcc header before transmission, so it must not appear on the wire.
+        received.forEach { assertNull(it.getHeader("Bcc")) }
     }
 }

@@ -163,6 +163,7 @@ internal fun DraftEntity.toDomain(): Draft = Draft(
     subject = subject,
     body = body,
     updatedAt = updatedAt,
+    bodyHtml = bodyHtml,
     attachments = attachments.toOutgoingAttachments(),
 )
 
@@ -176,6 +177,7 @@ internal fun Draft.toEntity(): DraftEntity = DraftEntity(
     body = body,
     updatedAt = updatedAt,
     attachments = attachments.toJson(),
+    bodyHtml = bodyHtml,
 )
 
 /** Serializes draft attachments as a JSON array of {uri, name} objects ("" when empty). */
@@ -204,6 +206,7 @@ internal fun OutboxEntity.toDomain(): OutboxMessage = OutboxMessage(
     body = body,
     createdAt = createdAt,
     lastError = lastError,
+    bodyHtml = bodyHtml,
 )
 
 private fun String.toMailSecurity(): MailSecurity = runCatching {

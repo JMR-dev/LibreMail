@@ -57,6 +57,7 @@ class SendWorker @AssistedInject constructor(
                     bcc = entity.bccAddresses,
                     subject = entity.subject,
                     body = entity.body,
+                    bodyHtml = entity.bodyHtml,
                 )
                 val files = orderedAttachments(attachmentDir)
                 if (account.authType == AuthType.OAUTH_OUTLOOK) {

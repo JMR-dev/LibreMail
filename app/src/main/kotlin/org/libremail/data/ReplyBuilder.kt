@@ -2,40 +2,55 @@
 package org.libremail.data
 
 import org.libremail.domain.model.ReplyMode
+import org.libremail.mail.HtmlToText
 import org.libremail.mail.ReplyContext
+import org.libremail.richtext.RichTextContent
+import org.libremail.richtext.RichTextHtml
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** The pre-filled compose fields for a reply/forward (everything else the user fills in). */
-data class ReplyContent(val to: String, val cc: String, val subject: String, val body: String)
+/**
+ * The pre-filled compose fields for a reply/forward. [body] is the plaintext form; [bodyHtml] is the
+ * matching HTML (the quote rendered as a `<blockquote>`), so the reply can go out as
+ * `multipart/alternative` without the user having to re-format the quote.
+ */
+data class ReplyContent(val to: String, val cc: String, val subject: String, val body: String, val bodyHtml: String)
 
 /**
  * Pure builder that turns an original message ([ReplyContext]) into the pre-filled compose fields for a
  * reply, reply-all, or forward. Kept free of Android/IMAP dependencies so it can be unit-tested directly.
+ *
+ * HTML originals are quoted by first reducing them to readable text (via [HtmlToText]) and then
+ * quoting that — never by prefixing "> " onto raw tags — so the quote can never corrupt the markup.
+ * The plaintext quote's "> " / attribution structure is then rendered to a clean `<blockquote>` for
+ * the HTML alternative.
  */
 object ReplyBuilder {
 
     fun build(context: ReplyContext, mode: ReplyMode, selfEmail: String): ReplyContent = when (mode) {
-        ReplyMode.REPLY -> ReplyContent(
-            to = context.fromEmail,
-            cc = "",
-            subject = prefixedSubject(context.subject, "Re:"),
-            body = quotedReply(context),
-        )
+        ReplyMode.REPLY -> reply(context, cc = "")
+        ReplyMode.REPLY_ALL -> reply(context, cc = replyAllCc(context, selfEmail).joinToString(", "))
+        ReplyMode.FORWARD -> {
+            val body = forwardedBody(context)
+            ReplyContent(
+                to = "",
+                cc = "",
+                subject = prefixedSubject(context.subject, "Fwd:"),
+                body = body,
+                bodyHtml = htmlOf(body),
+            )
+        }
+    }
 
-        ReplyMode.REPLY_ALL -> ReplyContent(
+    private fun reply(context: ReplyContext, cc: String): ReplyContent {
+        val body = quotedReply(context)
+        return ReplyContent(
             to = context.fromEmail,
-            cc = replyAllCc(context, selfEmail).joinToString(", "),
+            cc = cc,
             subject = prefixedSubject(context.subject, "Re:"),
-            body = quotedReply(context),
-        )
-
-        ReplyMode.FORWARD -> ReplyContent(
-            to = "",
-            cc = "",
-            subject = prefixedSubject(context.subject, "Fwd:"),
-            body = forwardedBody(context),
+            body = body,
+            bodyHtml = htmlOf(body),
         )
     }
 
@@ -68,15 +83,12 @@ object ReplyBuilder {
         append(bodyText(context))
     }
 
-    /** The original body as plain text (HTML stripped), suitable for quoting in a plain-text compose. */
-    private fun bodyText(context: ReplyContext): String = if (context.isHtml) htmlToText(context.body) else context.body
+    /** The original body as plain text (HTML stripped), suitable for quoting in a compose field. */
+    private fun bodyText(context: ReplyContext): String =
+        if (context.isHtml) HtmlToText.convert(context.body) else context.body
 
-    private fun htmlToText(html: String): String = html
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)</p\\s*>"), "\n\n")
-        .replace(Regex("<[^>]*>"), "")
-        .replace(Regex("[ \\t]+"), " ")
-        .trim()
+    /** Renders the plaintext quote (with its "> " markers) to the equivalent clean HTML. */
+    private fun htmlOf(body: String): String = RichTextHtml.toHtml(RichTextContent(body))
 
     private fun formatDate(millis: Long): String =
         SimpleDateFormat("MMM d, yyyy, h:mm a", Locale.US).format(Date(millis))

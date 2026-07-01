@@ -105,4 +105,26 @@ class ReplyBuilderTest {
         assertTrue(result.body.contains("Hello"), "body=${result.body}")
         assertTrue(result.body.contains("there"), "body=${result.body}")
     }
+
+    @Test
+    fun `html original is quoted into a blockquote without leaking original tags`() {
+        val result = ReplyBuilder.build(
+            context(body = "<p>Hello <b>there</b></p>", isHtml = true),
+            ReplyMode.REPLY,
+            "me@example.org",
+        )
+
+        // The HTML alternative wraps the (tag-stripped) original in a blockquote — never raw tags.
+        assertTrue(result.bodyHtml.contains("<blockquote>"), "html=${result.bodyHtml}")
+        assertTrue(result.bodyHtml.contains("Hello there"), "html=${result.bodyHtml}")
+        assertFalse(result.bodyHtml.contains("<p>Hello"), "html=${result.bodyHtml}")
+    }
+
+    @Test
+    fun `plaintext reply also carries an html blockquote alternative`() {
+        val result = ReplyBuilder.build(context(body = "First line\nSecond line"), ReplyMode.REPLY, "me@example.org")
+
+        assertTrue(result.bodyHtml.contains("<blockquote>"), "html=${result.bodyHtml}")
+        assertTrue(result.bodyHtml.contains("First line"), "html=${result.bodyHtml}")
+    }
 }

@@ -10,5 +10,7 @@ data class Draft(
     val subject: String,
     val body: String,
     val updatedAt: Long,
+    /** HTML form of [body] when the draft was composed with formatting; null for plaintext drafts. */
+    val bodyHtml: String? = null,
     val attachments: List<OutgoingAttachment> = emptyList(),
 )

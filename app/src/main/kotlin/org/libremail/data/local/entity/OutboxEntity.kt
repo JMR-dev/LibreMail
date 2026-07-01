@@ -17,4 +17,6 @@ data class OutboxEntity(
     val body: String,
     val createdAt: Long,
     val lastError: String? = null,
+    /** HTML form of [body] when composed with formatting; null sends `text/plain` only. */
+    val bodyHtml: String? = null,
 )

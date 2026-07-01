@@ -9,4 +9,6 @@ data class OutboxMessage(
     val body: String,
     val createdAt: Long,
     val lastError: String?,
+    /** HTML form of [body] when composed with formatting; null for plaintext messages. */
+    val bodyHtml: String? = null,
 )

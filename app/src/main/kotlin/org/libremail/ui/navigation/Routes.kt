@@ -46,6 +46,17 @@ object Routes {
     const val ACCOUNT_SETTINGS_PATTERN = "account_settings/{$ACCOUNT_SETTINGS_ARG_ID}"
     fun accountSettings(accountId: String) = "account_settings/${Uri.encode(accountId)}"
 
+    const val SIGNATURES_ARG_ACCOUNT = "accountId"
+    const val SIGNATURES_PATTERN = "signatures/{$SIGNATURES_ARG_ACCOUNT}"
+    fun signatures(accountId: String) = "signatures/${Uri.encode(accountId)}"
+
+    const val SIGNATURE_EDIT_ARG_ACCOUNT = "accountId"
+    const val SIGNATURE_EDIT_ARG_ID = "signatureId"
+    const val SIGNATURE_EDIT_PATTERN =
+        "signature_edit/{$SIGNATURE_EDIT_ARG_ACCOUNT}?$SIGNATURE_EDIT_ARG_ID={$SIGNATURE_EDIT_ARG_ID}"
+    fun signatureEdit(accountId: String, signatureId: String = ""): String =
+        "signature_edit/${Uri.encode(accountId)}?$SIGNATURE_EDIT_ARG_ID=${Uri.encode(signatureId)}"
+
     const val REPORT_REVIEW_ARG_ID = "reportId"
     const val REPORT_REVIEW_PATTERN = "report_review/{$REPORT_REVIEW_ARG_ID}"
     fun reportReview(reportId: String) = "report_review/${Uri.encode(reportId)}"
