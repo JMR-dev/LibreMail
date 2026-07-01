@@ -77,6 +77,19 @@
     <string name="compose_attach">Attach file</string>
     <string name="compose_attachment_remove">Remove attachment</string>
 
+    <!-- Compose formatting toolbar -->
+    <string name="format_bold">Bold</string>
+    <string name="format_italic">Italic</string>
+    <string name="format_underline">Underline</string>
+    <string name="format_bullet_list">Bulleted list</string>
+    <string name="format_numbered_list">Numbered list</string>
+    <string name="format_quote">Block quote</string>
+    <string name="format_link">Insert link</string>
+    <string name="format_link_title">Insert link</string>
+    <string name="format_link_url">Link address</string>
+    <string name="format_link_apply">Link</string>
+    <string name="format_link_needs_selection">Select some text first, then add a link.</string>
+
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>
     <string name="drafts_empty">No drafts</string>
@@ -146,8 +159,25 @@
     <!-- Per-account settings -->
     <string name="settings_account_title">Account</string>
     <string name="settings_signature">Signature</string>
-    <string name="settings_signature_enable">Append signature</string>
+    <string name="settings_signature_enable">Append signature automatically</string>
     <string name="settings_signature_hint">Your signature</string>
+    <string name="settings_signatures_manage">Manage signatures</string>
+    <string name="settings_signatures_summary_none">No signatures yet</string>
+    <string name="settings_signatures_summary">%1$d signature(s), default: %2$s</string>
+
+    <!-- Signatures management -->
+    <string name="signatures_title">Signatures</string>
+    <string name="signatures_empty">No signatures yet. Add one to append it to your messages.</string>
+    <string name="signatures_add">Add signature</string>
+    <string name="signature_new_title">New signature</string>
+    <string name="signature_edit_title">Edit signature</string>
+    <string name="signature_name">Name</string>
+    <string name="signature_content">Signature</string>
+    <string name="signature_save">Save</string>
+    <string name="signature_delete">Delete signature</string>
+    <string name="signature_default">Default</string>
+    <string name="signature_make_default">Set as default</string>
+    <string name="signature_default_badge">Default</string>
     <string name="settings_account_notifications">Notifications</string>
     <string name="settings_account_new_mail">New mail notifications</string>
     <string name="settings_account_new_mail_summary">Show notifications for this account</string>

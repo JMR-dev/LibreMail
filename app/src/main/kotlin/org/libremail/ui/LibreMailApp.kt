@@ -24,6 +24,8 @@ import org.libremail.ui.outbox.OutboxScreen
 import org.libremail.ui.reader.ReaderScreen
 import org.libremail.ui.settings.AccountSettingsScreen
 import org.libremail.ui.settings.SettingsScreen
+import org.libremail.ui.settings.SignatureEditScreen
+import org.libremail.ui.settings.SignaturesScreen
 
 @Composable
 fun LibreMailApp() {
@@ -86,8 +88,35 @@ fun LibreMailApp() {
         composable(
             route = Routes.ACCOUNT_SETTINGS_PATTERN,
             arguments = listOf(navArgument(Routes.ACCOUNT_SETTINGS_ARG_ID) { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val accountId = backStackEntry.arguments?.getString(Routes.ACCOUNT_SETTINGS_ARG_ID).orEmpty()
+            AccountSettingsScreen(
+                onBack = navController::popBackStack,
+                onManageSignatures = { navController.navigate(Routes.signatures(accountId)) },
+            )
+        }
+        composable(
+            route = Routes.SIGNATURES_PATTERN,
+            arguments = listOf(navArgument(Routes.SIGNATURES_ARG_ACCOUNT) { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val accountId = backStackEntry.arguments?.getString(Routes.SIGNATURES_ARG_ACCOUNT).orEmpty()
+            SignaturesScreen(
+                onBack = navController::popBackStack,
+                onEdit = { signatureId -> navController.navigate(Routes.signatureEdit(accountId, signatureId)) },
+                onAdd = { navController.navigate(Routes.signatureEdit(accountId)) },
+            )
+        }
+        composable(
+            route = Routes.SIGNATURE_EDIT_PATTERN,
+            arguments = listOf(
+                navArgument(Routes.SIGNATURE_EDIT_ARG_ACCOUNT) { type = NavType.StringType },
+                navArgument(Routes.SIGNATURE_EDIT_ARG_ID) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
         ) {
-            AccountSettingsScreen(onBack = navController::popBackStack)
+            SignatureEditScreen(onBack = navController::popBackStack)
         }
         composable(Routes.ACCOUNT_SETUP) {
             AccountSetupScreen(

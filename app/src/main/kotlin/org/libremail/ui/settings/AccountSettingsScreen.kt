@@ -6,7 +6,6 @@ import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,7 +16,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -26,17 +24,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewModel = hiltViewModel()) {
+fun AccountSettingsScreen(
+    onBack: () -> Unit,
+    onManageSignatures: () -> Unit,
+    viewModel: AccountSettingsViewModel = hiltViewModel(),
+) {
     val account by viewModel.account.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val signature by viewModel.signature.collectAsStateWithLifecycle()
+    val signatureCount by viewModel.signatureCount.collectAsStateWithLifecycle()
+    val defaultSignatureName by viewModel.defaultSignatureName.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val fallbackTitle = stringResource(R.string.settings_account_title)
 
@@ -67,15 +69,14 @@ fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewMode
                 checked = settings.signatureEnabled,
                 onCheckedChange = viewModel::setSignatureEnabled,
             )
-            OutlinedTextField(
-                value = signature ?: "",
-                onValueChange = viewModel::onSignatureChange,
-                enabled = settings.signatureEnabled,
-                label = { Text(stringResource(R.string.settings_signature_hint)) },
-                minLines = 3,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ClickRow(
+                title = stringResource(R.string.settings_signatures_manage),
+                subtitle = if (signatureCount == 0) {
+                    stringResource(R.string.settings_signatures_summary_none)
+                } else {
+                    stringResource(R.string.settings_signatures_summary, signatureCount, defaultSignatureName)
+                },
+                onClick = onManageSignatures,
             )
             HorizontalDivider()
 

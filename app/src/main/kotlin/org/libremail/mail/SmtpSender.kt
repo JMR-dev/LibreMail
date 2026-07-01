@@ -7,6 +7,7 @@ import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
 import jakarta.mail.internet.MimeMultipart
+import jakarta.mail.internet.MimePart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.libremail.domain.model.MailSecurity
@@ -62,16 +63,7 @@ class SmtpSender @Inject constructor() {
             subject = message.subject
             sentDate = Date()
         }
-        if (attachments.isEmpty()) {
-            mime.setText(message.body, "UTF-8")
-        } else {
-            val multipart = MimeMultipart()
-            multipart.addBodyPart(MimeBodyPart().apply { setText(message.body, "UTF-8") })
-            attachments.forEach { file ->
-                multipart.addBodyPart(MimeBodyPart().apply { attachFile(file) })
-            }
-            mime.setContent(multipart)
-        }
+        applyBody(mime, message, attachments)
 
         val transport = session.getTransport(protocol)
         transport.connect(params.host, params.port, params.username, params.secret)
@@ -80,6 +72,40 @@ class SmtpSender @Inject constructor() {
         } finally {
             runCatching { transport.close() }
         }
+    }
+
+    /**
+     * Sets the message body:
+     *  - plaintext-only ([OutgoingMessage.bodyHtml] null): a single `text/plain` part, exactly as
+     *    before, so unformatted mail is unchanged on the wire;
+     *  - formatted: a `multipart/alternative` of `text/plain` (fallback, first) + `text/html`
+     *    (preferred, last, per RFC 2046).
+     * When there are attachments the body is nested inside a `multipart/mixed` as its first part.
+     */
+    private fun applyBody(mime: MimeMessage, message: OutgoingMessage, attachments: List<File>) {
+        if (attachments.isEmpty()) {
+            setBody(mime, message)
+            return
+        }
+        val mixed = MimeMultipart("mixed")
+        mixed.addBodyPart(MimeBodyPart().also { setBody(it, message) })
+        attachments.forEach { file -> mixed.addBodyPart(MimeBodyPart().apply { attachFile(file) }) }
+        mime.setContent(mixed)
+    }
+
+    /** Writes the body onto [part]: plain text, or a text/plain + text/html alternative when formatted. */
+    private fun setBody(part: MimePart, message: OutgoingMessage) {
+        val html = message.bodyHtml
+        if (html == null) {
+            part.setText(message.body, "UTF-8")
+        } else {
+            part.setContent(alternative(message.body, html))
+        }
+    }
+
+    private fun alternative(plain: String, html: String): MimeMultipart = MimeMultipart("alternative").apply {
+        addBodyPart(MimeBodyPart().apply { setText(plain, "UTF-8") })
+        addBodyPart(MimeBodyPart().apply { setContent(html, "text/html; charset=UTF-8") })
     }
 
     private companion object {

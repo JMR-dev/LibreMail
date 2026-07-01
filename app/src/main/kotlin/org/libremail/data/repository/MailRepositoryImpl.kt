@@ -8,6 +8,7 @@ import jakarta.mail.Flags
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.ReplyBuilder
+import org.libremail.data.SignatureBlock
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.DraftDao
@@ -20,6 +21,7 @@ import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Attachment
@@ -52,6 +54,7 @@ class MailRepositoryImpl @Inject constructor(
     private val connectionFactory: MailConnectionFactory,
     private val sendScheduler: SendScheduler,
     private val accountSettingsRepository: AccountSettingsRepository,
+    private val signatureRepository: SignatureRepository,
 ) : MailRepository {
 
     override fun observeMessages(): Flow<List<Message>> = messageDao.observeAll().map { rows ->
@@ -191,9 +194,15 @@ class MailRepositoryImpl @Inject constructor(
         val params = connectionFactory.imapParamsFor(account)
         val context = imapClient.fetchForReply(params, entity.folder, uidOf(messageId))
         val content = ReplyBuilder.build(context, mode, account.email)
-        // Bake the sending account's signature into the reply/forward body so it round-trips as part
-        // of the draft (compose won't re-append for drafts).
-        val signature = accountSettingsRepository.get(entity.accountId).signatureBlock()
+        // Bake the sending account's default signature into the reply/forward body — above the quoted
+        // original — so it round-trips as part of the draft (compose won't re-append for drafts). Both
+        // the plaintext and HTML forms are stored so the reply can go out as multipart/alternative.
+        val settings = accountSettingsRepository.get(entity.accountId)
+        val sig = if (settings.signatureEnabled) {
+            SignatureBlock.of(signatureRepository.getDefault(entity.accountId))
+        } else {
+            SignatureBlock.EMPTY
+        }
         val draftId = UUID.randomUUID().toString()
         saveDraft(
             Draft(
@@ -202,8 +211,9 @@ class MailRepositoryImpl @Inject constructor(
                 to = content.to,
                 cc = content.cc,
                 subject = content.subject,
-                body = content.body + signature,
+                body = sig.plain + content.body,
                 updatedAt = System.currentTimeMillis(),
+                bodyHtml = sig.html + content.bodyHtml,
                 attachments = emptyList(),
             ),
         )
@@ -269,6 +279,7 @@ class MailRepositoryImpl @Inject constructor(
                 subject = outgoing.subject,
                 body = outgoing.body,
                 createdAt = System.currentTimeMillis(),
+                bodyHtml = outgoing.bodyHtml,
             ),
         )
         sendScheduler.sendNow()

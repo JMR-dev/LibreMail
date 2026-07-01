@@ -16,4 +16,6 @@ data class DraftEntity(
     val updatedAt: Long,
     /** JSON array of the draft's attachments ([uri, name] pairs); empty string when there are none. */
     val attachments: String = "",
+    /** HTML form of [body] when the draft carries formatting; null for plaintext drafts. */
+    val bodyHtml: String? = null,
 )

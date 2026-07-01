@@ -18,13 +18,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.contacts.ContactSuggestion
 import org.libremail.contacts.ContactsRepository
+import org.libremail.data.SignatureBlock
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.richtext.RichTextContent
+import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.navigation.Routes
 import java.util.UUID
 import javax.inject.Inject
@@ -33,7 +37,10 @@ data class ComposeUiState(
     val to: String = "",
     val cc: String = "",
     val subject: String = "",
+    /** The plaintext form of the body (also the `text/plain` fallback when sending). */
     val body: String = "",
+    /** The HTML form of the body, or null when the message carries no formatting (plaintext-only). */
+    val bodyHtml: String? = null,
     val fromAccountId: String? = null,
     val attachments: List<OutgoingAttachment> = emptyList(),
     val suggestions: List<ContactSuggestion> = emptyList(),
@@ -49,6 +56,7 @@ class ComposeViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val contactsRepository: ContactsRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
+    private val signatureRepository: SignatureRepository,
 ) : ViewModel() {
 
     private val draftId: String? =
@@ -76,7 +84,7 @@ class ComposeViewModel @Inject constructor(
     @Volatile private var navigated = false
 
     /** The signature block last appended to the body, so a From-change can swap it out cleanly. */
-    private var appliedSignatureBlock = ""
+    private var appliedSignatureBlock = SignatureBlock.EMPTY
 
     init {
         if (draftId != null) {
@@ -88,6 +96,7 @@ class ComposeViewModel @Inject constructor(
                             cc = draft.cc,
                             subject = draft.subject,
                             body = draft.body,
+                            bodyHtml = draft.bodyHtml,
                             fromAccountId = draft.accountId ?: it.fromAccountId,
                             attachments = draft.attachments,
                         )
@@ -112,27 +121,63 @@ class ComposeViewModel @Inject constructor(
 
     fun onCcChange(value: String) = _state.update { it.copy(cc = value) }
     fun onSubjectChange(value: String) = _state.update { it.copy(subject = value) }
-    fun onBodyChange(value: String) = _state.update { it.copy(body = value) }
+
+    /**
+     * The rich editor reports the current body in both forms: [plain] (also the plaintext fallback)
+     * and [html], which is null when the content carries no formatting so the message stays
+     * plaintext-only. Both are held for sending and for saving the draft.
+     */
+    fun onBodyChange(plain: String, html: String?) = _state.update { it.copy(body = plain, bodyHtml = html) }
+
     fun selectFrom(accountId: String) {
         viewModelScope.launch { applySignature(accountId) }
     }
 
     /**
-     * Sets the sending account and swaps its signature into the body: strips the previously-appended
-     * signature block (when the body still ends with it) and appends the newly-selected account's.
+     * Sets the sending account and swaps its default signature into the body: strips the
+     * previously-appended block (when the body still ends with it) and appends the newly-selected
+     * account's, in both the plaintext and HTML representations. Honors the account's
+     * "append signature" preference.
      */
     private suspend fun applySignature(accountId: String) {
-        val block = accountSettingsRepository.get(accountId).signatureBlock()
+        val settings = accountSettingsRepository.get(accountId)
+        val block = if (settings.signatureEnabled) {
+            SignatureBlock.of(signatureRepository.getDefault(accountId))
+        } else {
+            SignatureBlock.EMPTY
+        }
         _state.update { s ->
-            val base = if (appliedSignatureBlock.isNotEmpty() && s.body.endsWith(appliedSignatureBlock)) {
-                s.body.removeSuffix(appliedSignatureBlock)
-            } else {
-                s.body
-            }
-            s.copy(fromAccountId = accountId, body = base + block)
+            val basePlain = s.body.stripSuffixIfPresent(appliedSignatureBlock.plain)
+            val newBody = basePlain + block.plain
+            s.copy(fromAccountId = accountId, body = newBody, bodyHtml = swapHtmlSignature(s.bodyHtml, newBody, block))
         }
         appliedSignatureBlock = block
     }
+
+    /**
+     * Swaps the signature in the HTML body. When the old block is still a clean suffix (the common
+     * case — the user changed accounts before editing), it is stripped and the new one appended,
+     * preserving any formatting the user applied. Otherwise the HTML was re-serialized after editing
+     * and no longer ends with the old block, so it is rebuilt from the plaintext to avoid ever
+     * duplicating the signature (inline styling from before the switch is not preserved in that case).
+     */
+    private fun swapHtmlSignature(currentHtml: String?, newBody: String, block: SignatureBlock): String? {
+        val old = appliedSignatureBlock.html
+        val cleanlyStrippable = old.isEmpty() || currentHtml == null || currentHtml.endsWith(old)
+        val combined = if (cleanlyStrippable) {
+            (currentHtml?.removeSuffix(old) ?: "") + block.html
+        } else {
+            RichTextHtml.toHtml(RichTextContent(newBody))
+        }
+        return normalizedHtml(combined)
+    }
+
+    private fun String.stripSuffixIfPresent(suffix: String): String =
+        if (suffix.isNotEmpty() && endsWith(suffix)) removeSuffix(suffix) else this
+
+    /** Keeps an HTML body only when it actually carries formatting, so plaintext stays plaintext. */
+    private fun normalizedHtml(html: String): String? =
+        if (html.isBlank() || !RichTextHtml.fromHtml(html).hasFormatting()) null else html
     fun addAttachments(items: List<OutgoingAttachment>) =
         _state.update { it.copy(attachments = it.attachments + items) }
     fun removeAttachment(uri: String) = _state.update {
@@ -200,6 +245,7 @@ class ComposeViewModel @Inject constructor(
                     subject = s.subject,
                     body = s.body,
                     updatedAt = System.currentTimeMillis(),
+                    bodyHtml = s.bodyHtml,
                     attachments = s.attachments,
                 ),
             )
@@ -220,7 +266,15 @@ class ComposeViewModel @Inject constructor(
                 else -> {
                     _state.update { it.copy(sending = true, error = null) }
                     mailRepository.sendMessage(
-                        OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body, s.attachments),
+                        OutgoingMessage(
+                            accountId = account.id,
+                            to = s.to,
+                            cc = s.cc,
+                            subject = s.subject,
+                            body = s.body,
+                            bodyHtml = s.bodyHtml,
+                            attachments = s.attachments,
+                        ),
                     ).fold(
                         onSuccess = {
                             draftId?.let { mailRepository.deleteDraft(it) }
