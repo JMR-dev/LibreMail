@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.SavedStateHandle
 import androidx.navigation.NavType
@@ -52,10 +53,8 @@ class OnboardingFlowTest {
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
-    // 15s (not the 5s used elsewhere): the add-another step is reached only after an async chain
-    // (button → viewModelScope coroutine → addImapAccount → DONE → LaunchedEffect → navigate), which
-    // on the slower, animation-disabled E2E matrix emulators can exceed a 5s budget for that one
-    // transition. waitUntil returns as soon as the text appears, so this only raises the cap.
+    // Generous cap for the slow, animation-disabled CI matrix emulators; waitUntil returns as soon
+    // as the text appears, so the happy path is unaffected.
     private fun waitForText(text: String) = composeTestRule.waitUntil(15_000) {
         composeTestRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
     }
@@ -194,10 +193,16 @@ class OnboardingFlowTest {
         composeTestRule.onNodeWithText("Gmail").performClick()
 
         // App-password setup: email + app password come from the user; servers come from the preset.
+        // performScrollTo first — on the short default matrix emulator the fields and the "Test and
+        // add" button sit below the fold of this scrolling screen, and a positional click on an
+        // off-screen button is a silent no-op (which is why this passed only on API 37's taller AVD).
         waitForText(string(R.string.app_password_email))
-        composeTestRule.onNodeWithText(string(R.string.app_password_email)).performTextInput("e2e@gmail.com")
-        composeTestRule.onNodeWithText(string(R.string.app_password_field)).performTextInput("app-pass")
-        composeTestRule.onNodeWithText(string(R.string.app_password_test_and_add)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.app_password_email))
+            .performScrollTo().performTextInput("e2e@gmail.com")
+        composeTestRule.onNodeWithText(string(R.string.app_password_field))
+            .performScrollTo().performTextInput("app-pass")
+        composeTestRule.onNodeWithText(string(R.string.app_password_test_and_add))
+            .performScrollTo().performClick()
 
         // "Add another?" prompt → No.
         waitForText(string(R.string.onboarding_add_another_prompt))
