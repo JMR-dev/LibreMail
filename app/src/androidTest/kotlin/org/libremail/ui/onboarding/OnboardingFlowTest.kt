@@ -52,7 +52,11 @@ class OnboardingFlowTest {
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
-    private fun waitForText(text: String) = composeTestRule.waitUntil(5_000) {
+    // 15s (not the 5s used elsewhere): the add-another step is reached only after an async chain
+    // (button → viewModelScope coroutine → addImapAccount → DONE → LaunchedEffect → navigate), which
+    // on the slower, animation-disabled E2E matrix emulators can exceed a 5s budget for that one
+    // transition. waitUntil returns as soon as the text appears, so this only raises the cap.
+    private fun waitForText(text: String) = composeTestRule.waitUntil(15_000) {
         composeTestRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
     }
 
