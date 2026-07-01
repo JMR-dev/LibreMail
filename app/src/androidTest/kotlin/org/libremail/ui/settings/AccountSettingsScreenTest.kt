@@ -12,7 +12,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,16 +46,15 @@ class AccountSettingsScreenTest {
         smtp = ServerConfig("smtp.example.com", 465, MailSecurity.SSL_TLS),
     )
 
-    private lateinit var db: LibreMailDatabase
-
-    @After
-    fun tearDown() = db.close()
-
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
     private fun setContent(): AccountSettingsRepository {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build()
+        // Intentionally not closed in an @After: the ViewModel's `settings` Room Flow (kept alive by
+        // stateIn/WhileSubscribed) keeps querying after the test body, so closing the in-memory DB out
+        // from under it races and crashes ("connection pool has been closed"). The DB is reclaimed with
+        // the test process.
+        val db = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build()
         val repository = AccountSettingsRepository(db.accountSettingsDao())
         runBlocking {
             db.accountDao().upsert(account.toEntity()) // FK parent for the account_settings row
