@@ -12,13 +12,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Validates the v11 -> v12 migration (issues #12/#13): `messages.uid` is added and backfilled from the
+ * Validates the v12 -> v13 migration (issues #12/#13): `messages.uid` is added and backfilled from the
  * id's numeric tail, `account_settings` gains the nullable retention overrides, and the
  * `backfill_progress` table is created. `runMigrationsAndValidate` additionally checks the whole
- * migrated schema matches the exported v12 schema.
+ * migrated schema matches the exported v13 schema.
  */
 @RunWith(AndroidJUnit4::class)
-class Migration11To12Test {
+class Migration12To13Test {
 
     @get:Rule
     val helper = MigrationTestHelper(
@@ -29,17 +29,17 @@ class Migration11To12Test {
     )
 
     @Test
-    fun migrate11To12_backfillsUidAndAddsRetentionAndBackfillTables() {
-        helper.createDatabase(DB_NAME, 11).apply {
+    fun migrate12To13_backfillsUidAndAddsRetentionAndBackfillTables() {
+        helper.createDatabase(DB_NAME, 12).apply {
             // A plain inbox row, a folder name containing special characters, and a folder name that
             // ends in a digit — all must recover the trailing UID correctly.
-            insertV11Message("acct:INBOX:42")
-            insertV11Message("acct:[Gmail]/Sent Mail:7")
-            insertV11Message("acct:Folder2:15")
+            insertV12Message("acct:INBOX:42")
+            insertV12Message("acct:[Gmail]/Sent Mail:7")
+            insertV12Message("acct:Folder2:15")
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(DB_NAME, 12, true, MIGRATION_11_12)
+        val db = helper.runMigrationsAndValidate(DB_NAME, 13, true, MIGRATION_12_13)
 
         // uid is materialized from the id's numeric tail.
         assertEquals(42L, uidOf(db, "acct:INBOX:42"))
@@ -70,7 +70,7 @@ class Migration11To12Test {
             c.getLong(0)
         }
 
-    private fun androidx.sqlite.db.SupportSQLiteDatabase.insertV11Message(id: String) {
+    private fun androidx.sqlite.db.SupportSQLiteDatabase.insertV12Message(id: String) {
         execSQL(
             "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
                 "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched) " +
@@ -80,6 +80,6 @@ class Migration11To12Test {
     }
 
     private companion object {
-        const val DB_NAME = "migration-11-12-test.db"
+        const val DB_NAME = "migration-12-13-test.db"
     }
 }

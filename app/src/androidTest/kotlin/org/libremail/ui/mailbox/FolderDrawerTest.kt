@@ -59,6 +59,27 @@ class FolderDrawerTest {
     }
 
     @Test
+    fun duplicateFolderNames_areDisambiguatedWithProviderSuffix() {
+        val gmail = account("imap:g", "user@gmail.com").copy(
+            imap = ServerConfig("imap.gmail.com", 993, MailSecurity.SSL_TLS),
+        )
+        setContent(
+            accounts = listOf(gmail),
+            drawerAccount = gmail,
+            folders = listOf(
+                folder("imap:g", "INBOX", "INBOX", FolderRole.INBOX),
+                // Gmail's built-in Drafts (server special-use) alongside a same-named user folder.
+                folder("imap:g", "[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, specialUse = true),
+                folder("imap:g", "Drafts", "Drafts", FolderRole.DRAFTS),
+            ),
+        )
+
+        // The provider's built-in folder is suffixed; the user folder keeps the plain name.
+        composeTestRule.onNodeWithText("Drafts - Gmail").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Drafts").assertIsDisplayed()
+    }
+
+    @Test
     fun tappingAFolder_reportsItsAccountAndFullName() {
         var picked: Pair<String, String>? = null
         setContent(
@@ -131,6 +152,11 @@ class FolderDrawerTest {
         smtp = ServerConfig("smtp.example.org", 465, MailSecurity.SSL_TLS),
     )
 
-    private fun folder(accountId: String, fullName: String, displayName: String, role: FolderRole) =
-        Folder(accountId, fullName, displayName, role, selectable = true)
+    private fun folder(
+        accountId: String,
+        fullName: String,
+        displayName: String,
+        role: FolderRole,
+        specialUse: Boolean = false,
+    ) = Folder(accountId, fullName, displayName, role, selectable = true, specialUse = specialUse)
 }

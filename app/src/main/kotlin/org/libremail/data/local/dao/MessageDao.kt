@@ -7,11 +7,21 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageSummary
 
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages ORDER BY timestampMillis DESC")
-    fun observeAll(): Flow<List<MessageEntity>>
+    /**
+     * Mailbox-list projection ordered newest-first. Deliberately omits the large `body`/`isHtml`
+     * columns: the list observes every cached message at once, and pulling full bodies through
+     * SQLite's shared ~2 MB CursorWindow overflows it once enough large bodies are cached
+     * (issue #51). Bodies are loaded lazily per-message via [getById] when a message is opened.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages ORDER BY timestampMillis DESC",
+    )
+    fun observeSummaries(): Flow<List<MessageSummary>>
 
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?

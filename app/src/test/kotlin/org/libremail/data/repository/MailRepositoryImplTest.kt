@@ -23,6 +23,7 @@ import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
@@ -73,7 +74,7 @@ class MailRepositoryImplTest {
 
     @Test
     fun `observeMessages is empty when the cache is empty`() = runTest {
-        every { messageDao.observeAll() } returns flowOf(emptyList())
+        every { messageDao.observeSummaries() } returns flowOf(emptyList())
         repository.observeMessages().test {
             assertTrue(awaitItem().isEmpty())
             awaitComplete()
@@ -82,8 +83,7 @@ class MailRepositoryImplTest {
 
     @Test
     fun `observeMessages maps cached entities`() = runTest {
-        val entity = messageEntity("1", "INBOX")
-        every { messageDao.observeAll() } returns flowOf(listOf(entity))
+        every { messageDao.observeSummaries() } returns flowOf(listOf(messageSummary("1", "INBOX")))
         repository.observeMessages().test {
             val items = awaitItem()
             assertEquals(1, items.size)
@@ -418,6 +418,22 @@ class MailRepositoryImplTest {
             isRead = false,
             isStarred = false,
             folder = folder,
+            bodyFetched = bodyFetched,
+        )
+
+    private fun messageSummary(id: String, folder: String, accountId: String = "acct", bodyFetched: Boolean = false) =
+        MessageSummary(
+            id = id,
+            accountId = accountId,
+            sender = "Ada",
+            senderEmail = "ada@example.org",
+            subject = "Hi",
+            snippet = "snippet",
+            timestampMillis = 1_000L,
+            isRead = false,
+            isStarred = false,
+            folder = folder,
+            inInbox = true,
             bodyFetched = bodyFetched,
         )
 
