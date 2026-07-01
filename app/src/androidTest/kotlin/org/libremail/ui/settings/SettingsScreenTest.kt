@@ -39,7 +39,13 @@ class SettingsScreenTest {
 
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
-                SettingsScreen(onAddAccount = {}, onOpenAccount = {}, onSelectTab = {}, viewModel = viewModel)
+                SettingsScreen(
+                    onAddAccount = {},
+                    onOpenAccount = {},
+                    onSelectTab = {},
+                    onReportProblem = {},
+                    viewModel = viewModel,
+                )
             }
         }
 

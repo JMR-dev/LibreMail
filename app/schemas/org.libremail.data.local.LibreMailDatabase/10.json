@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 10,
-    "identityHash": "dda823c68d6b6207f3b648b46a0182e6",
+    "identityHash": "aff2afe197ff1b0b41630e5a165d09f3",
     "entities": [
       {
         "tableName": "accounts",
@@ -335,7 +335,7 @@
       },
       {
         "tableName": "outbox",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `toAddresses` TEXT NOT NULL, `ccAddresses` TEXT NOT NULL, `subject` TEXT NOT NULL, `body` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastError` TEXT, `bodyHtml` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `toAddresses` TEXT NOT NULL, `ccAddresses` TEXT NOT NULL, `bccAddresses` TEXT NOT NULL DEFAULT '', `subject` TEXT NOT NULL, `body` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -360,6 +360,13 @@
             "columnName": "ccAddresses",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "bccAddresses",
+            "columnName": "bccAddresses",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
           },
           {
             "fieldPath": "subject",
@@ -383,11 +390,6 @@
             "fieldPath": "lastError",
             "columnName": "lastError",
             "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "bodyHtml",
-            "columnName": "bodyHtml",
-            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -399,7 +401,7 @@
       },
       {
         "tableName": "drafts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT, `toAddresses` TEXT NOT NULL, `ccAddresses` TEXT NOT NULL, `subject` TEXT NOT NULL, `body` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, `attachments` TEXT NOT NULL, `bodyHtml` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT, `toAddresses` TEXT NOT NULL, `ccAddresses` TEXT NOT NULL, `bccAddresses` TEXT NOT NULL DEFAULT '', `subject` TEXT NOT NULL, `body` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, `attachments` TEXT NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -423,6 +425,13 @@
             "columnName": "ccAddresses",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "bccAddresses",
+            "columnName": "bccAddresses",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
           },
           {
             "fieldPath": "subject",
@@ -447,11 +456,6 @@
             "columnName": "attachments",
             "affinity": "TEXT",
             "notNull": true
-          },
-          {
-            "fieldPath": "bodyHtml",
-            "columnName": "bodyHtml",
-            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -509,77 +513,11 @@
             "fullName"
           ]
         }
-      },
-      {
-        "tableName": "signatures",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `name` TEXT NOT NULL, `contentHtml` TEXT NOT NULL, `isDefault` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "id",
-            "columnName": "id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "accountId",
-            "columnName": "accountId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "name",
-            "columnName": "name",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "contentHtml",
-            "columnName": "contentHtml",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "isDefault",
-            "columnName": "isDefault",
-            "affinity": "INTEGER",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "id"
-          ]
-        },
-        "indices": [
-          {
-            "name": "index_signatures_accountId",
-            "unique": false,
-            "columnNames": [
-              "accountId"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_signatures_accountId` ON `${TABLE_NAME}` (`accountId`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "accounts",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "accountId"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
-          }
-        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'dda823c68d6b6207f3b648b46a0182e6')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'aff2afe197ff1b0b41630e5a165d09f3')"
     ]
   }
 }

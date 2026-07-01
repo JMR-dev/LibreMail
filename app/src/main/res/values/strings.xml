@@ -30,8 +30,6 @@
     <string name="search_hint">Search mail</string>
     <string name="search_no_results">No results</string>
     <string name="mailbox_pull_to_refresh">Pull down to refresh</string>
-    <string name="mailbox_welcome_title">Welcome to LibreMail</string>
-    <string name="mailbox_welcome_subtitle">Add an account to start reading your mail.</string>
 
     <!-- Mailbox multi-select contextual action bar -->
     <string name="cab_selected_count">%1$d selected</string>
@@ -71,6 +69,7 @@
     <string name="compose_from">From</string>
     <string name="compose_to">To</string>
     <string name="compose_cc">Cc</string>
+    <string name="compose_bcc">Bcc</string>
     <string name="compose_subject">Subject</string>
     <string name="compose_body">Message</string>
     <string name="compose_no_account">Add an account before composing</string>
@@ -115,10 +114,36 @@
     <string name="attachment_download_failed">Couldn\'t download %1$s</string>
     <string name="attachment_no_app">No app can open this file</string>
 
-    <!-- Account setup -->
-    <string name="account_setup_outlook">Sign in with Microsoft</string>
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">Welcome to LibreMail</string>
+    <string name="onboarding_welcome_subtitle">A private, open-source home for all your email. Add your first account to get started.</string>
+    <string name="onboarding_add_account">Add an email account</string>
+    <string name="onboarding_account_added_title">Account added</string>
+    <string name="onboarding_add_another_prompt">Would you like to add another email account?</string>
+    <string name="onboarding_add_another_yes">Add another account</string>
+    <string name="onboarding_add_another_no">No, take me to my inbox</string>
+
+    <!-- Account setup (vendor picker) -->
+    <string name="account_setup_outlook">Outlook or Hotmail</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
-    <string name="account_setup_subtitle">Choose how you want to connect your mailbox.</string>
+    <string name="account_setup_subtitle">Choose your email provider to get started.</string>
+
+    <!-- App-password guided setup (Gmail/Yahoo/iCloud) -->
+    <string name="app_password_title">Connect %1$s</string>
+    <string name="app_password_unknown_provider">Unknown email provider.</string>
+    <string name="app_password_intro_gmail">To connect Gmail, create an app password in your Google Account. Gmail requires 2-Step Verification to be turned on before you can create one.</string>
+    <string name="app_password_intro_yahoo">To connect Yahoo Mail, generate an app password from your Yahoo Account security settings.</string>
+    <string name="app_password_intro_icloud">To connect iCloud Mail, create an app-specific password from your Apple ID account page.</string>
+    <string name="app_password_what_is">An app password is a one-off password that lets an app sign in to your account without your main password or a two-factor code.</string>
+    <string name="app_password_warning">Store this app password carefully — it grants full access to your email. LibreMail keeps it only on this device.</string>
+    <string name="app_password_open_page">Create an app password for %1$s</string>
+    <string name="app_password_open_failed">Couldn\'t open your browser</string>
+    <string name="app_password_email">Email address</string>
+    <string name="app_password_field">App password</string>
+    <string name="app_password_show_servers">Server settings</string>
+    <string name="app_password_server_imap">Incoming (IMAP): %1$s:%2$d (%3$s)</string>
+    <string name="app_password_server_smtp">Outgoing (SMTP): %1$s:%2$d (%3$s)</string>
+    <string name="app_password_test_and_add">Test &amp; add account</string>
 
     <!-- Manual IMAP/SMTP setup -->
     <string name="manual_setup_title">IMAP / SMTP</string>
@@ -155,6 +180,11 @@
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
     <string name="account_remove">Remove account</string>
+
+    <!-- Backup -->
+    <string name="settings_backup">Backup</string>
+    <string name="settings_backup_include">Include settings in Android Backup</string>
+    <string name="settings_backup_include_summary">Let Android back up your LibreMail preferences (Google Auto Backup) so they restore when you set up a new device. Your mail, accounts, passwords, and encryption keys are never backed up — only app settings. Off by default; uses Google infrastructure.</string>
 
     <!-- Per-account settings -->
     <string name="settings_account_title">Account</string>
@@ -195,4 +225,34 @@
     <string name="settings_adv_remote_images">Load remote images by default</string>
     <string name="settings_adv_encrypt_cache">Encrypt local cache</string>
     <string name="settings_adv_encrypt_cache_summary">Encrypt cached mail stored on this device, using a key held in the Android Keystore. Applies the next time you open LibreMail.</string>
+
+    <!-- Diagnostics / debug reporting -->
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_report_problem">Report a problem</string>
+    <string name="settings_report_problem_summary">Capture diagnostics you can review and optionally send</string>
+    <string name="reports_title">Problem reports</string>
+    <string name="reports_empty">No problem reports yet</string>
+    <string name="reports_create">Create a report</string>
+    <string name="report_kind_crash">Crash report</string>
+    <string name="report_kind_manual">Manual report</string>
+    <string name="report_review_title">Review report</string>
+    <string name="report_pii_disclaimer_title">May contain personal information</string>
+    <string name="report_pii_disclaimer">This report can include email addresses, server names, and other details from your device. Read the whole thing below before sending. Nothing is sent unless you tap Submit.</string>
+    <string name="report_comment_label">What went wrong? (optional)</string>
+    <string name="report_payload_label">Exactly what will be sent</string>
+    <string name="report_submit">Submit</string>
+    <string name="report_discard">Discard report</string>
+    <string name="report_copy">Copy</string>
+    <string name="report_save">Save to file</string>
+    <string name="report_submitting">Submitting…</string>
+    <string name="report_submitted">Report sent. Thank you!</string>
+    <string name="report_submit_failed">Couldn\'t send — it will be retried.</string>
+    <string name="report_submit_unavailable">Online submission isn\'t available in this build. Use Copy or Save to share the report.</string>
+    <string name="report_copied">Copied to clipboard</string>
+    <string name="report_saved">Saved</string>
+    <string name="crash_prompt_title">LibreMail closed unexpectedly</string>
+    <string name="crash_prompt_message">A problem report from the last crash is ready for you to review. Nothing is sent automatically.</string>
+    <string name="crash_prompt_review">Review</string>
+    <string name="crash_prompt_later">Not now</string>
+    <string name="crash_prompt_discard">Discard</string>
 </resources>

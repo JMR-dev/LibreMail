@@ -36,6 +36,7 @@ import javax.inject.Inject
 data class ComposeUiState(
     val to: String = "",
     val cc: String = "",
+    val bcc: String = "",
     val subject: String = "",
     /** The plaintext form of the body (also the `text/plain` fallback when sending). */
     val body: String = "",
@@ -65,7 +66,10 @@ class ComposeViewModel @Inject constructor(
     private val _state = MutableStateFlow(
         ComposeUiState(
             to = savedStateHandle.get<String>(Routes.COMPOSE_ARG_TO).orEmpty(),
+            cc = savedStateHandle.get<String>(Routes.COMPOSE_ARG_CC).orEmpty(),
+            bcc = savedStateHandle.get<String>(Routes.COMPOSE_ARG_BCC).orEmpty(),
             subject = savedStateHandle.get<String>(Routes.COMPOSE_ARG_SUBJECT).orEmpty(),
+            body = savedStateHandle.get<String>(Routes.COMPOSE_ARG_BODY).orEmpty(),
             fromAccountId = savedStateHandle.get<String>(Routes.COMPOSE_ARG_FROM)?.takeIf { it.isNotBlank() },
         ),
     )
@@ -120,6 +124,7 @@ class ComposeViewModel @Inject constructor(
     }
 
     fun onCcChange(value: String) = _state.update { it.copy(cc = value) }
+    fun onBccChange(value: String) = _state.update { it.copy(bcc = value) }
     fun onSubjectChange(value: String) = _state.update { it.copy(subject = value) }
 
     /**
@@ -232,6 +237,7 @@ class ComposeViewModel @Inject constructor(
         val s = _state.value
         val hasContent = s.to.isNotBlank() ||
             s.cc.isNotBlank() ||
+            s.bcc.isNotBlank() ||
             s.subject.isNotBlank() ||
             s.body.isNotBlank() ||
             s.attachments.isNotEmpty()
@@ -242,6 +248,7 @@ class ComposeViewModel @Inject constructor(
                     accountId = s.fromAccountId,
                     to = s.to,
                     cc = s.cc,
+                    bcc = s.bcc,
                     subject = s.subject,
                     body = s.body,
                     updatedAt = System.currentTimeMillis(),
@@ -270,6 +277,7 @@ class ComposeViewModel @Inject constructor(
                             accountId = account.id,
                             to = s.to,
                             cc = s.cc,
+                            bcc = s.bcc,
                             subject = s.subject,
                             body = s.body,
                             bodyHtml = s.bodyHtml,

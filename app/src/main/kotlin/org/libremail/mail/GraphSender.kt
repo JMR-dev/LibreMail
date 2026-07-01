@@ -98,6 +98,9 @@ internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<Fi
     if (message.cc.isNotBlank()) {
         mail.put("ccRecipients", recipientsJson(message.cc))
     }
+    if (message.bcc.isNotBlank()) {
+        mail.put("bccRecipients", recipientsJson(message.bcc))
+    }
     if (attachments.isNotEmpty()) {
         val items = JSONArray()
         attachments.forEach { file ->

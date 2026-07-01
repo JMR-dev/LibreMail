@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -11,6 +12,7 @@ data class OutboxEntity(
     val accountId: String,
     val toAddresses: String,
     val ccAddresses: String,
+    @ColumnInfo(defaultValue = "") val bccAddresses: String = "",
     val subject: String,
     val body: String,
     val createdAt: Long,

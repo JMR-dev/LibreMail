@@ -30,7 +30,15 @@ class MappersHtmlBodyTest {
 
     @Test
     fun `a plaintext draft keeps a null html body`() {
-        val draft = Draft("d2", "acct", "a@x.com", "", "Hi", "Hello", 1L)
+        val draft = Draft(
+            id = "d2",
+            accountId = "acct",
+            to = "a@x.com",
+            cc = "",
+            subject = "Hi",
+            body = "Hello",
+            updatedAt = 1L,
+        )
         assertNull(draft.toEntity().toDomain().bodyHtml)
     }
 

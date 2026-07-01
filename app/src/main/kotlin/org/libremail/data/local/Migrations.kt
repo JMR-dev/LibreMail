@@ -173,14 +173,27 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
 }
 
 /**
- * v9 -> v10: rich composition (preserves existing data).
+ * v9 -> v10: bcc support for outgoing mail (preserves existing data). Adds a `bccAddresses` column
+ * to `outbox` and `drafts` so a `mailto:`-launched (or manually addressed) blind-copy recipient
+ * survives being queued and saved. The `DEFAULT ''` matches the entities' `@ColumnInfo(defaultValue)`
+ * so the fresh-install schema validates identically to the migrated one (the MIGRATION_7_8 pattern).
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `outbox` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `drafts` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/**
+ * v10 -> v11: rich composition (preserves existing data).
  *  - `drafts`/`outbox`: add a nullable `bodyHtml` column carrying the HTML form of the body when a
  *    message was composed with formatting (null = plaintext-only, sent/kept exactly as before).
  *  - add the `signatures` table (multiple named signatures per account, one default), with a
  *    cascading foreign key to `accounts`, and backfill each account's existing per-account settings
  *    signature as its default signature so nobody loses one on upgrade.
  */
-val MIGRATION_9_10 = object : Migration(9, 10) {
+val MIGRATION_10_11 = object : Migration(10, 11) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `drafts` ADD COLUMN `bodyHtml` TEXT")
         db.execSQL("ALTER TABLE `outbox` ADD COLUMN `bodyHtml` TEXT")

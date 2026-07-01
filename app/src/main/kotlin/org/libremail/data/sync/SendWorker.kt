@@ -54,6 +54,7 @@ class SendWorker @AssistedInject constructor(
                     accountId = entity.accountId,
                     to = entity.toAddresses,
                     cc = entity.ccAddresses,
+                    bcc = entity.bccAddresses,
                     subject = entity.subject,
                     body = entity.body,
                     bodyHtml = entity.bodyHtml,

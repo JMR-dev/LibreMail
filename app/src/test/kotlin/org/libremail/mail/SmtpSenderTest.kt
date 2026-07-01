@@ -13,6 +13,7 @@ import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.SmtpParams
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SmtpSenderTest {
@@ -160,5 +161,36 @@ class SmtpSenderTest {
         assertTrue(raw.contains("See the attached report."))
         assertTrue(raw.contains(file.name))
         file.delete()
+    }
+
+    @Test
+    fun `send delivers to bcc recipients without leaking them in the headers`() = runTest {
+        val params = SmtpParams(
+            host = "127.0.0.1",
+            port = greenMail.smtp.port,
+            security = MailSecurity.NONE,
+            username = "sender@example.org",
+            secret = "secret",
+            useXoauth2 = false,
+        )
+
+        sender.send(
+            params = params,
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                bcc = "eve@example.org",
+                subject = "FYI",
+                body = "Blind copy test.",
+            ),
+        )
+
+        // Both the To and Bcc recipients are in the SMTP envelope, so GreenMail delivers two copies.
+        greenMail.waitForIncomingEmail(2)
+        val received = greenMail.receivedMessages
+        assertEquals(2, received.size)
+        // Jakarta Mail strips the Bcc header before transmission, so it must not appear on the wire.
+        received.forEach { assertNull(it.getHeader("Bcc")) }
     }
 }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.libremail.data.local.DatabaseEncryption
 import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.local.MIGRATION_10_11
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
@@ -57,6 +58,7 @@ object DatabaseModule {
                 MIGRATION_7_8,
                 MIGRATION_8_9,
                 MIGRATION_9_10,
+                MIGRATION_10_11,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
         // accounts/credentials/mail tables would lose stored secrets. A missing migration should
