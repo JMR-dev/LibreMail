@@ -2,6 +2,7 @@
 package org.libremail.data.local
 
 import org.libremail.data.local.entity.AccountEntity
+import org.libremail.data.local.entity.AccountSettingsEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
@@ -11,6 +12,7 @@ import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.json.JSONArray
 import org.json.JSONObject
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.OutboxMessage
@@ -43,6 +45,20 @@ internal fun Account.toEntity(): AccountEntity = AccountEntity(
     authType = authType.name,
     imap = ServerConfigEmbedded(imap.host, imap.port, imap.security.name),
     smtp = ServerConfigEmbedded(smtp.host, smtp.port, smtp.security.name),
+)
+
+internal fun AccountSettingsEntity.toDomain(): AccountSettings = AccountSettings(
+    accountId = accountId,
+    signature = signature,
+    signatureEnabled = signatureEnabled,
+    notificationsEnabled = notificationsEnabled,
+)
+
+internal fun AccountSettings.toEntity(): AccountSettingsEntity = AccountSettingsEntity(
+    accountId = accountId,
+    signature = signature,
+    signatureEnabled = signatureEnabled,
+    notificationsEnabled = notificationsEnabled,
 )
 
 internal fun Account.toImapParams(

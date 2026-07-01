@@ -20,9 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +40,7 @@ import org.libremail.ui.TopDest
 @Composable
 fun SettingsScreen(
     onAddAccount: () -> Unit,
+    onOpenAccount: (String) -> Unit,
     onSelectTab: (TopDest) -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -69,7 +68,7 @@ fun SettingsScreen(
                 )
             } else {
                 accounts.forEach { account ->
-                    AccountRow(email = account.email, onRemove = { viewModel.removeAccount(account.id) })
+                    ClickRow(title = account.email, onClick = { onOpenAccount(account.id) })
                 }
             }
             ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
@@ -146,58 +145,6 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun AccountRow(email: String, onRemove: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(email, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        TextButton(onClick = onRemove) { Text(stringResource(R.string.account_remove)) }
-    }
-}
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
-    )
-}
-
-@Composable
-private fun SwitchRow(
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.width(16.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
 private fun RadioRow(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
@@ -218,19 +165,6 @@ private fun RadioRow(title: String, subtitle: String?, selected: Boolean, onClic
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun ClickRow(title: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
     }
 }
 

@@ -16,6 +16,10 @@ object Routes {
     const val READER_PATTERN = "reader/{$READER_ARG_ID}"
     fun reader(messageId: String) = "reader/${Uri.encode(messageId)}"
 
+    const val ACCOUNT_SETTINGS_ARG_ID = "accountId"
+    const val ACCOUNT_SETTINGS_PATTERN = "account_settings/{$ACCOUNT_SETTINGS_ARG_ID}"
+    fun accountSettings(accountId: String) = "account_settings/${Uri.encode(accountId)}"
+
     const val COMPOSE_ARG_TO = "to"
     const val COMPOSE_ARG_SUBJECT = "subject"
     const val COMPOSE_ARG_FROM = "from"

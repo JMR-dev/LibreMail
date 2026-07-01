@@ -17,6 +17,7 @@ import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Account
@@ -33,6 +34,7 @@ class MailSyncer @Inject constructor(
     private val imapClient: ImapClient,
     private val connectionFactory: MailConnectionFactory,
     private val settingsRepository: SettingsRepository,
+    private val accountSettingsRepository: AccountSettingsRepository,
     private val notifier: MailNotifier,
     private val mailRepository: MailRepository,
 ) : Syncer {
@@ -119,8 +121,11 @@ class MailSyncer @Inject constructor(
                     messageDao.deleteSyncedNotIn(account.id, folder, ids)
                 }
 
-                if (notify && newMessages.isNotEmpty() && settingsRepository.isNewMailNotificationsEnabled()) {
-                    notifier.notifyNewMail(newMessages.sortedByDescending { it.timestampMillis })
+                if (notify && newMessages.isNotEmpty() &&
+                    settingsRepository.isNewMailNotificationsEnabled() &&
+                    accountSettingsRepository.get(account.id).notificationsEnabled
+                ) {
+                    notifier.notifyNewMail(account, newMessages.sortedByDescending { it.timestampMillis })
                 }
             }
             fetched.size

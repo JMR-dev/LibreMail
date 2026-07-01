@@ -11,8 +11,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.SavedStateHandle
+import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -20,6 +22,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.contacts.ContactsRepository
+import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
@@ -47,7 +51,14 @@ class ComposeScreenTest {
         smtp = ServerConfig("smtp.example.com", 465, MailSecurity.SSL_TLS),
     )
 
+    private var db: LibreMailDatabase? = null
+
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
+
+    @After
+    fun closeDb() {
+        db?.close()
+    }
 
     @Before
     fun grantContactsPermission() {
@@ -66,11 +77,13 @@ class ComposeScreenTest {
         onBack: () -> Unit = {},
     ) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val database = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build().also { db = it }
         val viewModel = ComposeViewModel(
             savedStateHandle = SavedStateHandle(),
             mailRepository = mailRepository,
             accountRepository = FakeAccountRepository(accounts = listOf(account)),
             contactsRepository = ContactsRepository(context),
+            accountSettingsRepository = AccountSettingsRepository(database.accountSettingsDao()),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
