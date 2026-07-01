@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+package org.libremail.reporting
+
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class DebugReportTest {
+
+    private fun sample(
+        kind: ReportKind = ReportKind.CRASH,
+        stackTrace: String? = "java.lang.RuntimeException: boom\n\tat Foo.bar(Foo.kt:1)",
+        comment: String = "",
+    ) = DebugReport(
+        id = "abc-123",
+        createdAtMillis = 1_700_000_000_000L,
+        kind = kind,
+        appVersionName = "0.1.0",
+        appVersionCode = 7,
+        androidRelease = "14",
+        androidSdkInt = 34,
+        deviceManufacturer = "Google",
+        deviceModel = "Pixel 8",
+        stackTrace = stackTrace,
+        settings = linkedMapOf("pushIdle" to "true", "fetchPolicy" to "ALWAYS"),
+        logs = listOf("line 1", "line 2"),
+        userComment = comment,
+    )
+
+    @Test
+    fun `round-trips through storage json`() {
+        val original = sample(comment = "please fix")
+
+        val restored = DebugReport.fromStorageJson(original.toStorageJson())
+
+        assertEquals(original, restored)
+    }
+
+    @Test
+    fun `round-trips a manual report with no stack trace`() {
+        val original = sample(kind = ReportKind.MANUAL, stackTrace = null)
+
+        val restored = DebugReport.fromStorageJson(original.toStorageJson())
+
+        assertEquals(ReportKind.MANUAL, restored.kind)
+        assertNull(restored.stackTrace)
+        assertEquals(original, restored)
+    }
+
+    @Test
+    fun `submission payload contains the fields the user should see`() {
+        val payload = sample(comment = "it froze").toSubmissionPayload()
+
+        assertTrue(payload.contains("\"kind\": \"CRASH\""), payload)
+        assertTrue(payload.contains("0.1.0"))
+        assertTrue(payload.contains("Pixel 8"))
+        assertTrue(payload.contains("it froze"))
+        assertTrue(payload.contains("boom"))
+        assertTrue(payload.contains("pushIdle"))
+        assertTrue(payload.contains("line 1"))
+    }
+
+    @Test
+    fun `submission payload reflects the edited comment`() {
+        val base = sample()
+
+        val edited = base.copy(userComment = "edited note").toSubmissionPayload()
+
+        assertTrue(edited.contains("edited note"))
+    }
+}
