@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.domain.repository
 
-import java.io.File
 import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
@@ -10,6 +9,7 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
+import java.io.File
 
 /**
  * Abstraction over the local message cache (and, in later increments, network sync).

@@ -10,7 +10,4 @@ import androidx.room.PrimaryKey
  * plaintext.
  */
 @Entity(tableName = "credentials")
-data class CredentialEntity(
-    @PrimaryKey val accountId: String,
-    val encryptedSecret: String,
-)
+data class CredentialEntity(@PrimaryKey val accountId: String, val encryptedSecret: String)

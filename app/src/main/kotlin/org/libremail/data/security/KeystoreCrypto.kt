@@ -35,7 +35,7 @@ class KeystoreCrypto @Inject constructor() {
             )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
+                .setKeySize(AES_KEY_SIZE_BITS)
                 .build(),
         )
         generator.generateKey()
@@ -65,5 +65,6 @@ class KeystoreCrypto @Inject constructor() {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val IV_LENGTH = 12
         const val TAG_BITS = 128
+        const val AES_KEY_SIZE_BITS = 256
     }
 }

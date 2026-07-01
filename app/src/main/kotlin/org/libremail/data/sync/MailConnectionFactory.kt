@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.sync
 
-import java.util.concurrent.ConcurrentHashMap
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -18,6 +15,9 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.SmtpParams
+import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /** Resolves an account's stored credential (refreshing OAuth tokens when needed) into connection params. */
 @Singleton
@@ -35,11 +35,17 @@ class MailConnectionFactory @Inject constructor(
     /** In-memory access-token cache keyed by "accountId|scope", to avoid redeeming a still-valid token. */
     private val tokenCache = ConcurrentHashMap<String, CachedToken>()
 
-    suspend fun imapParamsFor(account: Account): ImapConnectionParams =
-        account.toImapParams(resolveSecret(account), account.authType != AuthType.PASSWORD_IMAP, strictStartTls())
+    suspend fun imapParamsFor(account: Account): ImapConnectionParams = account.toImapParams(
+        resolveSecret(account),
+        account.authType != AuthType.PASSWORD_IMAP,
+        strictStartTls(),
+    )
 
-    suspend fun smtpParamsFor(account: Account): SmtpParams =
-        account.toSmtpParams(resolveSecret(account), account.authType != AuthType.PASSWORD_IMAP, strictStartTls())
+    suspend fun smtpParamsFor(account: Account): SmtpParams = account.toSmtpParams(
+        resolveSecret(account),
+        account.authType != AuthType.PASSWORD_IMAP,
+        strictStartTls(),
+    )
 
     /** A fresh Microsoft Graph access token for the primary Outlook (sendMail) send path. */
     suspend fun graphTokenFor(account: Account): String =

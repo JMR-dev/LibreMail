@@ -5,7 +5,6 @@ import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
-import kotlin.test.assertEquals
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +25,7 @@ import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
+import kotlin.test.assertEquals
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ComposeViewModelTest {

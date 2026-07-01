@@ -2,8 +2,8 @@
 package org.libremail.data.local
 
 import android.util.Log
-import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
+import java.io.File
 
 /**
  * Converts the Room database file between plaintext and SQLCipher-encrypted form, in place and

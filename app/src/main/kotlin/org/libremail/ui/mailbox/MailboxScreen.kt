@@ -39,9 +39,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -194,8 +194,11 @@ fun MailboxScreen(
                             } else {
                                 val current = folders.firstOrNull { it.fullName == selectedFolder }
                                 Text(
-                                    if (current != null) folderDisplayLabel(current)
-                                    else stringResource(R.string.title_mailbox),
+                                    if (current != null) {
+                                        folderDisplayLabel(current)
+                                    } else {
+                                        stringResource(R.string.title_mailbox)
+                                    },
                                 )
                             }
                         },
@@ -273,13 +276,18 @@ fun MailboxScreen(
                                     }
                                 } else {
                                     items(messages, key = { it.id }) { message ->
+                                        val accountLabel =
+                                            if (showAccount) accountsById[message.accountId]?.email else null
                                         MessageRow(
                                             message = message,
-                                            accountLabel = if (showAccount) accountsById[message.accountId]?.email else null,
+                                            accountLabel = accountLabel,
                                             selected = message.id in selectedIds,
                                             onClick = {
-                                                if (selectionMode) viewModel.toggleSelection(message.id)
-                                                else onOpenMessage(message.id)
+                                                if (selectionMode) {
+                                                    viewModel.toggleSelection(message.id)
+                                                } else {
+                                                    onOpenMessage(message.id)
+                                                }
                                             },
                                             onLongClick = { viewModel.startSelection(message.id) },
                                         )
@@ -559,38 +567,59 @@ private fun SelectionTopBar(
                 if (folderRole != FolderRole.ARCHIVE) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_archive)) },
-                        onClick = { expanded = false; onArchive() },
+                        onClick = {
+                            expanded = false
+                            onArchive()
+                        },
                     )
                 }
                 if (folderRole != FolderRole.SPAM) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_spam)) },
-                        onClick = { expanded = false; onSpam() },
+                        onClick = {
+                            expanded = false
+                            onSpam()
+                        },
                     )
                 }
                 if (canMove) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_move)) },
-                        onClick = { expanded = false; onMove() },
+                        onClick = {
+                            expanded = false
+                            onMove()
+                        },
                     )
                 }
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_select_all)) },
-                    onClick = { expanded = false; onSelectAll() },
+                    onClick = {
+                        expanded = false
+                        onSelectAll()
+                    },
                 )
                 if (count == 1) {
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_reply)) },
-                        onClick = { expanded = false; onReply() },
+                        onClick = {
+                            expanded = false
+                            onReply()
+                        },
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_reply_all)) },
-                        onClick = { expanded = false; onReplyAll() },
+                        onClick = {
+                            expanded = false
+                            onReplyAll()
+                        },
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_forward)) },
-                        onClick = { expanded = false; onForward() },
+                        onClick = {
+                            expanded = false
+                            onForward()
+                        },
                     )
                 }
             }
@@ -727,9 +756,8 @@ private fun NoResultsState(modifier: Modifier = Modifier) {
     }
 }
 
-private fun formatTimestamp(millis: Long): String =
-    DateUtils.getRelativeTimeSpanString(
-        millis,
-        System.currentTimeMillis(),
-        DateUtils.MINUTE_IN_MILLIS,
-    ).toString()
+private fun formatTimestamp(millis: Long): String = DateUtils.getRelativeTimeSpanString(
+    millis,
+    System.currentTimeMillis(),
+    DateUtils.MINUTE_IN_MILLIS,
+).toString()

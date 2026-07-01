@@ -15,9 +15,8 @@ class SyncWorker @AssistedInject constructor(
     private val mailSyncer: MailSyncer,
 ) : CoroutineWorker(appContext, workerParams) {
 
-    override suspend fun doWork(): Result =
-        mailSyncer.syncAll().fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
-        )
+    override suspend fun doWork(): Result = mailSyncer.syncAll().fold(
+        onSuccess = { Result.success() },
+        onFailure = { Result.retry() },
+    )
 }

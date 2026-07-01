@@ -53,10 +53,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import java.io.File
 import org.libremail.R
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,13 +96,18 @@ fun ReaderScreen(
                 title = { Text(stringResource(R.string.title_reader)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
                     }
                 },
                 actions = {
                     val message = state.message
                     if (message != null) {
-                        TextButton(onClick = { onReply(message.senderEmail, "Re: ${message.subject}", message.accountId) }) {
+                        TextButton(onClick = {
+                            onReply(message.senderEmail, "Re: ${message.subject}", message.accountId)
+                        }) {
                             Text(stringResource(R.string.reader_reply))
                         }
                         IconButton(onClick = viewModel::toggleStar) {
@@ -344,12 +349,17 @@ private fun openAttachment(context: Context, file: File, mimeType: String): Bool
     }
 }
 
+private const val MAX_EXTENSION_LENGTH = 4
+private const val BYTES_PER_KB = 1024.0
+
 private fun fileExtension(filename: String): String =
-    filename.substringAfterLast('.', "").uppercase().take(4).ifBlank { "FILE" }
+    filename.substringAfterLast('.', "").uppercase().take(MAX_EXTENSION_LENGTH).ifBlank {
+        "FILE"
+    }
 
 private fun formatSize(bytes: Long): String = when {
     bytes <= 0 -> ""
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "%.0f KB".format(bytes / 1024.0)
-    else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes < BYTES_PER_KB -> "$bytes B"
+    bytes < BYTES_PER_KB * BYTES_PER_KB -> "%.0f KB".format(bytes / BYTES_PER_KB)
+    else -> "%.1f MB".format(bytes / (BYTES_PER_KB * BYTES_PER_KB))
 }

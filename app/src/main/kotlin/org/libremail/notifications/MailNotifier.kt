@@ -15,12 +15,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import org.libremail.MainActivity
 import org.libremail.R
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.domain.model.Account
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Posts on-device new-mail notifications (no push service involved). Each account gets its own
@@ -28,9 +28,7 @@ import org.libremail.domain.model.Account
  * importance in system settings and the shade bundles each account's mail separately.
  */
 @Singleton
-class MailNotifier @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class MailNotifier @Inject constructor(@ApplicationContext private val context: Context) {
     // Permission is checked via hasPermission() below; lint can't trace the indirect guard.
     @SuppressLint("MissingPermission")
     fun notifyNewMail(account: Account, messages: List<MessageEntity>) {

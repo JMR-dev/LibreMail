@@ -3,10 +3,10 @@ package org.libremail.mail
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import jakarta.mail.Session
-import java.util.Properties
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.Properties
 
 /**
  * Guards the main "Jakarta/Angus Mail on Android" risk: that provider registration

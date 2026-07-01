@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui
 
-import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import org.libremail.data.sync.Syncer
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
@@ -14,9 +14,9 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
-import org.libremail.data.sync.Syncer
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import java.io.File
 
 /**
  * In-memory [AccountRepository] for Compose UI tests: serves a fixed account list, records the
@@ -79,8 +79,12 @@ class FakeMailRepository(
 
     override fun observeMessages(): Flow<List<Message>> = flowOf(messages)
 
-    override fun observeFolders(accountId: String): Flow<List<Folder>> =
-        flowOf(folders.filter { it.accountId == accountId })
+    override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(
+        folders.filter {
+            it.accountId ==
+                accountId
+        },
+    )
 
     override suspend fun refreshFolders(accountId: String): Result<Unit> = Result.success(Unit)
 
@@ -90,8 +94,12 @@ class FakeMailRepository(
         messages.firstOrNull { it.id == id }?.let { Result.success(it) }
             ?: Result.failure(NoSuchElementException("no message $id"))
 
-    override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
-        flowOf(attachments.filter { it.messageId == messageId })
+    override fun observeAttachments(messageId: String): Flow<List<Attachment>> = flowOf(
+        attachments.filter {
+            it.messageId ==
+                messageId
+        },
+    )
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> =
         Result.failure(UnsupportedOperationException("not used in UI tests"))

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.repository
 
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
@@ -19,6 +17,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import javax.inject.Inject
+import javax.inject.Singleton
 
 @Singleton
 class AccountRepositoryImpl @Inject constructor(
@@ -32,11 +32,13 @@ class AccountRepositoryImpl @Inject constructor(
     private val mailNotifier: MailNotifier,
 ) : AccountRepository {
 
-    override fun observeAccounts(): Flow<List<Account>> =
-        accountDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+    override fun observeAccounts(): Flow<List<Account>> = accountDao.observeAll().map { rows ->
+        rows.map { it.toDomain() }
+    }
 
-    override suspend fun testConnection(params: ImapConnectionParams): Result<List<String>> =
-        runCatching { imapClient.listFolders(params).map { it.fullName } }
+    override suspend fun testConnection(params: ImapConnectionParams): Result<List<String>> = runCatching {
+        imapClient.listFolders(params).map { it.fullName }
+    }
 
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))

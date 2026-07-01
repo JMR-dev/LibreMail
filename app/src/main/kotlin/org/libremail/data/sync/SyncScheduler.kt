@@ -17,9 +17,7 @@ import javax.inject.Singleton
 
 /** Schedules background mail sync via WorkManager. */
 @Singleton
-class SyncScheduler @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class SyncScheduler @Inject constructor(@ApplicationContext private val context: Context) {
     private val workManager get() = WorkManager.getInstance(context)
 
     private val networkConstraint = Constraints.Builder()

@@ -4,22 +4,17 @@ package org.libremail.contacts
 import android.content.Context
 import android.provider.ContactsContract.CommonDataKinds.Email
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /** A device contact match for recipient autocomplete. */
-data class ContactSuggestion(
-    val name: String,
-    val email: String,
-)
+data class ContactSuggestion(val name: String, val email: String)
 
 /** Looks up device contacts (ContactsContract) for recipient autocomplete. */
 @Singleton
-class ContactsRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class ContactsRepository @Inject constructor(@ApplicationContext private val context: Context) {
     /** Returns up to [LIMIT] contacts whose name or email matches [query]. Empty if no permission. */
     suspend fun search(query: String): List<ContactSuggestion> = withContext(Dispatchers.IO) {
         if (query.length < 2) return@withContext emptyList()

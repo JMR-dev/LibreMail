@@ -12,7 +12,4 @@ data class OutgoingMessage(
 )
 
 /** A file the user attached, referenced by its content-URI string until it is sent. */
-data class OutgoingAttachment(
-    val uri: String,
-    val name: String,
-)
+data class OutgoingAttachment(val uri: String, val name: String)

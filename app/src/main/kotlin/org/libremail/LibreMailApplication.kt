@@ -5,7 +5,6 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
-import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,9 +16,12 @@ import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.push.IdlePushManager
+import javax.inject.Inject
 
 @HiltAndroidApp
-class LibreMailApplication : Application(), Configuration.Provider {
+class LibreMailApplication :
+    Application(),
+    Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
 

@@ -5,10 +5,6 @@ import android.content.Context
 import android.net.Uri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
-import java.io.File
-import java.util.UUID
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.ReplyBuilder
@@ -38,6 +34,10 @@ import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import java.io.File
+import java.util.UUID
+import javax.inject.Inject
+import javax.inject.Singleton
 
 @Singleton
 class MailRepositoryImpl @Inject constructor(
@@ -54,11 +54,14 @@ class MailRepositoryImpl @Inject constructor(
     private val accountSettingsRepository: AccountSettingsRepository,
 ) : MailRepository {
 
-    override fun observeMessages(): Flow<List<Message>> =
-        messageDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+    override fun observeMessages(): Flow<List<Message>> = messageDao.observeAll().map { rows ->
+        rows.map { it.toDomain() }
+    }
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> =
-        folderDao.observeForAccount(accountId).map { rows -> rows.map { it.toDomain() } }
+        folderDao.observeForAccount(accountId).map { rows ->
+            rows.map { it.toDomain() }
+        }
 
     override suspend fun refreshFolders(accountId: String): Result<Unit> = runCatching {
         val account = accountDao.getById(accountId)?.toDomain() ?: error("Account not found")
@@ -89,7 +92,9 @@ class MailRepositoryImpl @Inject constructor(
     }
 
     override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
-        attachmentDao.observeForMessage(messageId).map { rows -> rows.map { it.toDomain() } }
+        attachmentDao.observeForMessage(messageId).map { rows ->
+            rows.map { it.toDomain() }
+        }
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> = runCatching {
         val entity = messageDao.getById(messageId) ?: error("Message not found")
@@ -105,11 +110,13 @@ class MailRepositoryImpl @Inject constructor(
         target
     }
 
-    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> =
-        attachmentDao.getForMessage(messageId)
-            .filter { val file = attachmentFile(messageId, it.partIndex, it.filename); file.exists() && file.length() > 0L }
-            .map { it.partIndex }
-            .toSet()
+    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> = attachmentDao.getForMessage(messageId)
+        .filter {
+            val file = attachmentFile(messageId, it.partIndex, it.filename)
+            file.exists() && file.length() > 0L
+        }
+        .map { it.partIndex }
+        .toSet()
 
     override suspend fun prefetchMessage(messageId: String): Result<Unit> = runCatching {
         val entity = messageDao.getById(messageId) ?: return@runCatching
@@ -133,7 +140,11 @@ class MailRepositoryImpl @Inject constructor(
         val account = entity?.let { accountDao.getById(it.accountId)?.toDomain() }
         if (entity != null && account != null) {
             imapClient.setFlag(
-                connectionFactory.imapParamsFor(account), entity.folder, uidOf(id), Flags.Flag.FLAGGED, starred,
+                connectionFactory.imapParamsFor(account),
+                entity.folder,
+                uidOf(id),
+                Flags.Flag.FLAGGED,
+                starred,
             )
         }
     }
@@ -237,8 +248,7 @@ class MailRepositoryImpl @Inject constructor(
 
     /** Resolves the full name of an account's folder for [role], refreshing the cache once if needed. */
     private suspend fun resolveRoleFolder(accountId: String, role: FolderRole): String? {
-        fun pick(folders: List<FolderEntity>) =
-            folders.firstOrNull { it.role == role.name && it.selectable }?.fullName
+        fun pick(folders: List<FolderEntity>) = folders.firstOrNull { it.role == role.name && it.selectable }?.fullName
         pick(folderDao.getForAccountOnce(accountId))?.let { return it }
         // The folder cache can be cold (the user may not have opened the drawer yet); refresh and retry.
         runCatching { refreshFolders(accountId) }
@@ -282,8 +292,7 @@ class MailRepositoryImpl @Inject constructor(
         }
     }
 
-    override fun observeDrafts(): Flow<List<Draft>> =
-        draftDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+    override fun observeDrafts(): Flow<List<Draft>> = draftDao.observeAll().map { rows -> rows.map { it.toDomain() } }
 
     override suspend fun getDraft(id: String): Draft? = draftDao.getById(id)?.toDomain()
 
@@ -291,8 +300,9 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun deleteDraft(id: String) = draftDao.delete(id)
 
-    override fun observeOutbox(): Flow<List<OutboxMessage>> =
-        outboxDao.observeAll().map { rows -> rows.map { it.toDomain() } }
+    override fun observeOutbox(): Flow<List<OutboxMessage>> = outboxDao.observeAll().map { rows ->
+        rows.map { it.toDomain() }
+    }
 
     override suspend fun cancelOutboxMessage(id: String) {
         outboxDao.delete(id)
@@ -341,9 +351,10 @@ class MailRepositoryImpl @Inject constructor(
 }
 
 private const val SEARCH_LIMIT = 50
+private const val SNIPPET_LENGTH = 140
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
 
 private fun snippetOf(body: String): String =
-    body.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(140)
+    body.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(SNIPPET_LENGTH)

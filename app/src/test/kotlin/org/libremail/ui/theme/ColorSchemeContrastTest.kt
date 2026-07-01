@@ -4,9 +4,9 @@ package org.libremail.ui.theme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import kotlin.test.assertTrue
 import org.junit.Test
 import org.libremail.ui.contrastRatio
+import kotlin.test.assertTrue
 
 /**
  * Guards the fallback (non-dynamic) color schemes — the ones LibreMail ships for pre-Android-12

@@ -8,7 +8,6 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
@@ -32,6 +31,7 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.SettingsRepository
+import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -83,8 +83,7 @@ object DatabaseModule {
     fun provideAccountDao(database: LibreMailDatabase): AccountDao = database.accountDao()
 
     @Provides
-    fun provideAccountSettingsDao(database: LibreMailDatabase): AccountSettingsDao =
-        database.accountSettingsDao()
+    fun provideAccountSettingsDao(database: LibreMailDatabase): AccountSettingsDao = database.accountSettingsDao()
 
     @Provides
     fun provideCredentialDao(database: LibreMailDatabase): CredentialDao = database.credentialDao()

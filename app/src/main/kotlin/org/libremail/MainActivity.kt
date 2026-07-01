@@ -17,10 +17,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.ui.LibreMailApp
 import org.libremail.ui.theme.LibreMailTheme
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {

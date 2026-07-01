@@ -5,8 +5,6 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.util.UUID
-import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +26,8 @@ import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
+import java.util.UUID
+import javax.inject.Inject
 
 data class ComposeUiState(
     val to: String = "",
@@ -135,8 +135,14 @@ class ComposeViewModel @Inject constructor(
     }
     fun addAttachments(items: List<OutgoingAttachment>) =
         _state.update { it.copy(attachments = it.attachments + items) }
-    fun removeAttachment(uri: String) =
-        _state.update { it.copy(attachments = it.attachments.filterNot { a -> a.uri == uri }) }
+    fun removeAttachment(uri: String) = _state.update {
+        it.copy(
+            attachments = it.attachments.filterNot { a ->
+                a.uri ==
+                    uri
+            },
+        )
+    }
     fun consumeError() = _state.update { it.copy(error = null) }
     fun onContactsPermission(granted: Boolean) = _state.update { it.copy(contactsAllowed = granted) }
 
@@ -179,8 +185,11 @@ class ComposeViewModel @Inject constructor(
 
     private suspend fun saveOrDeleteDraft() {
         val s = _state.value
-        val hasContent = s.to.isNotBlank() || s.cc.isNotBlank() || s.subject.isNotBlank() ||
-            s.body.isNotBlank() || s.attachments.isNotEmpty()
+        val hasContent = s.to.isNotBlank() ||
+            s.cc.isNotBlank() ||
+            s.subject.isNotBlank() ||
+            s.body.isNotBlank() ||
+            s.attachments.isNotEmpty()
         when {
             hasContent -> mailRepository.saveDraft(
                 Draft(
@@ -218,7 +227,15 @@ class ComposeViewModel @Inject constructor(
                             _state.update { it.copy(sending = false) }
                             finish()
                         },
-                        onFailure = { e -> _state.update { it.copy(sending = false, error = e.message ?: "Could not send") } },
+                        onFailure = { e ->
+                            _state.update {
+                                it.copy(
+                                    sending = false,
+                                    error =
+                                    e.message ?: "Could not send",
+                                )
+                            }
+                        },
                     )
                 }
             }

@@ -4,9 +4,6 @@ package org.libremail.mail
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
-import java.io.File
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -14,6 +11,9 @@ import org.junit.Test
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.SmtpParams
+import java.io.File
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SmtpSenderTest {
 

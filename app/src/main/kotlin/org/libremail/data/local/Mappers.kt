@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.local
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AccountSettingsEntity
 import org.libremail.data.local.entity.AttachmentEntity
@@ -9,19 +11,17 @@ import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
-import org.json.JSONArray
-import org.json.JSONObject
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.Attachment
-import org.libremail.domain.model.Draft
-import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.SmtpParams
@@ -65,22 +65,17 @@ internal fun Account.toImapParams(
     secret: String,
     useXoauth2: Boolean,
     strictStartTls: Boolean = true,
-): ImapConnectionParams =
-    ImapConnectionParams(
-        host = imap.host,
-        port = imap.port,
-        security = imap.security,
-        username = email,
-        secret = secret,
-        useXoauth2 = useXoauth2,
-        strictStartTls = strictStartTls,
-    )
+): ImapConnectionParams = ImapConnectionParams(
+    host = imap.host,
+    port = imap.port,
+    security = imap.security,
+    username = email,
+    secret = secret,
+    useXoauth2 = useXoauth2,
+    strictStartTls = strictStartTls,
+)
 
-internal fun Account.toSmtpParams(
-    secret: String,
-    useXoauth2: Boolean,
-    strictStartTls: Boolean = true,
-): SmtpParams =
+internal fun Account.toSmtpParams(secret: String, useXoauth2: Boolean, strictStartTls: Boolean = true): SmtpParams =
     SmtpParams(
         host = smtp.host,
         port = smtp.port,
@@ -108,26 +103,23 @@ internal fun MessageEntity.toDomain(): Message = Message(
     bodyFetched = bodyFetched,
 )
 
-internal fun FetchedMessage.toEntity(
-    accountId: String,
-    folder: String,
-    inInbox: Boolean = true,
-): MessageEntity = MessageEntity(
-    id = "$accountId:$folder:$uid",
-    accountId = accountId,
-    sender = sender,
-    senderEmail = senderEmail,
-    subject = subject,
-    snippet = "",
-    body = "",
-    isHtml = false,
-    timestampMillis = timestampMillis,
-    isRead = isRead,
-    isStarred = isFlagged,
-    folder = folder,
-    inInbox = inInbox,
-    bodyFetched = false,
-)
+internal fun FetchedMessage.toEntity(accountId: String, folder: String, inInbox: Boolean = true): MessageEntity =
+    MessageEntity(
+        id = "$accountId:$folder:$uid",
+        accountId = accountId,
+        sender = sender,
+        senderEmail = senderEmail,
+        subject = subject,
+        snippet = "",
+        body = "",
+        isHtml = false,
+        timestampMillis = timestampMillis,
+        isRead = isRead,
+        isStarred = isFlagged,
+        folder = folder,
+        inInbox = inInbox,
+        bodyFetched = false,
+    )
 
 internal fun FolderEntity.toDomain(): Folder = Folder(
     accountId = accountId,
@@ -212,5 +204,6 @@ internal fun OutboxEntity.toDomain(): OutboxMessage = OutboxMessage(
     lastError = lastError,
 )
 
-private fun String.toMailSecurity(): MailSecurity =
-    runCatching { MailSecurity.valueOf(this) }.getOrDefault(MailSecurity.SSL_TLS)
+private fun String.toMailSecurity(): MailSecurity = runCatching {
+    MailSecurity.valueOf(this)
+}.getOrDefault(MailSecurity.SSL_TLS)

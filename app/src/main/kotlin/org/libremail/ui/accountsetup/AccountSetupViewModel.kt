@@ -7,7 +7,6 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,14 +14,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.auth.OutlookAuthManager
 import org.libremail.domain.repository.AccountRepository
+import javax.inject.Inject
 
 /** Stage of an account-setup attempt, shared by the Outlook and manual flows. */
 enum class SetupStatus { IDLE, CONNECTING, DONE }
 
-data class AccountSetupUiState(
-    val status: SetupStatus = SetupStatus.IDLE,
-    val error: String? = null,
-)
+data class AccountSetupUiState(val status: SetupStatus = SetupStatus.IDLE, val error: String? = null)
 
 @HiltViewModel
 class AccountSetupViewModel @Inject constructor(
@@ -68,7 +65,9 @@ class AccountSetupViewModel @Inject constructor(
                     // Stripped from release builds by the Log.d ProGuard rule (keeps any account
                     // address / token detail out of shipped logs); visible in debug for diagnosis.
                     Log.d(TAG, "Outlook sign-in failed after redirect", e)
-                    _state.update { it.copy(status = SetupStatus.IDLE, error = e.message ?: "Microsoft sign-in failed") }
+                    _state.update {
+                        it.copy(status = SetupStatus.IDLE, error = e.message ?: "Microsoft sign-in failed")
+                    }
                 },
             )
         }

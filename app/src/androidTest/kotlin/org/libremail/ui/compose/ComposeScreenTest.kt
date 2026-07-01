@@ -72,10 +72,7 @@ class ComposeScreenTest {
     }
 
     // Build the view model once and capture it, so recomposition doesn't recreate it.
-    private fun setContent(
-        mailRepository: FakeMailRepository = FakeMailRepository(),
-        onBack: () -> Unit = {},
-    ) {
+    private fun setContent(mailRepository: FakeMailRepository = FakeMailRepository(), onBack: () -> Unit = {}) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val database = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build().also { db = it }
         val viewModel = ComposeViewModel(

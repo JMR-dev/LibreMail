@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -56,7 +57,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,10 +67,7 @@ import org.libremail.domain.model.OutgoingAttachment
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ComposeScreen(
-    onBack: () -> Unit,
-    viewModel: ComposeViewModel = hiltViewModel(),
-) {
+fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -96,7 +93,13 @@ fun ComposeScreen(
     LaunchedEffect(Unit) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
             PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.onContactsPermission(true) else permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+        if (granted) {
+            viewModel.onContactsPermission(
+                true,
+            )
+        } else {
+            permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+        }
     }
     LaunchedEffect(Unit) { viewModel.finished.collect { onBack() } }
     BackHandler { viewModel.onExit() }
@@ -113,7 +116,10 @@ fun ComposeScreen(
                 title = { Text(stringResource(R.string.title_compose)) },
                 navigationIcon = {
                     IconButton(onClick = viewModel::onExit) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
                     }
                 },
                 actions = {
@@ -214,7 +220,10 @@ private fun FromRow(accounts: List<Account>, selectedId: String?, onSelect: (Str
                     accounts.forEach { account ->
                         DropdownMenuItem(
                             text = { Text(account.email) },
-                            onClick = { onSelect(account.id); open = false },
+                            onClick = {
+                                onSelect(account.id)
+                                open = false
+                            },
                         )
                     }
                 }

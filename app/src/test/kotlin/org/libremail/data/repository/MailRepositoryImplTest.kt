@@ -10,10 +10,6 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
-import java.io.File
-import java.nio.file.Files
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -40,6 +36,10 @@ import org.libremail.mail.DownloadedAttachment
 import org.libremail.mail.ImapClient
 import org.libremail.mail.MessageContent
 import org.libremail.mail.ReplyContext
+import java.io.File
+import java.nio.file.Files
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class MailRepositoryImplTest {
 
@@ -48,6 +48,7 @@ class MailRepositoryImplTest {
     private val folderDao = mockk<FolderDao>()
     private val attachmentDao = mockk<AttachmentDao>(relaxed = true)
     private val draftDao = mockk<DraftDao>()
+
     // Relaxed: move/delete return jakarta Message[] (from Folder.expunge), which we only verify, not stub.
     private val imapClient = mockk<ImapClient>(relaxed = true)
     private val connectionFactory = mockk<MailConnectionFactory>()
@@ -109,7 +110,8 @@ class MailRepositoryImplTest {
         coEvery { messageDao.getById(id) } returns messageEntity(id, "Archive")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
-        coEvery { imapClient.fetchBodyMarkingSeen(any(), "Archive", "5") } returns MessageContent("Body text", isHtml = false)
+        coEvery { imapClient.fetchBodyMarkingSeen(any(), "Archive", "5") } returns
+            MessageContent("Body text", isHtml = false)
         coEvery { messageDao.updateBody(id, any(), any(), any()) } just Runs
         coEvery { messageDao.setRead(id, true) } just Runs
 
@@ -282,7 +284,11 @@ class MailRepositoryImplTest {
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "10") } returns
-            MessageContent("Body", isHtml = false, attachments = listOf(AttachmentPart(0, "f.bin", "application/octet-stream", 3)))
+            MessageContent(
+                "Body",
+                isHtml = false,
+                attachments = listOf(AttachmentPart(0, "f.bin", "application/octet-stream", 3)),
+            )
         coEvery { messageDao.updateBody(id, "Body", false, any()) } just Runs
         coEvery { attachmentDao.getForMessage(id) } returns listOf(attachmentEntity(id, 0, "f.bin"))
         coEvery { imapClient.fetchAttachment(any(), "INBOX", "10", 0) } returns
@@ -359,25 +365,21 @@ class MailRepositoryImplTest {
     private fun attachmentEntity(messageId: String, partIndex: Int, filename: String) =
         AttachmentEntity(messageId, partIndex, filename, "application/octet-stream", 10L)
 
-    private fun messageEntity(
-        id: String,
-        folder: String,
-        accountId: String = "acct",
-        bodyFetched: Boolean = false,
-    ) = MessageEntity(
-        id = id,
-        accountId = accountId,
-        sender = "Ada",
-        senderEmail = "ada@example.org",
-        subject = "Hi",
-        snippet = "snippet",
-        body = "",
-        timestampMillis = 1_000L,
-        isRead = false,
-        isStarred = false,
-        folder = folder,
-        bodyFetched = bodyFetched,
-    )
+    private fun messageEntity(id: String, folder: String, accountId: String = "acct", bodyFetched: Boolean = false) =
+        MessageEntity(
+            id = id,
+            accountId = accountId,
+            sender = "Ada",
+            senderEmail = "ada@example.org",
+            subject = "Hi",
+            snippet = "snippet",
+            body = "",
+            timestampMillis = 1_000L,
+            isRead = false,
+            isStarred = false,
+            folder = folder,
+            bodyFetched = bodyFetched,
+        )
 
     private fun accountEntity(id: String = "acct", email: String = "ada@example.org") = AccountEntity(
         id = id,

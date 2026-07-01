@@ -5,13 +5,13 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
 import org.libremail.data.repository.AccountRepositoryImpl
 import org.libremail.data.repository.MailRepositoryImpl
 import org.libremail.data.sync.MailSyncer
 import org.libremail.data.sync.Syncer
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)

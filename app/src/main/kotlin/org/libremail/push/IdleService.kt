@@ -7,11 +7,11 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +30,7 @@ import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.MailSyncer
 import org.libremail.domain.model.Account
 import org.libremail.mail.ImapClient
+import javax.inject.Inject
 
 /**
  * Foreground service that holds a long-lived IMAP IDLE connection per account so the server can
@@ -40,8 +41,11 @@ import org.libremail.mail.ImapClient
 class IdleService : Service() {
 
     @Inject lateinit var accountDao: AccountDao
+
     @Inject lateinit var connectionFactory: MailConnectionFactory
+
     @Inject lateinit var imapClient: ImapClient
+
     @Inject lateinit var mailSyncer: MailSyncer
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -99,6 +103,7 @@ class IdleService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Log.w(TAG, "IDLE for ${account.email} dropped; retrying in ${backoffMs}ms", e)
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
             }
@@ -137,6 +142,7 @@ class IdleService : Service() {
     }
 
     private companion object {
+        const val TAG = "IdleService"
         const val CHANNEL_ID = "push_status"
         const val FOREGROUND_ID = 1002
         const val INITIAL_BACKOFF_MS = 5_000L

@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,11 +37,7 @@ import org.libremail.domain.model.Draft
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DraftsScreen(
-    onBack: () -> Unit,
-    onOpenDraft: (String) -> Unit,
-    viewModel: DraftsViewModel = hiltViewModel(),
-) {
+fun DraftsScreen(onBack: () -> Unit, onOpenDraft: (String) -> Unit, viewModel: DraftsViewModel = hiltViewModel()) {
     val drafts by viewModel.drafts.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -51,7 +46,10 @@ fun DraftsScreen(
                 title = { Text(stringResource(R.string.drafts_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
                     }
                 },
             )

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.domain.model
 
-import kotlin.test.assertEquals
 import org.junit.Test
+import kotlin.test.assertEquals
 
 class FolderRoleTest {
 

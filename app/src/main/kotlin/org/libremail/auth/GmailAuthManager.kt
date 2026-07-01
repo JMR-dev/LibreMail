@@ -6,10 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -18,18 +14,19 @@ import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.ResponseTypeValues
-import net.openid.appauth.TokenResponse
 import org.json.JSONObject
 import org.libremail.BuildConfig
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Gmail OAuth 2.0 via AppAuth — Authorization Code + PKCE, no client secret. The restricted
  * `https://mail.google.com/` scope is requested so the access token works for IMAP/SMTP XOAUTH2.
  */
 @Singleton
-class GmailAuthManager @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class GmailAuthManager @Inject constructor(@ApplicationContext private val context: Context) {
     private val serviceConfig = AuthorizationServiceConfiguration(
         Uri.parse("https://accounts.google.com/o/oauth2/v2/auth"),
         Uri.parse("https://oauth2.googleapis.com/token"),

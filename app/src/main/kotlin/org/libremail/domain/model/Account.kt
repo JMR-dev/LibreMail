@@ -22,14 +22,17 @@ data class Account(
     val smtp: ServerConfig,
 ) {
     companion object {
+        private const val OUTLOOK_IMAP_PORT = 993
+        private const val OUTLOOK_SMTP_PORT = 587
+
         /** An Outlook/Microsoft account using the unified office365 endpoints (personal + M365). */
         fun outlook(email: String, displayName: String = email): Account = Account(
             id = "outlook:$email",
             email = email,
             displayName = displayName.ifBlank { email },
             authType = AuthType.OAUTH_OUTLOOK,
-            imap = ServerConfig("outlook.office365.com", 993, MailSecurity.SSL_TLS),
-            smtp = ServerConfig("smtp.office365.com", 587, MailSecurity.STARTTLS),
+            imap = ServerConfig("outlook.office365.com", OUTLOOK_IMAP_PORT, MailSecurity.SSL_TLS),
+            smtp = ServerConfig("smtp.office365.com", OUTLOOK_SMTP_PORT, MailSecurity.STARTTLS),
         )
     }
 }

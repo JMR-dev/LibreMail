@@ -6,10 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -22,6 +18,10 @@ import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
 import org.json.JSONObject
 import org.libremail.BuildConfig
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Outlook / Microsoft OAuth 2.0 via AppAuth — Authorization Code + PKCE, no client secret.
@@ -34,9 +34,7 @@ import org.libremail.BuildConfig
  * both personal Microsoft accounts and work/school (Microsoft 365).
  */
 @Singleton
-class OutlookAuthManager @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class OutlookAuthManager @Inject constructor(@ApplicationContext private val context: Context) {
     private val serviceConfig = AuthorizationServiceConfiguration(
         Uri.parse("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"),
         Uri.parse("https://login.microsoftonline.com/common/oauth2/v2.0/token"),

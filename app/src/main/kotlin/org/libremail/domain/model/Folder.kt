@@ -36,21 +36,25 @@ enum class FolderRole {
         fun roleOf(fullName: String, displayName: String, attributes: List<String>): FolderRole {
             if (fullName.equals("INBOX", ignoreCase = true)) return INBOX
             val attrs = attributes.map { it.lowercase() }
-            when {
-                "\\sent" in attrs -> return SENT
-                "\\drafts" in attrs -> return DRAFTS
-                "\\junk" in attrs -> return SPAM
-                "\\trash" in attrs -> return TRASH
-                "\\archive" in attrs -> return ARCHIVE
+            val byAttribute = when {
+                "\\sent" in attrs -> SENT
+                "\\drafts" in attrs -> DRAFTS
+                "\\junk" in attrs -> SPAM
+                "\\trash" in attrs -> TRASH
+                "\\archive" in attrs -> ARCHIVE
+                else -> null
             }
-            return when (displayName.lowercase().trim()) {
-                "sent", "sent mail", "sent items", "sent messages" -> SENT
-                "drafts", "draft" -> DRAFTS
-                "junk", "spam", "junk e-mail", "junk email", "bulk mail" -> SPAM
-                "trash", "deleted", "deleted items", "deleted messages", "bin" -> TRASH
-                "archive", "archives", "all mail" -> ARCHIVE
-                else -> NORMAL
-            }
+            return byAttribute ?: roleFromDisplayName(displayName)
+        }
+
+        /** Best-effort role from a folder's display name, for servers without SPECIAL-USE flags. */
+        private fun roleFromDisplayName(displayName: String): FolderRole = when (displayName.lowercase().trim()) {
+            "sent", "sent mail", "sent items", "sent messages" -> SENT
+            "drafts", "draft" -> DRAFTS
+            "junk", "spam", "junk e-mail", "junk email", "bulk mail" -> SPAM
+            "trash", "deleted", "deleted items", "deleted messages", "bin" -> TRASH
+            "archive", "archives", "all mail" -> ARCHIVE
+            else -> NORMAL
         }
     }
 }

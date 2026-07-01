@@ -2,10 +2,10 @@
 package org.libremail.ui.reader
 
 import androidx.compose.ui.graphics.Color
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import org.junit.Test
 import org.libremail.ui.contrastRatio
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Pins the readability contract of the reader's HTML wrapper: every email is rendered with an
