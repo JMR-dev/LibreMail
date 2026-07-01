@@ -7,12 +7,12 @@ import io.mockk.coVerify
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.entity.AccountSettingsEntity
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class AccountSettingsRepositoryTest {
 

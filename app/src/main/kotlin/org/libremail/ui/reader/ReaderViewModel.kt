@@ -5,8 +5,6 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.io.File
-import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +18,8 @@ import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
+import java.io.File
+import javax.inject.Inject
 
 data class ReaderUiState(
     val loading: Boolean = true,
@@ -64,12 +64,22 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             repository.openMessage(messageId).fold(
                 onSuccess = { message -> _state.update { it.copy(loading = false, message = message) } },
-                onFailure = { e -> _state.update { it.copy(loading = false, error = e.message ?: "Could not load message") } },
+                onFailure = { e ->
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            error =
+                            e.message ?: "Could not load message",
+                        )
+                    }
+                },
             )
         }
         viewModelScope.launch {
             repository.observeAttachments(messageId).collect { attachments ->
-                _state.update { it.copy(attachments = attachments, downloaded = repository.downloadedAttachmentParts(messageId)) }
+                _state.update {
+                    it.copy(attachments = attachments, downloaded = repository.downloadedAttachmentParts(messageId))
+                }
             }
         }
     }

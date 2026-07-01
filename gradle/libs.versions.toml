@@ -24,6 +24,10 @@ turbine = "1.2.1"
 mockk = "1.14.11"
 greenmail = "2.1.9"
 errorprone = "2.50.0"
+# Lint/format. ktlint owns formatting; detekt owns static analysis (formatting ruleset off).
+# detekt 2.0 is the only line with Gradle 9 support (stable 1.23.x tops out at Gradle 8.12).
+ktlint = "14.2.0"
+detekt = "2.0.0-alpha.5"
 
 [libraries]
 # AndroidX core / lifecycle / activity / navigation
@@ -89,3 +93,5 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

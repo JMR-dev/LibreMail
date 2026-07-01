@@ -15,9 +15,7 @@ import javax.inject.Singleton
 
 /** Schedules the outbox send worker via WorkManager. */
 @Singleton
-class SendScheduler @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class SendScheduler @Inject constructor(@ApplicationContext private val context: Context) {
     /** Drain the outbox as soon as the network is available, retrying with backoff on failure. */
     fun sendNow() {
         val request = OneTimeWorkRequestBuilder<SendWorker>()

@@ -12,6 +12,11 @@ data class AccountSettings(
      * The block to append to a compose body, or "" when disabled or blank. Uses the RFC 3676
      * signature delimiter ("-- " on its own line) so downstream clients recognize it as a signature.
      */
-    fun signatureBlock(): String =
-        if (signatureEnabled && signature.isNotBlank()) "\n\n-- \n${signature.trimEnd()}" else ""
+    fun signatureBlock(): String = if (signatureEnabled &&
+        signature.isNotBlank()
+    ) {
+        "\n\n-- \n${signature.trimEnd()}"
+    } else {
+        ""
+    }
 }

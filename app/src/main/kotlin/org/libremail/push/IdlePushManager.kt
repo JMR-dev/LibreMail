@@ -10,9 +10,7 @@ import javax.inject.Singleton
 
 /** Starts and stops [IdleService] to match the user's push-mail (IMAP IDLE) preference. */
 @Singleton
-class IdlePushManager @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class IdlePushManager @Inject constructor(@ApplicationContext private val context: Context) {
     fun start() {
         // Starting a foreground service from a background process is disallowed on modern Android;
         // swallow that case — periodic WorkManager sync still covers mail, and IDLE starts the next

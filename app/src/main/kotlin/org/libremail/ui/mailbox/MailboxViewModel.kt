@@ -4,7 +4,6 @@ package org.libremail.ui.mailbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
@@ -30,8 +29,12 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import javax.inject.Inject
 
 const val INBOX = "INBOX"
+
+private const val SEARCH_DEBOUNCE_MS = 400L
+private const val MIN_SEARCH_LENGTH = 2
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
@@ -57,19 +60,22 @@ class MailboxViewModel @Inject constructor(
     val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
 
     /** Which account's folders the drawer lists. null follows the mailbox selection / first account. */
-    private val _drawerAccountId = MutableStateFlow<String?>(null)
+    private val explicitDrawerAccountId = MutableStateFlow<String?>(null)
 
     /** The account the drawer is browsing: explicit drawer pick, else the filtered account, else the first. */
     val drawerAccount: StateFlow<Account?> =
-        combine(accounts, _drawerAccountId, _selectedAccountId) { accts, drawerId, selId ->
+        combine(accounts, explicitDrawerAccountId, _selectedAccountId) { accts, drawerId, selId ->
             accts.firstOrNull { it.id == (drawerId ?: selId) } ?: accts.firstOrNull()
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** The drawer account's cached folders, always including an inbox entry even before the first refresh. */
     val folders: StateFlow<List<Folder>> = drawerAccount
         .flatMapLatest { account ->
-            if (account == null) flowOf(emptyList())
-            else mailRepository.observeFolders(account.id).map { withInbox(account.id, it) }
+            if (account == null) {
+                flowOf(emptyList())
+            } else {
+                mailRepository.observeFolders(account.id).map { withInbox(account.id, it) }
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -164,8 +170,9 @@ class MailboxViewModel @Inject constructor(
 
     fun archiveSelected() = runOnSelection { mailRepository.archive(it) }
 
-    fun moveSelected(destFolderFullName: String) =
-        runOnSelection { mailRepository.moveToFolder(it, destFolderFullName) }
+    fun moveSelected(destFolderFullName: String) = runOnSelection {
+        mailRepository.moveToFolder(it, destFolderFullName)
+    }
 
     /** Reply and Forward open compose directly; Reply All is confirmed first (see [requestReplyAll]). */
     fun reply(mode: ReplyMode) {
@@ -196,8 +203,11 @@ class MailboxViewModel @Inject constructor(
         when (val pending = _pendingConfirm.value) {
             is PendingAction.Spam -> runOnSelection { mailRepository.reportSpam(it) }
             is PendingAction.Delete ->
-                if (pending.permanent) runOnSelection { mailRepository.expunge(it) }
-                else runOnSelection { mailRepository.trash(it) }
+                if (pending.permanent) {
+                    runOnSelection { mailRepository.expunge(it) }
+                } else {
+                    runOnSelection { mailRepository.trash(it) }
+                }
             is PendingAction.ReplyAll -> buildReply(ReplyMode.REPLY_ALL, pending.messageId)
             null -> Unit
         }
@@ -245,9 +255,9 @@ class MailboxViewModel @Inject constructor(
         // then surfaces them.
         viewModelScope.launch {
             _searchQuery
-                .debounce(400L)
+                .debounce(SEARCH_DEBOUNCE_MS)
                 .map { it.trim() }
-                .filter { it.length >= 2 }
+                .filter { it.length >= MIN_SEARCH_LENGTH }
                 .distinctUntilChanged()
                 .collect { query ->
                     mailRepository.searchServer(query, _selectedAccountId.value, _selectedFolder.value)
@@ -264,7 +274,7 @@ class MailboxViewModel @Inject constructor(
     fun selectFolder(accountId: String, folderFullName: String) {
         clearSelection()
         _selectedAccountId.value = accountId
-        _drawerAccountId.value = accountId
+        explicitDrawerAccountId.value = accountId
         _selectedFolder.value = folderFullName
         viewModelScope.launch { mailSyncer.syncFolder(accountId, folderFullName) }
     }
@@ -273,13 +283,13 @@ class MailboxViewModel @Inject constructor(
     fun selectUnifiedInbox() {
         clearSelection()
         _selectedAccountId.value = null
-        _drawerAccountId.value = null
+        explicitDrawerAccountId.value = null
         _selectedFolder.value = INBOX
     }
 
     /** Points the drawer at another account's folders (without changing the shown mail yet). */
     fun setDrawerAccount(accountId: String) {
-        _drawerAccountId.value = accountId
+        explicitDrawerAccountId.value = accountId
         viewModelScope.launch { mailRepository.refreshFolders(accountId) }
     }
 
@@ -350,8 +360,7 @@ private fun withInbox(accountId: String, folders: List<Folder>): List<Folder> =
     }
 
 /** Local match over the always-populated header fields (and snippet, once a body is cached). */
-private fun Message.matchesSearch(query: String): Boolean =
-    sender.contains(query, ignoreCase = true) ||
-        senderEmail.contains(query, ignoreCase = true) ||
-        subject.contains(query, ignoreCase = true) ||
-        snippet.contains(query, ignoreCase = true)
+private fun Message.matchesSearch(query: String): Boolean = sender.contains(query, ignoreCase = true) ||
+    senderEmail.contains(query, ignoreCase = true) ||
+    subject.contains(query, ignoreCase = true) ||
+    snippet.contains(query, ignoreCase = true)

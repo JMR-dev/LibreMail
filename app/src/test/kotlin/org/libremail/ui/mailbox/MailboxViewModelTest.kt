@@ -5,9 +5,6 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import kotlin.test.assertEquals
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +29,9 @@ import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MailboxViewModelTest {
@@ -136,8 +136,13 @@ class MailboxViewModelTest {
             accounts = listOf(alice, bob),
             messages = emptyList(),
             folders = mapOf(
-                "imap:a" to listOf(folder("imap:a", "INBOX", FolderRole.INBOX), folder("imap:a", "Archive", FolderRole.ARCHIVE)),
-                "imap:b" to listOf(folder("imap:b", "INBOX", FolderRole.INBOX), folder("imap:b", "Work", FolderRole.NORMAL)),
+                "imap:a" to
+                    listOf(
+                        folder("imap:a", "INBOX", FolderRole.INBOX),
+                        folder("imap:a", "Archive", FolderRole.ARCHIVE),
+                    ),
+                "imap:b" to
+                    listOf(folder("imap:b", "INBOX", FolderRole.INBOX), folder("imap:b", "Work", FolderRole.NORMAL)),
             ),
         )
         backgroundScope.launch { vm.folders.collect {} }

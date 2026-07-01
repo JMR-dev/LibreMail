@@ -33,10 +33,7 @@ import org.libremail.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountSettingsScreen(
-    onBack: () -> Unit,
-    viewModel: AccountSettingsViewModel = hiltViewModel(),
-) {
+fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewModel = hiltViewModel()) {
     val account by viewModel.account.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val signature by viewModel.signature.collectAsStateWithLifecycle()

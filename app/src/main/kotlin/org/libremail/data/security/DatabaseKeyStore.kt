@@ -8,12 +8,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.security.SecureRandom
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.security.SecureRandom
+import javax.inject.Inject
+import javax.inject.Singleton
 
 private val Context.dbKeyDataStore: DataStore<Preferences> by preferencesDataStore(name = "libremail_dbkey")
 
@@ -42,8 +42,9 @@ class DatabaseKeyStore @Inject constructor(
         }
     }
 
-    private suspend fun existing(): String? =
-        context.dbKeyDataStore.data.first()[SEALED_KEY]?.let { crypto.decrypt(it) }
+    private suspend fun existing(): String? = context.dbKeyDataStore.data.first()[SEALED_KEY]?.let {
+        crypto.decrypt(it)
+    }
 
     private suspend fun generateAndStore(): String {
         val raw = ByteArray(KEY_BYTES).also { SecureRandom().nextBytes(it) }

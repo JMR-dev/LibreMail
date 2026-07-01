@@ -41,3 +41,6 @@ captures/
 
 # Kotlin
 .kotlin/
+
+# Claude Code — personal settings (the shared settings.json IS committed)
+.claude/settings.local.json

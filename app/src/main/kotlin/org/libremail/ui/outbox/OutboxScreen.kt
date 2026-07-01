@@ -37,10 +37,7 @@ import org.libremail.domain.model.OutboxMessage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OutboxScreen(
-    onBack: () -> Unit,
-    viewModel: OutboxViewModel = hiltViewModel(),
-) {
+fun OutboxScreen(onBack: () -> Unit, viewModel: OutboxViewModel = hiltViewModel()) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -49,7 +46,10 @@ fun OutboxScreen(
                 title = { Text(stringResource(R.string.outbox_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
                     }
                 },
                 actions = {

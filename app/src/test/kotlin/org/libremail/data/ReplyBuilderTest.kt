@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data
 
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 import org.junit.Test
 import org.libremail.domain.model.ReplyMode
 import org.libremail.mail.ReplyContext
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ReplyBuilderTest {
 

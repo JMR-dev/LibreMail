@@ -9,8 +9,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -33,11 +33,7 @@ import androidx.webkit.WebViewFeature
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlBody(
-    html: String,
-    loadRemoteImages: Boolean,
-    modifier: Modifier = Modifier,
-) {
+fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val surface = colorScheme.surface
@@ -120,16 +116,12 @@ private fun WebView.applyAlgorithmicDarkening(dark: Boolean) {
     }
 }
 
-/** The color as a CSS `#RRGGBB` string (alpha dropped — email backgrounds/text are opaque). */
-internal fun Color.toCssHex(): String = "#%06X".format(toArgb() and 0xFFFFFF)
+private const val RGB_MASK = 0xFFFFFF
 
-internal fun wrapHtml(
-    body: String,
-    backgroundHex: String,
-    textHex: String,
-    linkHex: String,
-    dark: Boolean,
-): String {
+/** The color as a CSS `#RRGGBB` string (alpha dropped — email backgrounds/text are opaque). */
+internal fun Color.toCssHex(): String = "#%06X".format(toArgb() and RGB_MASK)
+
+internal fun wrapHtml(body: String, backgroundHex: String, textHex: String, linkHex: String, dark: Boolean): String {
     val scheme = if (dark) "dark" else "light"
     return """
     <html>

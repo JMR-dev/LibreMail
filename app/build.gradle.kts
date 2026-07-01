@@ -9,6 +9,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
+    // Lint/format — resolved from the Gradle Plugin Portal (not the buildscript classpath).
+    alias(libs.plugins.ktlint)
+    alias(libs.plugins.detekt)
 }
 
 // Read the Gmail OAuth client id from secrets.properties (git-ignored). Empty when absent.
@@ -137,6 +140,12 @@ android {
 // Export Room schemas so migrations can be validated by instrumented MigrationTestHelper tests.
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+detekt {
+    // Merge the project overrides in config/detekt onto detekt's bundled defaults.
+    buildUponDefaultConfig = true
+    config.setFrom(rootProject.file("config/detekt/detekt.yml"))
 }
 
 dependencies {

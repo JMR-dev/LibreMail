@@ -5,8 +5,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -24,6 +22,8 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /** Fetches account folders' headers into Room and notifies about newly-arrived inbox mail. */
 @Singleton
@@ -121,10 +121,11 @@ class MailSyncer @Inject constructor(
                     messageDao.deleteSyncedNotIn(account.id, folder, ids)
                 }
 
-                if (notify && newMessages.isNotEmpty() &&
+                val shouldNotify = notify &&
+                    newMessages.isNotEmpty() &&
                     settingsRepository.isNewMailNotificationsEnabled() &&
                     accountSettingsRepository.get(account.id).notificationsEnabled
-                ) {
+                if (shouldNotify) {
                     notifier.notifyNewMail(account, newMessages.sortedByDescending { it.timestampMillis })
                 }
             }

@@ -30,12 +30,7 @@ internal fun SectionHeader(text: String) {
 }
 
 @Composable
-internal fun SwitchRow(
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
-) {
+internal fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, subtitle: String? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

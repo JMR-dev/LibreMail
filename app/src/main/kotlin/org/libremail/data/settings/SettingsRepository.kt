@@ -9,11 +9,11 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "libremail_settings")
 
@@ -37,9 +37,7 @@ data class AppSettings(
 )
 
 @Singleton
-class SettingsRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class SettingsRepository @Inject constructor(@ApplicationContext private val context: Context) {
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
         AppSettings(
             dynamicColor = prefs[DYNAMIC_COLOR] ?: true,

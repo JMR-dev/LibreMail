@@ -20,9 +20,6 @@ import jakarta.mail.search.BodyTerm
 import jakarta.mail.search.FromStringTerm
 import jakarta.mail.search.OrTerm
 import jakarta.mail.search.SubjectTerm
-import java.util.Properties
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -35,6 +32,9 @@ import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
+import java.util.Properties
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /** A folder (mailbox) listed from the server, with the metadata needed to classify and display it. */
 data class FetchedFolder(
@@ -58,26 +58,13 @@ data class FetchedMessage(
 )
 
 /** A message body extracted from the server, with metadata for any attachment parts. */
-data class MessageContent(
-    val body: String,
-    val isHtml: Boolean,
-    val attachments: List<AttachmentPart> = emptyList(),
-)
+data class MessageContent(val body: String, val isHtml: Boolean, val attachments: List<AttachmentPart> = emptyList())
 
 /** Metadata for one attachment part. [partIndex] is its position in attachment-tree order. */
-data class AttachmentPart(
-    val partIndex: Int,
-    val filename: String,
-    val mimeType: String,
-    val sizeBytes: Long,
-)
+data class AttachmentPart(val partIndex: Int, val filename: String, val mimeType: String, val sizeBytes: Long)
 
 /** A downloaded attachment's bytes plus the metadata needed to open it. */
-class DownloadedAttachment(
-    val filename: String,
-    val mimeType: String,
-    val bytes: ByteArray,
-)
+class DownloadedAttachment(val filename: String, val mimeType: String, val bytes: ByteArray)
 
 /** The original message's fields needed to compose a reply, reply-all, or forward. */
 data class ReplyContext(
@@ -220,28 +207,27 @@ class ImapClient @Inject constructor() {
         folder: String,
         uid: String,
         partIndex: Int,
-    ): DownloadedAttachment =
-        withContext(Dispatchers.IO) {
-            withStore(params) { store ->
-                val mailbox = store.getFolder(folder)
-                mailbox.open(Folder.READ_ONLY)
-                try {
-                    val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
-                        ?: error("Message $uid not found")
-                    val parts = mutableListOf<Part>()
-                    collectAttachmentParts(message, parts)
-                    val part = parts.getOrNull(partIndex) ?: error("Attachment $partIndex not found")
-                    val bytes = part.inputStream.use { it.readBytes() }
-                    DownloadedAttachment(
-                        filename = attachmentName(part) ?: "attachment",
-                        mimeType = baseType(part),
-                        bytes = bytes,
-                    )
-                } finally {
-                    runCatching { mailbox.close(false) }
-                }
+    ): DownloadedAttachment = withContext(Dispatchers.IO) {
+        withStore(params) { store ->
+            val mailbox = store.getFolder(folder)
+            mailbox.open(Folder.READ_ONLY)
+            try {
+                val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
+                    ?: error("Message $uid not found")
+                val parts = mutableListOf<Part>()
+                collectAttachmentParts(message, parts)
+                val part = parts.getOrNull(partIndex) ?: error("Attachment $partIndex not found")
+                val bytes = part.inputStream.use { it.readBytes() }
+                DownloadedAttachment(
+                    filename = attachmentName(part) ?: "attachment",
+                    mimeType = baseType(part),
+                    bytes = bytes,
+                )
+            } finally {
+                runCatching { mailbox.close(false) }
             }
         }
+    }
 
     suspend fun setFlag(params: ImapConnectionParams, folder: String, uid: String, flag: Flags.Flag, value: Boolean) =
         withContext(Dispatchers.IO) {
@@ -256,19 +242,18 @@ class ImapClient @Inject constructor() {
             }
         }
 
-    suspend fun deleteMessage(params: ImapConnectionParams, folder: String, uid: String) =
-        withContext(Dispatchers.IO) {
-            withStore(params) { store ->
-                val mailbox = store.getFolder(folder)
-                mailbox.open(Folder.READ_WRITE)
-                try {
-                    (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
-                    mailbox.expunge()
-                } finally {
-                    runCatching { mailbox.close(false) }
-                }
+    suspend fun deleteMessage(params: ImapConnectionParams, folder: String, uid: String) = withContext(Dispatchers.IO) {
+        withStore(params) { store ->
+            val mailbox = store.getFolder(folder)
+            mailbox.open(Folder.READ_WRITE)
+            try {
+                (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
+                mailbox.expunge()
+            } finally {
+                runCatching { mailbox.close(false) }
             }
         }
+    }
 
     /**
      * Moves messages from [sourceFolder] to [destFolder] by UID. Implemented as copy + \Deleted +
@@ -336,79 +321,81 @@ class ImapClient @Inject constructor() {
      * [onActivity] via a conflated channel. Runs until the coroutine is cancelled (which closes the
      * connection to unblock idle()) or a connection error is thrown, leaving reconnection to the caller.
      */
-    suspend fun idle(params: ImapConnectionParams, onActivity: suspend () -> Unit) =
-        withContext(Dispatchers.IO) {
-            val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
-            val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
-            store.connect(params.host, params.port, params.username, params.secret)
-            // Close the just-connected store if opening the folder fails, so a failed connect in the
-            // IDLE reconnect loop can't leak connections until the server's per-account limit is hit.
-            val inbox = try {
-                (store.getFolder("INBOX") as IMAPFolder).also { it.open(Folder.READ_ONLY) }
-            } catch (e: Throwable) {
-                runCatching { store.close() }
-                throw e
-            }
-            Log.d(TAG, "IDLE connected")
+    suspend fun idle(params: ImapConnectionParams, onActivity: suspend () -> Unit) = withContext(Dispatchers.IO) {
+        val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
+        val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
+        store.connect(params.host, params.port, params.username, params.secret)
+        // Close the just-connected store if opening the folder fails, so a failed connect in the
+        // IDLE reconnect loop can't leak connections until the server's per-account limit is hit.
+        val inbox = try {
+            (store.getFolder("INBOX") as IMAPFolder).also { it.open(Folder.READ_ONLY) }
+        } catch (e: Throwable) {
+            runCatching { store.close() }
+            throw e
+        }
+        Log.d(TAG, "IDLE connected")
 
-            val pushes = Channel<Unit>(Channel.CONFLATED)
-            inbox.addMessageCountListener(object : MessageCountAdapter() {
-                override fun messagesAdded(event: MessageCountEvent) {
-                    Log.d(TAG, "IDLE push: ${event.messages.size} new message(s)")
-                    pushes.trySend(Unit)
-                }
-            })
-
-            coroutineScope {
-                val syncer = launch {
-                    for (signal in pushes) onActivity()
-                }
-                // Close the connection the moment this scope is cancelled (renewal timeout or
-                // service stop). Doing it here — at cancellation *start*, not job completion —
-                // unblocks the blocking idle() read below so the loop exits promptly; a
-                // completion handler would never run while idle() is still blocked.
-                val closer = launch {
-                    try {
-                        awaitCancellation()
-                    } finally {
-                        withContext(NonCancellable) { runCatching { store.close() } }
-                    }
-                }
-                // Sync once on connect to catch anything that arrived before IDLE was established.
+        val pushes = Channel<Unit>(Channel.CONFLATED)
+        inbox.addMessageCountListener(object : MessageCountAdapter() {
+            override fun messagesAdded(event: MessageCountEvent) {
+                Log.d(TAG, "IDLE push: ${event.messages.size} new message(s)")
                 pushes.trySend(Unit)
+            }
+        })
+
+        coroutineScope {
+            val syncer = launch {
+                for (signal in pushes) onActivity()
+            }
+            // Close the connection the moment this scope is cancelled (renewal timeout or
+            // service stop). Doing it here — at cancellation *start*, not job completion —
+            // unblocks the blocking idle() read below so the loop exits promptly; a
+            // completion handler would never run while idle() is still blocked.
+            val closer = launch {
                 try {
-                    while (isActive) {
-                        inbox.idle()
-                    }
-                } catch (e: Exception) {
-                    if (isActive) throw e // a real connection error: let the caller reconnect
+                    awaitCancellation()
                 } finally {
-                    closer.cancel()
-                    syncer.cancel()
-                    pushes.close()
-                    runCatching { inbox.close(false) }
-                    runCatching { store.close() }
+                    withContext(NonCancellable) { runCatching { store.close() } }
                 }
+            }
+            // Sync once on connect to catch anything that arrived before IDLE was established.
+            pushes.trySend(Unit)
+            try {
+                while (isActive) {
+                    inbox.idle()
+                }
+            } catch (e: Exception) {
+                if (isActive) throw e // a real connection error: let the caller reconnect
+            } finally {
+                closer.cancel()
+                syncer.cancel()
+                pushes.close()
+                runCatching { inbox.close(false) }
+                runCatching { store.close() }
             }
         }
+    }
 
     /** Recursively finds the best body part: HTML preferred, plain text otherwise. */
-    private fun extractBody(part: Part): MessageContent? {
-        if (part.isMimeType("text/html")) return MessageContent(part.content.toString(), isHtml = true)
-        if (part.isMimeType("text/plain")) return MessageContent(part.content.toString(), isHtml = false)
-        if (part.isMimeType("multipart/*")) {
-            val multipart = part.content as? Multipart ?: return null
-            var plain: MessageContent? = null
-            for (i in 0 until multipart.count) {
-                val child = multipart.getBodyPart(i)
-                if (Part.ATTACHMENT.equals(child.disposition, ignoreCase = true)) continue
-                val result = extractBody(child) ?: continue
-                if (result.isHtml) return result
-                if (plain == null) plain = result
-            }
-            return plain
+    private fun extractBody(part: Part): MessageContent? = when {
+        part.isMimeType("text/html") -> MessageContent(part.content.toString(), isHtml = true)
+        part.isMimeType("text/plain") -> MessageContent(part.content.toString(), isHtml = false)
+        part.isMimeType("multipart/*") -> extractFromMultipart(part)
+        else -> null
+    }
+
+    /** The best sub-part of a multipart body: the first HTML part, else the first plain-text part. */
+    private fun extractFromMultipart(part: Part): MessageContent? {
+        val multipart = part.content as? Multipart ?: return null
+        var plain: MessageContent? = null
+        for (i in 0 until multipart.count) {
+            val child = multipart.getBodyPart(i)
+            if (Part.ATTACHMENT.equals(child.disposition, ignoreCase = true)) continue
+            val result = extractBody(child) ?: continue
+            if (result.isHtml) return result
+            if (plain == null) plain = result
         }
-        return null
+        return plain
     }
 
     /** Walks the MIME tree and returns attachment metadata in a stable, depth-first order. */
@@ -438,15 +425,19 @@ class ImapClient @Inject constructor() {
     private fun isAttachment(part: Part): Boolean =
         Part.ATTACHMENT.equals(part.disposition, ignoreCase = true) || !part.fileName.isNullOrBlank()
 
-    private fun attachmentName(part: Part): String? =
-        part.fileName?.let { runCatching { MimeUtility.decodeText(it) }.getOrDefault(it) }
+    private fun attachmentName(part: Part): String? = part.fileName?.let {
+        runCatching { MimeUtility.decodeText(it) }.getOrDefault(it)
+    }
 
-    private fun baseType(part: Part): String =
-        runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream")
+    private fun baseType(part: Part): String = runCatching {
+        ContentType(part.contentType).baseType
+    }.getOrDefault("application/octet-stream")
 
     /** The email addresses of the given recipient type, skipping any that aren't internet addresses. */
-    private fun Message.recipientEmails(type: Message.RecipientType): List<String> =
-        (getRecipients(type) ?: emptyArray()).mapNotNull { (it as? InternetAddress)?.address }
+    private fun Message.recipientEmails(type: Message.RecipientType): List<String> = (
+        getRecipients(type)
+            ?: emptyArray()
+        ).mapNotNull { (it as? InternetAddress)?.address }
 
     private fun Message.toFetchedMessage(uidFolder: UIDFolder): FetchedMessage {
         val from = from?.firstOrNull() as? InternetAddress

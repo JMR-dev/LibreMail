@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -18,7 +14,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import org.libremail.R
 import org.libremail.ui.accountsetup.AccountSetupScreen
 import org.libremail.ui.accountsetup.ManualSetupScreen
 import org.libremail.ui.compose.ComposeScreen
@@ -29,12 +24,6 @@ import org.libremail.ui.outbox.OutboxScreen
 import org.libremail.ui.reader.ReaderScreen
 import org.libremail.ui.settings.AccountSettingsScreen
 import org.libremail.ui.settings.SettingsScreen
-
-/** Top-level destinations shown in the bottom navigation bar. */
-enum class TopDest(val route: String, val labelRes: Int, val icon: ImageVector) {
-    MAILBOX(Routes.MAILBOX, R.string.nav_mailbox, Icons.Filled.Email),
-    SETTINGS(Routes.SETTINGS, R.string.nav_settings, Icons.Filled.Settings),
-}
 
 @Composable
 fun LibreMailApp() {
@@ -67,10 +56,22 @@ fun LibreMailApp() {
         composable(
             route = Routes.COMPOSE_PATTERN,
             arguments = listOf(
-                navArgument(Routes.COMPOSE_ARG_TO) { type = NavType.StringType; defaultValue = "" },
-                navArgument(Routes.COMPOSE_ARG_SUBJECT) { type = NavType.StringType; defaultValue = "" },
-                navArgument(Routes.COMPOSE_ARG_FROM) { type = NavType.StringType; defaultValue = "" },
-                navArgument(Routes.COMPOSE_ARG_DRAFT) { type = NavType.StringType; defaultValue = "" },
+                navArgument(Routes.COMPOSE_ARG_TO) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_SUBJECT) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_FROM) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_DRAFT) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
             ),
         ) {
             ComposeScreen(onBack = navController::popBackStack)

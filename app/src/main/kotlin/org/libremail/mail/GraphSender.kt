@@ -2,6 +2,11 @@
 package org.libremail.mail
 
 import jakarta.mail.internet.InternetAddress
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import org.libremail.domain.model.OutgoingMessage
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -9,22 +14,14 @@ import java.net.URL
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import org.libremail.domain.model.OutgoingMessage
 
 /**
  * Thrown when a Graph `sendMail` attempt fails. [mayHaveSent] is true only when the request was
  * fully transmitted but the response could not be read — in that case the message may already be on
  * its way, so callers must NOT retry or fall back to another transport (doing so would duplicate it).
  */
-class GraphSendException(
-    message: String,
-    val mayHaveSent: Boolean,
-    cause: Throwable? = null,
-) : Exception(message, cause)
+class GraphSendException(message: String, val mayHaveSent: Boolean, cause: Throwable? = null) :
+    Exception(message, cause)
 
 /**
  * Sends mail via Microsoft Graph `me/sendMail` — Microsoft's preferred send path for Outlook /
@@ -33,48 +30,55 @@ class GraphSendException(
 @Singleton
 class GraphSender @Inject constructor() {
 
-    suspend fun send(
-        accessToken: String,
-        message: OutgoingMessage,
-        attachments: List<File> = emptyList(),
-    ) = withContext(Dispatchers.IO) {
-        val payload = buildSendMailPayload(message, attachments)
-        val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $accessToken")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        }
-        try {
-            // Failure here means the request never reached Graph — safe to fall back/retry.
+    suspend fun send(accessToken: String, message: OutgoingMessage, attachments: List<File> = emptyList()) =
+        withContext(Dispatchers.IO) {
+            val payload = buildSendMailPayload(message, attachments)
+            val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = TIMEOUT_MS
+                readTimeout = TIMEOUT_MS
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer $accessToken")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
             try {
-                connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-            } catch (e: IOException) {
-                throw GraphSendException("Graph sendMail could not be transmitted", mayHaveSent = false, cause = e)
+                // Failure here means the request never reached Graph — safe to fall back/retry.
+                try {
+                    connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                } catch (e: IOException) {
+                    throw GraphSendException("Graph sendMail could not be transmitted", mayHaveSent = false, cause = e)
+                }
+                // The request was fully sent; if we can't read the response, Graph may already have
+                // accepted and sent it — do not fall back to SMTP or the message would be duplicated.
+                val code = try {
+                    connection.responseCode
+                } catch (e: IOException) {
+                    throw GraphSendException(
+                        "Graph sendMail sent but no response received",
+                        mayHaveSent = true,
+                        cause = e,
+                    )
+                }
+                if (code !in HTTP_OK_MIN..HTTP_OK_MAX) {
+                    val body = (connection.errorStream ?: connection.inputStream)
+                        ?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    // An explicit non-2xx means Graph rejected (did not send) — safe to fall back.
+                    throw GraphSendException(
+                        "Graph sendMail failed (HTTP $code): ${body.take(ERROR_BODY_LIMIT)}",
+                        mayHaveSent = false,
+                    )
+                }
+            } finally {
+                connection.disconnect()
             }
-            // The request was fully sent; if we can't read the response, Graph may already have
-            // accepted and sent it — do not fall back to SMTP or the message would be duplicated.
-            val code = try {
-                connection.responseCode
-            } catch (e: IOException) {
-                throw GraphSendException("Graph sendMail sent but no response received", mayHaveSent = true, cause = e)
-            }
-            if (code !in 200..299) {
-                val body = (connection.errorStream ?: connection.inputStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                // An explicit non-2xx means Graph rejected (did not send) — safe to fall back.
-                throw GraphSendException("Graph sendMail failed (HTTP $code): ${body.take(500)}", mayHaveSent = false)
-            }
-        } finally {
-            connection.disconnect()
         }
-    }
 
     private companion object {
         const val SEND_MAIL_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
         const val TIMEOUT_MS = 15_000
+        const val HTTP_OK_MIN = 200
+        const val HTTP_OK_MAX = 299
+        const val ERROR_BODY_LIMIT = 500
     }
 }
 

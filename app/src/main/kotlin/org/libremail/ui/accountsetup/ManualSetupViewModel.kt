@@ -4,7 +4,6 @@ package org.libremail.ui.accountsetup
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +14,7 @@ import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
+import javax.inject.Inject
 
 data class ManualSetupForm(
     val email: String = "",
@@ -34,9 +34,11 @@ data class ManualSetupForm(
 }
 
 @HiltViewModel
-class ManualSetupViewModel @Inject constructor(
-    private val accountRepository: AccountRepository,
-) : ViewModel() {
+class ManualSetupViewModel @Inject constructor(private val accountRepository: AccountRepository) : ViewModel() {
+
+    private companion object {
+        const val MAX_PORT_DIGITS = 5
+    }
 
     private val _form = MutableStateFlow(ManualSetupForm())
     val form: StateFlow<ManualSetupForm> = _form.asStateFlow()
@@ -44,10 +46,12 @@ class ManualSetupViewModel @Inject constructor(
     fun onEmail(value: String) = _form.update { it.copy(email = value) }
     fun onPassword(value: String) = _form.update { it.copy(password = value) }
     fun onImapHost(value: String) = _form.update { it.copy(imapHost = value) }
-    fun onImapPort(value: String) = _form.update { it.copy(imapPort = value.filter(Char::isDigit).take(5)) }
+    fun onImapPort(value: String) =
+        _form.update { it.copy(imapPort = value.filter(Char::isDigit).take(MAX_PORT_DIGITS)) }
     fun onImapSecurity(security: MailSecurity) = _form.update { it.copy(imapSecurity = security) }
     fun onSmtpHost(value: String) = _form.update { it.copy(smtpHost = value) }
-    fun onSmtpPort(value: String) = _form.update { it.copy(smtpPort = value.filter(Char::isDigit).take(5)) }
+    fun onSmtpPort(value: String) =
+        _form.update { it.copy(smtpPort = value.filter(Char::isDigit).take(MAX_PORT_DIGITS)) }
     fun onSmtpSecurity(security: MailSecurity) = _form.update { it.copy(smtpSecurity = security) }
     fun toggleAdvanced() = _form.update { it.copy(advancedExpanded = !it.advancedExpanded) }
     fun consumeError() = _form.update { it.copy(error = null) }
@@ -71,7 +75,13 @@ class ManualSetupViewModel @Inject constructor(
             accountRepository.addImapAccount(account, f.password).fold(
                 onSuccess = { _form.update { it.copy(status = SetupStatus.DONE) } },
                 onFailure = { e ->
-                    _form.update { it.copy(status = SetupStatus.IDLE, error = e.message ?: "Could not connect to the server") }
+                    _form.update {
+                        it.copy(
+                            status = SetupStatus.IDLE,
+                            error =
+                            e.message ?: "Could not connect to the server",
+                        )
+                    }
                 },
             )
         }

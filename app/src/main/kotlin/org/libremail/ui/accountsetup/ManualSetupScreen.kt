@@ -76,7 +76,10 @@ fun ManualSetupScreen(
                 title = { Text(stringResource(R.string.manual_setup_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
                     }
                 },
             )
@@ -144,7 +147,11 @@ fun ManualSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
-                    SecuritySelector(stringResource(R.string.manual_imap_security), form.imapSecurity, viewModel::onImapSecurity)
+                    SecuritySelector(
+                        stringResource(R.string.manual_imap_security),
+                        form.imapSecurity,
+                        viewModel::onImapSecurity,
+                    )
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
                         value = form.smtpPort,
@@ -155,7 +162,11 @@ fun ManualSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
-                    SecuritySelector(stringResource(R.string.manual_smtp_security), form.smtpSecurity, viewModel::onSmtpSecurity)
+                    SecuritySelector(
+                        stringResource(R.string.manual_smtp_security),
+                        form.smtpSecurity,
+                        viewModel::onSmtpSecurity,
+                    )
                 }
             }
 

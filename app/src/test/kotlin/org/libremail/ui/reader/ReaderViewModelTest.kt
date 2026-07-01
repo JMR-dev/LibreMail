@@ -5,9 +5,6 @@ import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
-import java.io.File
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -25,6 +22,9 @@ import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Message
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
+import java.io.File
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReaderViewModelTest {

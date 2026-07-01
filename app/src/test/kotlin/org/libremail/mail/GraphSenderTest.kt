@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
+import org.json.JSONObject
+import org.junit.Test
+import org.libremail.domain.model.OutgoingMessage
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.json.JSONObject
-import org.junit.Test
-import org.libremail.domain.model.OutgoingMessage
 
 class GraphSenderTest {
 
