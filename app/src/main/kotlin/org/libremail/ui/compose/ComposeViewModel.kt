@@ -32,6 +32,7 @@ import javax.inject.Inject
 data class ComposeUiState(
     val to: String = "",
     val cc: String = "",
+    val bcc: String = "",
     val subject: String = "",
     val body: String = "",
     val fromAccountId: String? = null,
@@ -57,7 +58,10 @@ class ComposeViewModel @Inject constructor(
     private val _state = MutableStateFlow(
         ComposeUiState(
             to = savedStateHandle.get<String>(Routes.COMPOSE_ARG_TO).orEmpty(),
+            cc = savedStateHandle.get<String>(Routes.COMPOSE_ARG_CC).orEmpty(),
+            bcc = savedStateHandle.get<String>(Routes.COMPOSE_ARG_BCC).orEmpty(),
             subject = savedStateHandle.get<String>(Routes.COMPOSE_ARG_SUBJECT).orEmpty(),
+            body = savedStateHandle.get<String>(Routes.COMPOSE_ARG_BODY).orEmpty(),
             fromAccountId = savedStateHandle.get<String>(Routes.COMPOSE_ARG_FROM)?.takeIf { it.isNotBlank() },
         ),
     )
@@ -111,6 +115,7 @@ class ComposeViewModel @Inject constructor(
     }
 
     fun onCcChange(value: String) = _state.update { it.copy(cc = value) }
+    fun onBccChange(value: String) = _state.update { it.copy(bcc = value) }
     fun onSubjectChange(value: String) = _state.update { it.copy(subject = value) }
     fun onBodyChange(value: String) = _state.update { it.copy(body = value) }
     fun selectFrom(accountId: String) {
@@ -187,6 +192,7 @@ class ComposeViewModel @Inject constructor(
         val s = _state.value
         val hasContent = s.to.isNotBlank() ||
             s.cc.isNotBlank() ||
+            s.bcc.isNotBlank() ||
             s.subject.isNotBlank() ||
             s.body.isNotBlank() ||
             s.attachments.isNotEmpty()
@@ -197,6 +203,7 @@ class ComposeViewModel @Inject constructor(
                     accountId = s.fromAccountId,
                     to = s.to,
                     cc = s.cc,
+                    bcc = s.bcc,
                     subject = s.subject,
                     body = s.body,
                     updatedAt = System.currentTimeMillis(),
@@ -220,7 +227,15 @@ class ComposeViewModel @Inject constructor(
                 else -> {
                     _state.update { it.copy(sending = true, error = null) }
                     mailRepository.sendMessage(
-                        OutgoingMessage(account.id, s.to, s.cc, s.subject, s.body, s.attachments),
+                        OutgoingMessage(
+                            accountId = account.id,
+                            to = s.to,
+                            cc = s.cc,
+                            bcc = s.bcc,
+                            subject = s.subject,
+                            body = s.body,
+                            attachments = s.attachments,
+                        ),
                     ).fold(
                         onSuccess = {
                             draftId?.let { mailRepository.deleteDraft(it) }

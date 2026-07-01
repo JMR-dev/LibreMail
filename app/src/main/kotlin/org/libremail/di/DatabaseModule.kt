@@ -21,6 +21,7 @@ import org.libremail.data.local.MIGRATION_5_6
 import org.libremail.data.local.MIGRATION_6_7
 import org.libremail.data.local.MIGRATION_7_8
 import org.libremail.data.local.MIGRATION_8_9
+import org.libremail.data.local.MIGRATION_9_10
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -54,6 +55,7 @@ object DatabaseModule {
                 MIGRATION_6_7,
                 MIGRATION_7_8,
                 MIGRATION_8_9,
+                MIGRATION_9_10,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
         // accounts/credentials/mail tables would lose stored secrets. A missing migration should

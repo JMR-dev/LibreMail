@@ -266,6 +266,7 @@ class MailRepositoryImpl @Inject constructor(
                 accountId = outgoing.accountId,
                 toAddresses = outgoing.to,
                 ccAddresses = outgoing.cc,
+                bccAddresses = outgoing.bcc,
                 subject = outgoing.subject,
                 body = outgoing.body,
                 createdAt = System.currentTimeMillis(),

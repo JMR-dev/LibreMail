@@ -9,6 +9,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.res.stringResource
@@ -29,6 +30,7 @@ import org.libremail.R
 import org.libremail.ui.accountsetup.AccountPickerScreen
 import org.libremail.ui.accountsetup.AppPasswordSetupScreen
 import org.libremail.ui.accountsetup.ManualSetupScreen
+import org.libremail.ui.compose.ComposePrefill
 import org.libremail.ui.compose.ComposeScreen
 import org.libremail.ui.drafts.DraftsScreen
 import org.libremail.ui.mailbox.MailboxScreen
@@ -48,6 +50,8 @@ import org.libremail.ui.settings.SettingsScreen
 fun LibreMailApp(
     appViewModel: AppViewModel = hiltViewModel(),
     startupViewModel: StartupReportViewModel = hiltViewModel(),
+    pendingCompose: ComposePrefill? = null,
+    onComposeHandled: () -> Unit = {},
 ) {
     val startDestination by appViewModel.startDestination.collectAsStateWithLifecycle()
     // Hold (render nothing) until the account count is known, so a cold start never flashes the
@@ -55,6 +59,22 @@ fun LibreMailApp(
     val start = startDestination ?: return
     val navController = rememberNavController()
     val pendingCrash by startupViewModel.pendingCrash.collectAsStateWithLifecycle()
+
+    // A mailto:/share intent opens compose on top of the mailbox, pre-filled. Keyed on the request so
+    // it fires once per intent (and again for a new intent delivered while the app is alive).
+    LaunchedEffect(pendingCompose) {
+        val prefill = pendingCompose ?: return@LaunchedEffect
+        navController.navigate(
+            Routes.compose(
+                to = prefill.to,
+                subject = prefill.subject,
+                cc = prefill.cc,
+                bcc = prefill.bcc,
+                body = prefill.body,
+            ),
+        )
+        onComposeHandled()
+    }
 
     NavHost(
         navController = navController,
@@ -97,7 +117,19 @@ fun LibreMailApp(
                     type = NavType.StringType
                     defaultValue = ""
                 },
+                navArgument(Routes.COMPOSE_ARG_CC) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_BCC) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
                 navArgument(Routes.COMPOSE_ARG_SUBJECT) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_BODY) {
                     type = NavType.StringType
                     defaultValue = ""
                 },
