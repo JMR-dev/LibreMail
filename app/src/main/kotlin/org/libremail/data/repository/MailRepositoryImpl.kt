@@ -57,7 +57,7 @@ class MailRepositoryImpl @Inject constructor(
     private val signatureRepository: SignatureRepository,
 ) : MailRepository {
 
-    override fun observeMessages(): Flow<List<Message>> = messageDao.observeAll().map { rows ->
+    override fun observeMessages(): Flow<List<Message>> = messageDao.observeSummaries().map { rows ->
         rows.map { it.toDomain() }
     }
 
