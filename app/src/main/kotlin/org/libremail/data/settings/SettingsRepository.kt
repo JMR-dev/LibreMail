@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.settings
 
+import android.app.backup.BackupManager
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -15,7 +16,15 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "libremail_settings")
+/**
+ * User-preferences DataStore. Exposed as `internal` (not `private`) and read via [toAppSettings] so
+ * that [org.libremail.backup.LibreMailBackupAgent] can consult the backup opt-in flag through the
+ * exact same singleton instance. The system instantiates the backup agent in the app process while
+ * the app may already hold this DataStore open; constructing a second DataStore for the same file
+ * would crash with "There are multiple DataStores active for the same file", so both sides must go
+ * through this one delegate.
+ */
+internal val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "libremail_settings")
 
 /**
  * How aggressively the app downloads message content during sync.
@@ -33,23 +42,40 @@ data class AppSettings(
     val allowStartTls: Boolean = false,
     val loadRemoteImages: Boolean = false,
     val encryptCache: Boolean = false,
+    val includeInBackup: Boolean = false,
     val fetchPolicy: FetchPolicy = FetchPolicy.ALWAYS,
+)
+
+private object Keys {
+    val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+    val NEW_MAIL_NOTIFICATIONS = booleanPreferencesKey("new_mail_notifications")
+    val PUSH_IDLE = booleanPreferencesKey("push_idle")
+    val ALLOW_STARTTLS = booleanPreferencesKey("allow_starttls")
+    val LOAD_REMOTE_IMAGES = booleanPreferencesKey("load_remote_images")
+    val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
+    val INCLUDE_IN_BACKUP = booleanPreferencesKey("include_in_backup")
+    val FETCH_POLICY = stringPreferencesKey("fetch_policy")
+}
+
+/**
+ * Maps persisted preferences to [AppSettings]. Shared with the backup agent so it reads the opt-in
+ * flag (and its default) through exactly the same logic the app uses.
+ */
+internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
+    dynamicColor = this[Keys.DYNAMIC_COLOR] ?: true,
+    newMailNotifications = this[Keys.NEW_MAIL_NOTIFICATIONS] ?: true,
+    pushIdle = this[Keys.PUSH_IDLE] ?: true,
+    allowStartTls = this[Keys.ALLOW_STARTTLS] ?: false,
+    loadRemoteImages = this[Keys.LOAD_REMOTE_IMAGES] ?: false,
+    encryptCache = this[Keys.ENCRYPT_CACHE] ?: false,
+    includeInBackup = this[Keys.INCLUDE_IN_BACKUP] ?: false,
+    fetchPolicy = this[Keys.FETCH_POLICY]?.let { runCatching { FetchPolicy.valueOf(it) }.getOrNull() }
+        ?: FetchPolicy.ALWAYS,
 )
 
 @Singleton
 class SettingsRepository @Inject constructor(@ApplicationContext private val context: Context) {
-    val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
-        AppSettings(
-            dynamicColor = prefs[DYNAMIC_COLOR] ?: true,
-            newMailNotifications = prefs[NEW_MAIL_NOTIFICATIONS] ?: true,
-            pushIdle = prefs[PUSH_IDLE] ?: true,
-            allowStartTls = prefs[ALLOW_STARTTLS] ?: false,
-            loadRemoteImages = prefs[LOAD_REMOTE_IMAGES] ?: false,
-            encryptCache = prefs[ENCRYPT_CACHE] ?: false,
-            fetchPolicy = prefs[FETCH_POLICY]?.let { runCatching { FetchPolicy.valueOf(it) }.getOrNull() }
-                ?: FetchPolicy.ALWAYS,
-        )
-    }
+    val settings: Flow<AppSettings> = context.settingsDataStore.data.map { it.toAppSettings() }
 
     val dynamicColor: Flow<Boolean> = settings.map { it.dynamicColor }
 
@@ -57,27 +83,28 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
 
     suspend fun fetchPolicy(): FetchPolicy = settings.first().fetchPolicy
 
-    suspend fun setDynamicColor(value: Boolean) = put(DYNAMIC_COLOR, value)
-    suspend fun setNewMailNotifications(value: Boolean) = put(NEW_MAIL_NOTIFICATIONS, value)
-    suspend fun setPushIdle(value: Boolean) = put(PUSH_IDLE, value)
-    suspend fun setAllowStartTls(value: Boolean) = put(ALLOW_STARTTLS, value)
-    suspend fun setLoadRemoteImages(value: Boolean) = put(LOAD_REMOTE_IMAGES, value)
-    suspend fun setEncryptCache(value: Boolean) = put(ENCRYPT_CACHE, value)
+    suspend fun setDynamicColor(value: Boolean) = put(Keys.DYNAMIC_COLOR, value)
+    suspend fun setNewMailNotifications(value: Boolean) = put(Keys.NEW_MAIL_NOTIFICATIONS, value)
+    suspend fun setPushIdle(value: Boolean) = put(Keys.PUSH_IDLE, value)
+    suspend fun setAllowStartTls(value: Boolean) = put(Keys.ALLOW_STARTTLS, value)
+    suspend fun setLoadRemoteImages(value: Boolean) = put(Keys.LOAD_REMOTE_IMAGES, value)
+    suspend fun setEncryptCache(value: Boolean) = put(Keys.ENCRYPT_CACHE, value)
+
+    /**
+     * Opts this app in/out of system Android Backup. Off by default. After persisting, nudges the
+     * framework so the change takes effect on the next backup pass — enabling schedules a backup of
+     * the safe settings, disabling schedules one that ships nothing (clearing any prior cloud copy).
+     */
+    suspend fun setIncludeInBackup(value: Boolean) {
+        put(Keys.INCLUDE_IN_BACKUP, value)
+        runCatching { BackupManager(context).dataChanged() }
+    }
+
     suspend fun setFetchPolicy(value: FetchPolicy) {
-        context.settingsDataStore.edit { it[FETCH_POLICY] = value.name }
+        context.settingsDataStore.edit { it[Keys.FETCH_POLICY] = value.name }
     }
 
     private suspend fun put(key: Preferences.Key<Boolean>, value: Boolean) {
         context.settingsDataStore.edit { it[key] = value }
-    }
-
-    private companion object {
-        val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
-        val NEW_MAIL_NOTIFICATIONS = booleanPreferencesKey("new_mail_notifications")
-        val PUSH_IDLE = booleanPreferencesKey("push_idle")
-        val ALLOW_STARTTLS = booleanPreferencesKey("allow_starttls")
-        val LOAD_REMOTE_IMAGES = booleanPreferencesKey("load_remote_images")
-        val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
-        val FETCH_POLICY = stringPreferencesKey("fetch_policy")
     }
 }
