@@ -189,6 +189,11 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.sqlcipher.android)
 
+    // Raise kotlinx-serialization to the version Room's schema-bundle serializers were compiled
+    // against (see libs.versions.toml). AGP 9 consistent resolution shares it with the androidTest
+    // classpath so MigrationTestHelper can parse the exported schema JSON.
+    implementation(platform(libs.kotlinx.serialization.bom))
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
