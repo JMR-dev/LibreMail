@@ -29,6 +29,38 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Handle mailto: links tapped in browsers and other apps (ACTION_VIEW), which is also
+                 what makes LibreMail appear on the system "Open by default" / default-apps screen
+                 where the platform exposes an email association. Android has no public RoleManager
+                 email role, so becoming the system default is OEM-dependent — hence "where supported". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+
+            <!-- "Send email to <address>" targets from other apps (contacts, dialer, etc.). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+
+            <!-- Share-to-email: text and RFC-822 email payloads with recipients/subject/body extras. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="message/rfc822" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="message/rfc822" />
+            </intent-filter>
         </activity>
 
         <!-- WorkManager is initialized on-demand via Configuration.Provider, so remove the

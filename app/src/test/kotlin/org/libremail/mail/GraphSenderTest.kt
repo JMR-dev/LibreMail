@@ -57,11 +57,23 @@ class GraphSenderTest {
     }
 
     @Test
-    fun `payload omits cc when blank and encodes attachments as base64`() {
+    fun `payload carries bcc recipients when present`() {
+        val json = JSONObject(
+            buildSendMailPayload(message(to = "a@x.com").copy(bcc = "hidden@z.com, more@z.com"), emptyList()),
+        )
+        val bcc = json.getJSONObject("message").getJSONArray("bccRecipients")
+        assertEquals(2, bcc.length())
+        assertEquals("hidden@z.com", bcc.getJSONObject(0).getJSONObject("emailAddress").getString("address"))
+        assertEquals("more@z.com", bcc.getJSONObject(1).getJSONObject("emailAddress").getString("address"))
+    }
+
+    @Test
+    fun `payload omits cc and bcc when blank and encodes attachments as base64`() {
         val file = File.createTempFile("graph-att", ".txt").apply { writeText("hello") }
         try {
             val msg = JSONObject(buildSendMailPayload(message(to = "a@x.com"), listOf(file))).getJSONObject("message")
             assertFalse(msg.has("ccRecipients"))
+            assertFalse(msg.has("bccRecipients"))
 
             val attachments = msg.getJSONArray("attachments")
             assertEquals(1, attachments.length())

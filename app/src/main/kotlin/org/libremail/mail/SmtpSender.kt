@@ -59,6 +59,9 @@ class SmtpSender @Inject constructor() {
             if (message.cc.isNotBlank()) {
                 setRecipients(Message.RecipientType.CC, InternetAddress.parse(message.cc))
             }
+            if (message.bcc.isNotBlank()) {
+                setRecipients(Message.RecipientType.BCC, InternetAddress.parse(message.bcc))
+            }
             subject = message.subject
             sentDate = Date()
         }

@@ -6,6 +6,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -16,6 +17,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import org.libremail.ui.accountsetup.AccountSetupScreen
 import org.libremail.ui.accountsetup.ManualSetupScreen
+import org.libremail.ui.compose.ComposePrefill
 import org.libremail.ui.compose.ComposeScreen
 import org.libremail.ui.drafts.DraftsScreen
 import org.libremail.ui.mailbox.MailboxScreen
@@ -26,8 +28,24 @@ import org.libremail.ui.settings.AccountSettingsScreen
 import org.libremail.ui.settings.SettingsScreen
 
 @Composable
-fun LibreMailApp() {
+fun LibreMailApp(pendingCompose: ComposePrefill? = null, onComposeHandled: () -> Unit = {}) {
     val navController = rememberNavController()
+
+    // A mailto:/share intent opens compose on top of the mailbox, pre-filled. Keyed on the request so
+    // it fires once per intent (and again for a new intent delivered while the app is alive).
+    LaunchedEffect(pendingCompose) {
+        val prefill = pendingCompose ?: return@LaunchedEffect
+        navController.navigate(
+            Routes.compose(
+                to = prefill.to,
+                subject = prefill.subject,
+                cc = prefill.cc,
+                bcc = prefill.bcc,
+                body = prefill.body,
+            ),
+        )
+        onComposeHandled()
+    }
 
     NavHost(
         navController = navController,
@@ -60,7 +78,19 @@ fun LibreMailApp() {
                     type = NavType.StringType
                     defaultValue = ""
                 },
+                navArgument(Routes.COMPOSE_ARG_CC) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_BCC) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
                 navArgument(Routes.COMPOSE_ARG_SUBJECT) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.COMPOSE_ARG_BODY) {
                     type = NavType.StringType
                     defaultValue = ""
                 },

@@ -171,3 +171,16 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         )
     }
 }
+
+/**
+ * v9 -> v10: bcc support for outgoing mail (preserves existing data). Adds a `bccAddresses` column
+ * to `outbox` and `drafts` so a `mailto:`-launched (or manually addressed) blind-copy recipient
+ * survives being queued and saved. The `DEFAULT ''` matches the entities' `@ColumnInfo(defaultValue)`
+ * so the fresh-install schema validates identically to the migrated one (the MIGRATION_7_8 pattern).
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `outbox` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `drafts` ADD COLUMN `bccAddresses` TEXT NOT NULL DEFAULT ''")
+    }
+}

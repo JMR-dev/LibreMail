@@ -162,6 +162,15 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    value = state.bcc,
+                    onValueChange = viewModel::onBccChange,
+                    label = { Text(stringResource(R.string.compose_bcc)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
                     value = state.subject,
                     onValueChange = viewModel::onSubjectChange,
                     label = { Text(stringResource(R.string.compose_subject)) },

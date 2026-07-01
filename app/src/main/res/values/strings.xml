@@ -71,6 +71,7 @@
     <string name="compose_from">From</string>
     <string name="compose_to">To</string>
     <string name="compose_cc">Cc</string>
+    <string name="compose_bcc">Bcc</string>
     <string name="compose_subject">Subject</string>
     <string name="compose_body">Message</string>
     <string name="compose_no_account">Add an account before composing</string>

@@ -3,8 +3,10 @@ package org.libremail.ui.compose
 
 import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,7 @@ import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.MailSecurity
+import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
@@ -91,6 +94,50 @@ class ComposeViewModelTest {
         vm.selectFrom("imap:b")
 
         assertEquals("\n\n-- \nBest, Bob", vm.state.value.body)
+    }
+
+    @Test
+    fun `prefills the form from mailto navigation arguments`() = runTest(testDispatcher) {
+        val vm = viewModel(
+            savedState = SavedStateHandle(
+                mapOf(
+                    Routes.COMPOSE_ARG_TO to "a@example.org, b@example.org",
+                    Routes.COMPOSE_ARG_CC to "c@example.org",
+                    Routes.COMPOSE_ARG_BCC to "d@example.org",
+                    Routes.COMPOSE_ARG_SUBJECT to "Lunch?",
+                    Routes.COMPOSE_ARG_BODY to "Are you free",
+                ),
+            ),
+        )
+
+        val state = vm.state.value
+        assertEquals("a@example.org, b@example.org", state.to)
+        assertEquals("c@example.org", state.cc)
+        assertEquals("d@example.org", state.bcc)
+        assertEquals("Lunch?", state.subject)
+        // No signature configured, so the mailto body is used verbatim.
+        assertEquals("Are you free", state.body)
+    }
+
+    @Test
+    fun `send carries the bcc recipients to the repository`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(
+            savedState = SavedStateHandle(
+                mapOf(
+                    Routes.COMPOSE_ARG_TO to "a@example.org",
+                    Routes.COMPOSE_ARG_BCC to "secret@example.org",
+                ),
+            ),
+            mailRepository = mailRepository,
+        )
+
+        vm.send()
+
+        val sent = slot<OutgoingMessage>()
+        coVerify { mailRepository.sendMessage(capture(sent)) }
+        assertEquals("secret@example.org", sent.captured.bcc)
     }
 
     @Test
