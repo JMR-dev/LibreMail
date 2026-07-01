@@ -5,10 +5,10 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -138,10 +138,14 @@ class MessageDaoRetentionTest {
 
         dao.deleteSyncedInWindowNotIn("acct", "INBOX", minWindowUid = 20, keepIds = listOf("kept"))
 
-        assertEquals(
-            setOf("below", "kept", "search", "other-folder"),
-            dao.observeAll().first().map { it.id }.toSet(),
-        )
+        // Read survivors back with point lookups (getById) rather than observeAll(): explicit about each
+        // row's fate, and it keeps the assertion off the Flow API.
+        assertNull("gone-1 is in-window and unkept -> deleted", dao.getById("gone-1"))
+        assertNull("gone-2 is in-window and unkept -> deleted", dao.getById("gone-2"))
+        assertNotNull("below-window history must survive", dao.getById("below"))
+        assertNotNull("the kept row must survive", dao.getById("kept"))
+        assertNotNull("search rows are not synced -> untouched", dao.getById("search"))
+        assertNotNull("other folders are untouched", dao.getById("other-folder"))
     }
 
     /**
