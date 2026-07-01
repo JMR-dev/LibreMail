@@ -34,7 +34,7 @@ import org.libremail.data.local.entity.SignatureEntity
         FolderEntity::class,
         SignatureEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 abstract class LibreMailDatabase : RoomDatabase() {

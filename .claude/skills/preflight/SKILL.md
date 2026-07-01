@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + lintDebug) before pushing or opening a PR. Mirrors the merge gate; does NOT run emulator E2E. Use before treating a change as done.
+description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + lintDebug + ktlintCheck + detekt) before pushing or opening a PR. Mirrors the merge gate; does NOT run emulator E2E. Use before treating a change as done.
 ---
 
 # /preflight
@@ -16,20 +16,28 @@ Run the same fast checks CI enforces on every PR, in order, and report the outco
 
 ## Steps
 
-Run these three, stopping at the first failure:
+Run these, stopping at the first failure:
 
 ```bash
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:lintDebug
+./gradlew :app:ktlintCheck :app:detekt
 ```
 
-To keep going and collect every failure in one pass, add `--continue`.
+`ktlintCheck` + `detekt` are exactly what CI's **Static analysis** job runs — they cover the
+`test`/`androidTest` source sets that `lintDebug` does not, so a style violation there fails the
+merge gate even when the build and lint are green. Add `--continue` to any command (e.g.
+`:app:ktlintCheck :app:detekt --continue`) to collect every failure in one pass instead of
+stopping at the first.
 
 ## Reporting
 
-- If all three pass, say so plainly (e.g. "preflight green: build, unit tests, lint").
-- On failure, surface the actual Gradle error. For test failures, point at the report under
-  `app/build/reports/tests/testDebugUnitTest/`; for lint, `app/build/reports/lint-results-debug.html`.
+- If everything passes, say so plainly (e.g. "preflight green: build, unit tests, lint, ktlint, detekt").
+- On failure, surface the actual Gradle error and point at the relevant report:
+  - unit tests → `app/build/reports/tests/testDebugUnitTest/`
+  - lint → `app/build/reports/lint-results-debug.html`
+  - ktlint → `app/build/reports/ktlint/` (per source set, e.g. `ktlintTestSourceSetCheck/`)
+  - detekt → `app/build/reports/detekt/`
 - Do **not** run emulator/E2E (`connectedDebugAndroidTest`) here — that's CI's job unless the
   user explicitly asks.

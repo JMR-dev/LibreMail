@@ -9,6 +9,7 @@ import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.domain.model.Account
@@ -103,6 +104,28 @@ internal fun MessageEntity.toDomain(): Message = Message(
     bodyFetched = bodyFetched,
 )
 
+/**
+ * Maps a mailbox-list projection to the domain model. [Message.body]/[Message.isHtml] are left
+ * empty because the list never renders them — the reader loads the body on demand (see
+ * [MessageSummary]).
+ */
+internal fun MessageSummary.toDomain(): Message = Message(
+    id = id,
+    accountId = accountId,
+    sender = sender,
+    senderEmail = senderEmail,
+    subject = subject,
+    snippet = snippet,
+    body = "",
+    isHtml = false,
+    timestampMillis = timestampMillis,
+    isRead = isRead,
+    isStarred = isStarred,
+    folder = folder,
+    inInbox = inInbox,
+    bodyFetched = bodyFetched,
+)
+
 internal fun FetchedMessage.toEntity(accountId: String, folder: String, inInbox: Boolean = true): MessageEntity =
     MessageEntity(
         id = "$accountId:$folder:$uid",
@@ -127,6 +150,7 @@ internal fun FolderEntity.toDomain(): Folder = Folder(
     displayName = displayName,
     role = runCatching { FolderRole.valueOf(role) }.getOrDefault(FolderRole.NORMAL),
     selectable = selectable,
+    specialUse = specialUse,
 )
 
 internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEntity = FolderEntity(
@@ -136,6 +160,7 @@ internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEn
     role = FolderRole.roleOf(fullName, displayName, attributes).name,
     selectable = selectable,
     sortOrder = sortOrder,
+    specialUse = FolderRole.isServerSpecial(attributes),
 )
 
 internal fun AttachmentEntity.toDomain(): Attachment = Attachment(

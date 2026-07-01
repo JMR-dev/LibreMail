@@ -53,7 +53,7 @@ class DatabaseEncryptionTest {
         DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
         assertTrue("file must not read as plaintext once encrypted", DatabaseEncryption.isEncrypted(dbFile))
         openEncrypted().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeAll().first().map { it.id })
+            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
             close()
         }
 
@@ -61,7 +61,7 @@ class DatabaseEncryptionTest {
         DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
         assertFalse("file must be plaintext again after decrypt", DatabaseEncryption.isEncrypted(dbFile))
         openPlaintext().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeAll().first().map { it.id })
+            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
             close()
         }
     }

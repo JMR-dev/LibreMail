@@ -77,6 +77,10 @@ fun FolderDrawer(
         val sorted = remember(folders) {
             folders.sortedWith(compareBy({ it.role.ordinal }, { it.displayName.lowercase() }))
         }
+        // De-duplicate labels: two distinct folders that would render the same name (e.g. a
+        // provider's built-in Drafts and a same-named user folder) get disambiguated.
+        val baseLabels = sorted.associate { it.fullName to folderDisplayLabel(it) }
+        val resolvedLabels = resolveDrawerLabels(sorted, baseLabels, drawerAccount?.let(::providerLabel).orEmpty())
         sorted.forEach { folder ->
             val isSelected = selectedAccountId != null &&
                 selectedAccountId == drawerAccount?.id &&
@@ -85,7 +89,7 @@ fun FolderDrawer(
                 { Icon(vector, contentDescription = null) }
             }
             NavigationDrawerItem(
-                label = { Text(folderDisplayLabel(folder)) },
+                label = { Text(resolvedLabels[folder.fullName] ?: folderDisplayLabel(folder)) },
                 icon = iconContent,
                 selected = isSelected,
                 onClick = {

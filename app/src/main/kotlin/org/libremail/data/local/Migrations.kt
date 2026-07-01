@@ -216,3 +216,16 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         )
     }
 }
+
+/**
+ * v11 -> v12: drawer folder de-duplication (preserves existing data). Adds a `specialUse` column to
+ * `folders` recording whether the server advertises the folder as special-use (RFC 6154), so the
+ * drawer can tell a provider's built-in folder from a same-named user folder. `DEFAULT 0` matches
+ * the entity's `@ColumnInfo(defaultValue = "0")` so fresh-install and migrated schemas validate
+ * identically (the MIGRATION_9_10 pattern); the next folder refresh backfills the real value.
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `folders` ADD COLUMN `specialUse` INTEGER NOT NULL DEFAULT 0")
+    }
+}

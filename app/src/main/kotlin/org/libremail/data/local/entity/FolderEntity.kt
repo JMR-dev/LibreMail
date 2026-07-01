@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 
 /** A cached IMAP folder for an account. [sortOrder] preserves the server's listing order. */
@@ -13,4 +14,10 @@ data class FolderEntity(
     val role: String,
     val selectable: Boolean,
     val sortOrder: Int,
+    /**
+     * True when the server advertises this as a special-use folder (RFC 6154, e.g. `\Drafts`,
+     * `\Junk`, `\All`). Distinguishes a provider's built-in folder from a same-named user folder
+     * when the drawer de-duplicates display labels.
+     */
+    @ColumnInfo(defaultValue = "0") val specialUse: Boolean = false,
 )
