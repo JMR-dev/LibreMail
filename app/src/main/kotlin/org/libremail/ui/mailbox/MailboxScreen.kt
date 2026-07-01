@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -86,6 +85,7 @@ import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
+import org.libremail.ui.onboarding.WelcomeContent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -240,7 +240,9 @@ fun MailboxScreen(
         ) { padding ->
             Box(modifier = Modifier.fillMaxSize().padding(padding)) {
                 if (!hasAccounts) {
-                    NoAccountState(onAddAccount = onAddAccount)
+                    // Onboarding covers the fresh-install empty case; this is the runtime fallback
+                    // (e.g. the last account was removed). Reuses the same welcome invitation.
+                    WelcomeContent(onAddAccount = onAddAccount, modifier = Modifier.fillMaxSize())
                 } else {
                     val accountsById = remember(accounts) { accounts.associateBy { it.id } }
                     val showAccount = selectedAccountId == null && accounts.size >= 2
@@ -684,34 +686,6 @@ private fun MoveFolderDialog(folders: List<Folder>, onSelect: (Folder) -> Unit, 
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
-}
-
-@Composable
-private fun NoAccountState(onAddAccount: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(
-            Icons.Filled.Email,
-            contentDescription = null,
-            modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(stringResource(R.string.mailbox_welcome_title), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            stringResource(R.string.mailbox_welcome_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(24.dp))
-        Button(onClick = onAddAccount) {
-            Text(stringResource(R.string.settings_add_account))
-        }
-    }
 }
 
 @Composable

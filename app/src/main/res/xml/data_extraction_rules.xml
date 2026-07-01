@@ -1,17 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
-  LibreMail stores encrypted IMAP/OAuth credentials and cached mail in its Room database, encrypted
-  with a non-exportable Android Keystore key. The key never leaves the device, so backing up or
-  transferring the ciphertext would only restore undecryptable data (and needlessly ship mail and
-  credential blobs off-device). Exclude all app data from both cloud backup and device-to-device
-  transfer; accounts are simply re-added on a new device.
+  Android Backup allowlist for LibreMail (API 31+). Backup is opt-in and OFF by default:
+  LibreMailBackupAgent only lets a backup or device transfer run once the user enables "Include
+  settings in Android Backup", so nothing here leaves the device unless explicitly chosen.
+
+  <include> makes each section a strict allowlist: ONLY the listed path — the libremail_settings
+  DataStore of re-creatable user preferences — is ever backed up. Everything else is excluded by
+  omission, which deliberately keeps these off-device:
+    - datastore/libremail_dbkey.preferences_pb: the Keystore-sealed SQLCipher passphrase for the
+      encrypted cache. The wrapping Keystore key is non-exportable and device-bound, so the
+      ciphertext is useless anywhere else.
+    - libremail.db (+ -wal/-shm/-journal): encrypted IMAP/OAuth credentials and the cached mail.
+      The cache re-downloads on the next sync; accounts are re-added on a new device.
+  (Lint's FullBackupContent rule forbids <exclude> paths outside an <include>, so the exclusions are
+  expressed by simply not listing those paths rather than as explicit <exclude> entries.)
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="root" path="." />
+        <include domain="file" path="datastore/libremail_settings.preferences_pb" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="root" path="." />
+        <include domain="file" path="datastore/libremail_settings.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

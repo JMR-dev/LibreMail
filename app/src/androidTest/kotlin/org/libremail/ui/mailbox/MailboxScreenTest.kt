@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.lifecycle.SavedStateHandle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -71,7 +72,12 @@ class MailboxScreenTest {
     )
 
     private fun setContent(repo: FakeMailRepository) {
-        val viewModel = MailboxViewModel(repo, FakeAccountRepository(accounts = listOf(account)), FakeMailSyncer())
+        val viewModel = MailboxViewModel(
+            repo,
+            FakeAccountRepository(accounts = listOf(account)),
+            FakeMailSyncer(),
+            SavedStateHandle(),
+        )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
                 MailboxScreen(
