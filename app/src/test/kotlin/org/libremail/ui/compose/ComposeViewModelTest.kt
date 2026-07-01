@@ -156,6 +156,27 @@ class ComposeViewModelTest {
     }
 
     @Test
+    fun `resuming a draft restores the bcc recipients`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.getDraft("d1") } returns Draft(
+            id = "d1",
+            accountId = "imap:a",
+            to = "x@example.org",
+            cc = "",
+            bcc = "hidden@example.org",
+            subject = "Hi",
+            body = "Draft body",
+            updatedAt = 0L,
+        )
+        val vm = viewModel(
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_DRAFT to "d1")),
+            mailRepository = mailRepository,
+        )
+
+        assertEquals("hidden@example.org", vm.state.value.bcc)
+    }
+
+    @Test
     fun `send carries the HTML body through to the outgoing message`() = runTest(testDispatcher) {
         val mailRepository = mockk<MailRepository>(relaxed = true)
         val sent = slot<OutgoingMessage>()

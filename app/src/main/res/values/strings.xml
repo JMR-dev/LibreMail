@@ -92,6 +92,7 @@
     <string name="format_link_url">Link address</string>
     <string name="format_link_apply">Link</string>
     <string name="format_link_needs_selection">Select some text first, then add a link.</string>
+    <string name="format_color_none">No color</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>

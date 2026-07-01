@@ -10,6 +10,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -54,9 +55,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
@@ -156,24 +160,11 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     SuggestionList(state.suggestions, viewModel::pickSuggestion)
                 }
 
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.cc,
-                    onValueChange = viewModel::onCcChange,
-                    label = { Text(stringResource(R.string.compose_cc)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.bcc,
-                    onValueChange = viewModel::onBccChange,
-                    label = { Text(stringResource(R.string.compose_bcc)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    modifier = Modifier.fillMaxWidth(),
+                CcBccFields(
+                    cc = state.cc,
+                    onCcChange = viewModel::onCcChange,
+                    bcc = state.bcc,
+                    onBccChange = viewModel::onBccChange,
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
@@ -272,6 +263,81 @@ private fun FromRow(accounts: List<Account>, selectedId: String?, onSelect: (Str
             }
         }
     }
+}
+
+/**
+ * Cc/Bcc start collapsed into link buttons under the To box so the body gets the vertical space.
+ * A field expands when its link is tapped (taking focus), or by itself once it carries recipients
+ * (reply-all/mailto prefill, a resumed draft). Once shown, a field never re-collapses — emptying
+ * it mid-edit must not make it vanish.
+ */
+@Composable
+private fun CcBccFields(cc: String, onCcChange: (String) -> Unit, bcc: String, onBccChange: (String) -> Unit) {
+    var ccShown by rememberSaveable { mutableStateOf(cc.isNotBlank()) }
+    var bccShown by rememberSaveable { mutableStateOf(bcc.isNotBlank()) }
+    LaunchedEffect(cc, bcc) {
+        if (cc.isNotBlank()) ccShown = true
+        if (bcc.isNotBlank()) bccShown = true
+    }
+    val ccFocus = remember { FocusRequester() }
+    val bccFocus = remember { FocusRequester() }
+    // Deliberately not saveable: only a link tap moves focus, never rotation or a loading draft.
+    var pendingFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    LaunchedEffect(pendingFocus) {
+        pendingFocus?.requestFocus()
+        pendingFocus = null
+    }
+
+    if (ccShown) {
+        Spacer(Modifier.height(8.dp))
+        RecipientField(cc, onCcChange, R.string.compose_cc, ccFocus)
+    }
+    if (bccShown) {
+        Spacer(Modifier.height(8.dp))
+        RecipientField(bcc, onBccChange, R.string.compose_bcc, bccFocus)
+    }
+    if (!ccShown || !bccShown) {
+        Row {
+            if (!ccShown) {
+                TextButton(
+                    onClick = {
+                        ccShown = true
+                        pendingFocus = ccFocus
+                    },
+                ) {
+                    Text(stringResource(R.string.compose_cc))
+                }
+            }
+            if (!bccShown) {
+                TextButton(
+                    onClick = {
+                        bccShown = true
+                        pendingFocus = bccFocus
+                    },
+                ) {
+                    Text(stringResource(R.string.compose_bcc))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipientField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    @StringRes labelRes: Int,
+    focusRequester: FocusRequester,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(labelRes)) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
