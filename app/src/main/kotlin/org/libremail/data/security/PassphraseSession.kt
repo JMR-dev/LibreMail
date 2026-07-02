@@ -12,12 +12,25 @@ import javax.inject.Singleton
  *
  * When app-lock is enabled the database passphrase is sealed by an auth-bound Keystore key
  * ([DatabaseKeyCipher]) and is only recoverable after the user passes a `BiometricPrompt`. The
- * unwrapped passphrase is kept here for the lifetime of the unlocked session — never persisted — and
- * cleared on lock, timeout, or when app-lock is disabled. `DatabaseModule` reads it through [await]
- * so the encrypted database is opened only after authentication.
+ * unwrapped passphrase is kept here for the unlocked session — never persisted. `DatabaseModule`
+ * reads it through [await] so the encrypted database is opened only after authentication.
  *
- * The value is an immutable [String] to stay consistent with the rest of the passphrase plumbing; it
- * cannot be zeroed in place, which is an accepted limitation of the existing design.
+ * Eviction — current limitation: the passphrase is NOT guaranteed to leave the process when the app
+ * re-locks. [lock] is called on app-lock disable and cache reset ([DatabaseKeyStore]), but it is
+ * deliberately NOT called on the app-lock UI gate's grace-expiry/timeout re-lock, and even if it were
+ * it would only drop THIS holder's reference:
+ *  - the value is an immutable [String] and cannot be zeroed in place — [lock] merely releases it
+ *    for GC;
+ *  - once the encrypted cache has been opened, SQLCipher keeps the key inside the already-open
+ *    Room/native handle. `DatabaseModule.provideDatabase` runs once per process, so nothing here
+ *    closes that handle; the key stays resident for the process lifetime regardless of [lock];
+ *  - this holder's unlocked-ness also drives [EncryptedCacheGuard], so clearing it while the app is
+ *    merely locked (not exited) would stall background sync/push even though the DB is still open.
+ *
+ * Truly evicting the passphrase on lock/timeout therefore requires a database close/reopen mechanism,
+ * which is owned by the DB-lifecycle work in issues #93 (provideDatabase) and #111 (DB
+ * re-architecture) and is intentionally out of scope here. Until those land, do not rely on [lock]
+ * for cryptographic erasure of the passphrase from the process.
  */
 @Singleton
 class PassphraseSession @Inject constructor() {
@@ -29,7 +42,11 @@ class PassphraseSession @Inject constructor() {
         passphrase.value = value
     }
 
-    /** Clear the passphrase from memory (on lock, timeout, or app-lock disable). */
+    /**
+     * Drop this holder's reference to the passphrase (on app-lock disable / cache reset). See the
+     * class KDoc: this is a partial eviction only — it does not close the open database, so SQLCipher
+     * keeps the key resident for the process lifetime (full eviction is deferred to #93 / #111).
+     */
     fun lock() {
         passphrase.value = null
     }

@@ -100,4 +100,45 @@ class AppLockGateTest {
         gate.onForeground(now = 1_000L, appLockEnabled = true) // stale -> LOCKED, marker retained
         assertEquals(LockState.LOCKED, gate.onForeground(now = 3_000L, appLockEnabled = true))
     }
+
+    @Test
+    fun `grace survives activity recreation when the gate instance is reused (app-scoped singleton)`() {
+        // #101: Back on the task root (API 29/30) finishes the Activity and clears its ViewModelStore,
+        // so AppLockViewModel is destroyed and re-created. Because the gate is application-scoped the
+        // SAME instance is reused across that recreation: the background marker recorded before the
+        // store was cleared is still present, so returning within grace stays unlocked — identical to
+        // leaving via Home and returning.
+        val survivingGate = AppLockGate(grace)
+        survivingGate.onForeground(now = 0, appLockEnabled = true)
+        survivingGate.onAuthenticated()
+        survivingGate.onBackground(now = 1_000) // ON_STOP as Back finishes the Activity
+        // ...Activity destroyed + re-created; the same singleton gate is handed to the new ViewModel...
+        assertEquals(
+            LockState.UNLOCKED,
+            survivingGate.onForeground(now = 1_000 + grace, appLockEnabled = true),
+        )
+    }
+
+    @Test
+    fun `grace still expires across activity recreation when the reused gate is out of the window`() {
+        val survivingGate = AppLockGate(grace)
+        survivingGate.onForeground(now = 0, appLockEnabled = true)
+        survivingGate.onAuthenticated()
+        survivingGate.onBackground(now = 1_000)
+        assertEquals(
+            LockState.LOCKED,
+            survivingGate.onForeground(now = 1_000 + grace + 1, appLockEnabled = true),
+        )
+    }
+
+    @Test
+    fun `a fresh gate (process death, or the pre-fix Activity-scoped bug) starts locked`() {
+        // Contrast with the reused instance above: if the gate were Activity/ViewModel-scoped (the
+        // pre-fix bug) or after a genuine cold start (process death), recreation builds a FRESH gate.
+        // It must start LOCKED and stay locked on the first foreground even within the grace window —
+        // the re-auth-on-Back inconsistency #101 fixes, and the correct cold-start behavior.
+        val freshGate = AppLockGate(grace)
+        assertEquals(LockState.LOCKED, freshGate.state)
+        assertEquals(LockState.LOCKED, freshGate.onForeground(now = 1_000, appLockEnabled = true))
+    }
 }
