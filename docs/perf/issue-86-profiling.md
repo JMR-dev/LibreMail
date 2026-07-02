@@ -114,9 +114,10 @@ UNIFIED folder-only : SCAN TABLE messages USING INDEX index_messages_timestampMi
 
 ## Deferred follow-ups
 
-- **Unified inbox**: add Room `PagingSource`/Paging3 so the unified list's cost scales with the screen,
-  not the total inbox count; optionally a `(folder, timestampMillis)` index to turn the scan into a
-  seek. (The per-account views are already flat, so Paging3 there is lower priority.)
+- **Unified inbox**: ~~add Room `PagingSource`/Paging3 so the unified list's cost scales with the
+  screen, not the total inbox count~~ — done in #124 (`docs/perf/issue-124-unified-inbox-paging.md`).
+  Paging alone captured the win (first page ~flat at ~5–7 ms vs. the current ~25 ms at a 20k cache);
+  the `(folder, timestampMillis)` index proved unnecessary, so no schema migration was added.
 - **IMAP latency on folder open** is out of scope for this cached-render fix.
 
 ## Reproduce
