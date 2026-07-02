@@ -169,8 +169,9 @@ class LibreMailDatabaseTest {
         assertEquals(setOf("acct:INBOX:1", "acct:INBOX:2"), messageDao.getSyncedIds("acct", "INBOX").toSet())
         assertEquals(listOf("acct:Archive:1"), messageDao.getSyncedIds("acct", "Archive"))
 
-        // Reconciling the inbox must not touch other folders' rows.
-        messageDao.deleteSyncedNotIn("acct", "INBOX", listOf("acct:INBOX:1"))
+        // Reconciling the inbox must not touch other folders' rows (windowed reconcile; whole-inbox
+        // window since these rows have uid 0).
+        messageDao.deleteSyncedInWindowNotIn("acct", "INBOX", minWindowUid = 0, keepIds = listOf("acct:INBOX:1"))
         assertEquals(
             setOf("acct:INBOX:1", "acct:Archive:1"),
             messageDao.observeSummaries().first().map { it.id }.toSet(),

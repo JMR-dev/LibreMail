@@ -41,14 +41,19 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertNew(messages: List<MessageEntity>)
 
+    /** Of the given [ids], those that already have a row — lets a caller refresh only pre-existing rows. */
+    @Query("SELECT id FROM messages WHERE id IN (:ids)")
+    suspend fun existingIds(ids: List<String>): List<String>
+
     /**
-     * Refreshes the display fields from the server without touching the cached body, the local
-     * read/star flags (which may hold an optimistic change the server hasn't reflected yet), or the
-     * inbox membership.
+     * Refreshes the display fields (and the materialized [MessageEntity.uid], keeping it fresh for
+     * rows migrated before the column existed) from the server without touching the cached body, the
+     * local read/star flags (which may hold an optimistic change the server hasn't reflected yet), or
+     * the inbox membership.
      */
     @Query(
         "UPDATE messages SET sender = :sender, senderEmail = :senderEmail, subject = :subject, " +
-            "timestampMillis = :timestampMillis WHERE id = :id",
+            "timestampMillis = :timestampMillis, uid = :uid WHERE id = :id",
     )
     suspend fun updateHeaderContent(
         id: String,
@@ -56,6 +61,7 @@ interface MessageDao {
         senderEmail: String,
         subject: String,
         timestampMillis: Long,
+        uid: Long,
     )
 
     /** Marks rows as folder-synced (e.g. a former search-only row that the sync now returns). */
@@ -85,12 +91,55 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
     suspend fun deleteSyncedByAccountFolder(accountId: String, folder: String)
 
-    /** Drops synced rows in [folder] for an account that are no longer present on the server. */
+    /**
+     * Windowed deletion reconcile for full-history sync (issue #12): within [folder], delete synced
+     * rows whose UID falls inside the freshly-fetched recent window (`uid >= minWindowUid`) but which
+     * the server no longer returns ([keepIds]). Rows below the window — older history fetched by the
+     * background backfill — are deliberately left intact, unlike a whole-folder "not in the recent
+     * set" reconcile, which would wipe that backfilled history.
+     */
     @Query(
         "DELETE FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 " +
-            "AND id NOT IN (:keepIds)",
+            "AND uid >= :minWindowUid AND id NOT IN (:keepIds)",
     )
-    suspend fun deleteSyncedNotIn(accountId: String, folder: String, keepIds: List<String>)
+    suspend fun deleteSyncedInWindowNotIn(accountId: String, folder: String, minWindowUid: Long, keepIds: List<String>)
+
+    /** Lowest cached UID among an account's synced rows in [folder] — the backfill boundary. Null if none. */
+    @Query("SELECT MIN(uid) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    suspend fun lowestSyncedUid(accountId: String, folder: String): Long?
+
+    /** Number of an account's synced rows in [folder] (count-based retention floor / prune sizing). */
+    @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    suspend fun countSynced(accountId: String, folder: String): Int
+
+    /** Oldest cached timestamp among an account's synced rows in [folder] (age-based retention floor). Null if none. */
+    @Query(
+        "SELECT MIN(timestampMillis) FROM messages " +
+            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1",
+    )
+    suspend fun oldestSyncedTimestamp(accountId: String, folder: String): Long?
+
+    /** Distinct folders that have at least one synced row for [accountId] (backfill/prune targets). */
+    @Query("SELECT DISTINCT folder FROM messages WHERE accountId = :accountId AND inInbox = 1")
+    suspend fun syncedFolders(accountId: String): List<String>
+
+    /** Ids of an account's synced rows older than [cutoffMillis] (age-based prune candidates, all folders). */
+    @Query("SELECT id FROM messages WHERE accountId = :accountId AND inInbox = 1 AND timestampMillis < :cutoffMillis")
+    suspend fun syncedIdsOlderThan(accountId: String, cutoffMillis: Long): List<String>
+
+    /**
+     * Ids of an account's synced rows in [folder] beyond the newest [keep] by ARRIVAL (server UID —
+     * count-based prune candidates). Ordering by UID (not by the Date header) matches the newest-by-UID
+     * recent window [org.libremail.mail.ImapClient.fetchRecent] keeps fresh, so a message with a high
+     * UID but an old Date isn't re-fetched by every sync and re-pruned by every cycle.
+     */
+    @Query(
+        "SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 " +
+            "AND id NOT IN (" +
+            "SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 " +
+            "ORDER BY uid DESC LIMIT :keep)",
+    )
+    suspend fun syncedIdsBeyondCountInFolder(accountId: String, folder: String, keep: Int): List<String>
 
     /** Removes transient server-search hits (called when search closes). */
     @Query("DELETE FROM messages WHERE inInbox = 0")

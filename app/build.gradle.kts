@@ -96,6 +96,9 @@ android {
         buildConfig = true
     }
 
+    // Ship the exported Room schemas as androidTest assets so MigrationTestHelper can load them.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     // F-Droid compliance (issue #16): by default AGP embeds a "dependency info block" in the APK
     // signing block — a list of every dependency, encrypted so that ONLY Google Play can read it.
     // F-Droid's inclusion policy treats that opaque, Google-only blob as a blocker (it cannot be

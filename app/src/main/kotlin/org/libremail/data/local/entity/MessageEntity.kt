@@ -8,7 +8,10 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "messages",
-    indices = [Index("accountId"), Index("timestampMillis")],
+    // The (accountId, folder, uid) index serves the folder-scoped UID probes the backfill/reconcile
+    // hot paths run on every page/sync: MIN(uid) (lowestSyncedUid) and the uid >= window bound
+    // (deleteSyncedInWindowNotIn / syncedIdsBeyondCountInFolder).
+    indices = [Index("accountId"), Index("timestampMillis"), Index("accountId", "folder", "uid")],
 )
 data class MessageEntity(
     @PrimaryKey val id: String,
@@ -28,4 +31,11 @@ data class MessageEntity(
     val inInbox: Boolean = true,
     /** True once the body has been fetched from the server (distinguishes "not fetched" from "empty body"). */
     val bodyFetched: Boolean = false,
+    /**
+     * The server IMAP UID as a number (also embedded in [id]). Materialized as a column so full-history
+     * backfill can page by "lowest cached UID" and foreground sync can reconcile only the recent UID
+     * window without deleting older, backfilled history. 0 for rows migrated before this column existed
+     * (refreshed to the real UID on the next sync).
+     */
+    @ColumnInfo(defaultValue = "0") val uid: Long = 0L,
 )

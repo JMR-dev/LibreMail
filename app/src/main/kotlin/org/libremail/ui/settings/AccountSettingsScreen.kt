@@ -94,6 +94,16 @@ fun AccountSettingsScreen(
             )
             HorizontalDivider()
 
+            // Per-account device-only retention override (issue #13); "use default" inherits the global setting.
+            RetentionSection(
+                count = settings.retentionCount,
+                months = settings.retentionMonths,
+                includeUseDefault = true,
+                onCountChange = viewModel::setRetentionCount,
+                onMonthsChange = viewModel::setRetentionMonths,
+            )
+            HorizontalDivider()
+
             ClickRow(
                 title = stringResource(R.string.account_remove),
                 titleColor = MaterialTheme.colorScheme.error,

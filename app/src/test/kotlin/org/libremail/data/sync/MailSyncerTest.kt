@@ -9,6 +9,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
@@ -16,6 +17,7 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.AccountSettings
@@ -36,11 +38,16 @@ class MailSyncerTest {
         smtp = ServerConfigEmbedded("smtp.example.org", 465, "SSL_TLS"),
     )
 
+    /** The IMAP client of the most recently built [syncer], for verifying the fetch window size. */
+    private lateinit var lastImapClient: ImapClient
+
     /** A syncer whose header sync is a no-op (no server messages) so tests focus on the prefetch step. */
     private fun syncer(
         policy: FetchPolicy,
         mailRepository: MailRepository,
         context: Context = mockk(relaxed = true),
+        accountSettings: AccountSettings = AccountSettings("acct"),
+        globalSettings: AppSettings = AppSettings(),
     ): MailSyncer {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getById("acct") } returns account
@@ -49,12 +56,14 @@ class MailSyncerTest {
         coEvery { messageDao.getUnfetchedIds("acct", "INBOX") } returns listOf("acct:INBOX:1")
         val imapClient = mockk<ImapClient>()
         coEvery { imapClient.fetchRecent(any(), any(), any()) } returns emptyList()
+        lastImapClient = imapClient
         val connectionFactory = mockk<MailConnectionFactory>()
         coEvery { connectionFactory.imapParamsFor(any()) } returns mockk<ImapConnectionParams>()
         val settingsRepository = mockk<SettingsRepository>()
         coEvery { settingsRepository.fetchPolicy() } returns policy
+        every { settingsRepository.settings } returns flowOf(globalSettings)
         val accountSettingsRepository = mockk<AccountSettingsRepository>()
-        coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
+        coEvery { accountSettingsRepository.get(any()) } returns accountSettings
         return MailSyncer(
             context = context,
             accountDao = accountDao,
@@ -85,6 +94,37 @@ class MailSyncerTest {
         syncer(FetchPolicy.ON_DEMAND, repo).syncFolder("acct", "INBOX")
 
         coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+    }
+
+    @Test
+    fun `caps the recent fetch window to a retention count below the default`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+
+        syncer(FetchPolicy.ON_DEMAND, repo, accountSettings = AccountSettings("acct", retentionCount = 20))
+            .syncFolder("acct", "INBOX")
+
+        // Foreground must not fetch more than retention keeps, or it would re-download pruned rows.
+        coVerify { lastImapClient.fetchRecent(any(), "INBOX", 20) }
+    }
+
+    @Test
+    fun `uses the full window when the retention count exceeds it`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+
+        syncer(FetchPolicy.ON_DEMAND, repo, accountSettings = AccountSettings("acct", retentionCount = 5000))
+            .syncFolder("acct", "INBOX")
+
+        coVerify { lastImapClient.fetchRecent(any(), "INBOX", 50) }
+    }
+
+    @Test
+    fun `age-only retention leaves the full recent window intact`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+
+        syncer(FetchPolicy.ON_DEMAND, repo, accountSettings = AccountSettings("acct", retentionMonths = 6))
+            .syncFolder("acct", "INBOX")
+
+        coVerify { lastImapClient.fetchRecent(any(), "INBOX", 50) }
     }
 
     @Test
@@ -148,6 +188,7 @@ class MailSyncerTest {
         val settingsRepository = mockk<SettingsRepository>()
         coEvery { settingsRepository.isNewMailNotificationsEnabled() } returns globalEnabled
         coEvery { settingsRepository.fetchPolicy() } returns FetchPolicy.ON_DEMAND
+        every { settingsRepository.settings } returns flowOf(AppSettings())
         val accountSettingsRepository = mockk<AccountSettingsRepository>()
         coEvery { accountSettingsRepository.get("acct") } returns
             AccountSettings("acct", notificationsEnabled = accountEnabled)
