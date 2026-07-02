@@ -121,8 +121,11 @@ token. A working client ID ships with the build; to use your own Azure app regis
 
 LibreMail is offline-first: your mail lives in a local cache, and by default network traffic
 goes only to your mail providers (IMAP/SMTP, plus Microsoft's OAuth and Graph endpoints for
-Outlook). There is no analytics SDK and no always-on telemetry. The privacy-sensitive extras
-are all **opt-in**:
+Outlook). There is no analytics SDK and no always-on telemetry. The full privacy policy lives in
+[`PRIVACY.md`](PRIVACY.md); Google Play compliance notes (data-safety mapping, permissions
+justification) are under [`docs/`](docs/). Because Gmail uses an app password (no Google OAuth
+scopes), no Google restricted-scope verification or CASA assessment applies; Outlook's OAuth
+client is governed by Microsoft's Azure rules. The privacy-sensitive extras are all **opt-in**:
 
 - **Cache encryption** — the Room cache can be encrypted at rest with **SQLCipher**. With the
   optional **app lock** (biometric or device credential) enabled, the cache key is bound to
