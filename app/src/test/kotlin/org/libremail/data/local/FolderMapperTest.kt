@@ -42,11 +42,12 @@ class FolderMapperTest {
     }
 
     @Test
-    fun `the all-mail and starred attributes mark the folder special but drive no role of their own`() {
-        // Gmail's "All Mail" (\All) and "Starred" (\Flagged) are server special-use, yet roleOf maps
-        // neither to a role (the role still comes from the name — here neutral, so NORMAL). specialUse
-        // and role are independent axes; this documents the current wiring ahead of the #65 refactor.
-        listOf("\\All", "\\Flagged").forEach { attribute ->
+    fun `the all-mail, starred and important attributes mark the folder special but drive no role`() {
+        // Gmail's "All Mail" (\All), "Starred" (\Flagged) and "Important" (\Important, RFC 8457 — #62)
+        // are server special-use, yet roleOf maps none to a role (the role still comes from the name —
+        // here neutral, so NORMAL). specialUse and role are independent axes; the #65 unified table
+        // keeps them so.
+        listOf("\\All", "\\Flagged", "\\Important").forEach { attribute ->
             val entity = entityFor(listOf(attribute))
             assertTrue(entity.specialUse, "specialUse for $attribute")
             assertEquals(FolderRole.NORMAL.name, entity.role, "role for $attribute")
