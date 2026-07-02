@@ -66,12 +66,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
-        // Only on a fresh launch — on a config-change recreation the NavHost restores the compose /
-        // reader destination itself, so re-parsing the (unchanged) intent would open a duplicate.
-        if (savedInstanceState == null) {
-            pendingCompose.value = IntentComposeParser.parse(intent)
-            pendingOpenMessageId.value = NotificationIntents.messageId(intent)
-        }
+        handleIntent(intent)
         setContent {
             val dynamicColor by settingsRepository.dynamicColor.collectAsStateWithLifecycle(initialValue = true)
             LibreMailTheme(dynamicColor = dynamicColor) {
@@ -92,7 +87,54 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleIntent(intent)
+    }
+
+    /**
+     * Parses [intent] for a pending compose ([IntentComposeParser]) or open-message
+     * ([NotificationIntents]) request — unless [IntentHandledMarker] says this exact intent instance
+     * was already parsed.
+     *
+     * This used to be gated on `savedInstanceState == null` in [onCreate]: a non-null value was
+     * assumed to mean "config-change recreation" — where Android redelivers the very same,
+     * already-parsed intent and the NavHost restores its own compose/reader destination itself, so
+     * re-parsing would only navigate to a duplicate. But Android *also* passes a restored, non-null
+     * savedInstanceState when it recreates this activity after the process was killed in the
+     * background and is then relaunched — e.g. by tapping a notification. There, `intent` is the new
+     * tap, not a replay, but the old guard swallowed it exactly like a rotation: `pendingOpenMessageId`
+     * was never set, so the tap silently landed wherever the restored back stack was, never the
+     * message. That regression is #157.
+     *
+     * Marking the [Intent] instance itself — rather than branching on savedInstanceState, which can't
+     * tell a config change and a process-death relaunch apart — is correct for both: a config-change
+     * recreation redelivers the very same intent this activity already marked, so it's recognized and
+     * skipped; a genuinely new intent — a fresh notification tap or mailto/share, whether delivered
+     * warm via [onNewIntent] or cold via [onCreate] after a process-death relaunch — is never marked
+     * yet, so it's always (re)parsed.
+     */
+    private fun handleIntent(intent: Intent) {
+        if (!IntentHandledMarker.markIfUnhandled(intent)) return
         IntentComposeParser.parse(intent)?.let { pendingCompose.value = it }
         NotificationIntents.messageId(intent)?.let { pendingOpenMessageId.value = it }
+    }
+}
+
+/**
+ * Marks an [Intent] as already parsed by [MainActivity.handleIntent], so a redelivery of the very same
+ * instance — which is what Android does when it recreates an Activity for a configuration change — is
+ * recognized and skipped instead of re-triggering a duplicate navigation. A freshly constructed intent
+ * (a new notification tap or mailto/share, however it arrives) is never marked yet, so it is always
+ * treated as unhandled — including right after a process-death relaunch, where `savedInstanceState` is
+ * restored (non-null) but the intent itself is new. Internal (not private) so androidTest can verify
+ * the marking contract directly. See #157.
+ */
+internal object IntentHandledMarker {
+    private const val EXTRA_HANDLED = "org.libremail.extra.INTENT_HANDLED"
+
+    /** Marks [intent] handled and returns `true` — but only the first time this instance is seen. */
+    fun markIfUnhandled(intent: Intent): Boolean {
+        if (intent.getBooleanExtra(EXTRA_HANDLED, false)) return false
+        intent.putExtra(EXTRA_HANDLED, true)
+        return true
     }
 }
