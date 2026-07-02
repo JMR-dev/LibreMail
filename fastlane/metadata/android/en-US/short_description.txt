@@ -1,0 +1,1 @@
+Privacy-respecting, offline-first email for any IMAP/SMTP provider

@@ -154,6 +154,18 @@ The UI observes Room via `Flow`; a sync engine (Angus Mail over IMAP/SMTP, plus 
 Graph for Outlook send) writes into Room, and an auth layer (AppAuth for OAuth and an Android
 Keystore-backed credential store for app passwords) handles sign-in.
 
+## F-Droid
+
+LibreMail is built to meet F-Droid's inclusion criteria: every dependency is
+FOSS-licensed, there are no Google Play Services / Firebase / proprietary SDKs, the
+build needs no `secrets.properties`, and there are **no anti-features to declare**
+(the privacy-sensitive extras above are all opt-in). The full dependency license
+audit, anti-feature review, and clean-room build verification live in
+[`docs/fdroid-compliance.md`](docs/fdroid-compliance.md); the store listing is under
+[`fastlane/metadata/android/`](fastlane/metadata/android/en-US), and
+[`docs/fdroid/org.libremail.app.yml`](docs/fdroid/org.libremail.app.yml) is the
+template for the eventual fdroiddata build recipe.
+
 ## License
 
 LibreMail is licensed under the **GNU General Public License v3.0** — see
