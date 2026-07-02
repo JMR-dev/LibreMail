@@ -121,8 +121,11 @@ token. A working client ID ships with the build; to use your own Azure app regis
 
 LibreMail is offline-first: your mail lives in a local cache, and by default network traffic
 goes only to your mail providers (IMAP/SMTP, plus Microsoft's OAuth and Graph endpoints for
-Outlook). There is no analytics SDK and no always-on telemetry. The privacy-sensitive extras
-are all **opt-in**:
+Outlook). There is no analytics SDK and no always-on telemetry. The full privacy policy lives in
+[`PRIVACY.md`](PRIVACY.md); Google Play compliance notes (data-safety mapping, permissions
+justification) are under [`docs/`](docs/). Because Gmail uses an app password (no Google OAuth
+scopes), no Google restricted-scope verification or CASA assessment applies; Outlook's OAuth
+client is governed by Microsoft's Azure rules. The privacy-sensitive extras are all **opt-in**:
 
 - **Cache encryption** — the Room cache can be encrypted at rest with **SQLCipher**. With the
   optional **app lock** (biometric or device credential) enabled, the cache key is bound to
@@ -150,6 +153,18 @@ di/        Hilt modules
 The UI observes Room via `Flow`; a sync engine (Angus Mail over IMAP/SMTP, plus Microsoft
 Graph for Outlook send) writes into Room, and an auth layer (AppAuth for OAuth and an Android
 Keystore-backed credential store for app passwords) handles sign-in.
+
+## F-Droid
+
+LibreMail is built to meet F-Droid's inclusion criteria: every dependency is
+FOSS-licensed, there are no Google Play Services / Firebase / proprietary SDKs, the
+build needs no `secrets.properties`, and there are **no anti-features to declare**
+(the privacy-sensitive extras above are all opt-in). The full dependency license
+audit, anti-feature review, and clean-room build verification live in
+[`docs/fdroid-compliance.md`](docs/fdroid-compliance.md); the store listing is under
+[`fastlane/metadata/android/`](fastlane/metadata/android/en-US), and
+[`docs/fdroid/org.libremail.app.yml`](docs/fdroid/org.libremail.app.yml) is the
+template for the eventual fdroiddata build recipe.
 
 ## License
 

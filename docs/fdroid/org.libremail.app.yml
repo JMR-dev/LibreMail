@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# TEMPLATE for LibreMail's F-Droid build recipe ("app metadata").
+#
+# The real recipe does NOT live in this repository: F-Droid builds every app from a
+# metadata file kept in the fdroiddata repo (https://gitlab.com/fdroid/fdroiddata) at
+# metadata/org.libremail.app.yml. To submit LibreMail, fork fdroiddata, copy this file
+# there (dropping this comment block — `fdroid rewritemeta` strips comments anyway),
+# validate it, and open a merge request:
+#
+#   fdroid readmeta                       # parse check
+#   fdroid lint org.libremail.app        # style/policy check
+#   fdroid build -v -l org.libremail.app # test build (needs the Android SDK)
+#
+# Notes for the submitter:
+#   - Summary/Description/changelogs are deliberately NOT set here: F-Droid pulls the
+#     localized store listing from this repo's fastlane/metadata/android/ tree.
+#   - Each release must be git-tagged (v<versionName>) AND bump versionCode in
+#     app/build.gradle.kts; UpdateCheckMode: Tags matches tags against versionCode.
+#   - The build needs no secrets.properties: the Outlook OAuth client id (a public,
+#     non-secret GUID) has an in-tree default, and the debug-report endpoint defaults
+#     to empty (reports then cannot be submitted anywhere). See docs/fdroid-compliance.md.
+#   - JDK: 17-21 (AGP 9.x does not support JDK 25).
+
+Categories:
+  - Internet
+License: GPL-3.0-or-later
+AuthorName: Jason Ross
+SourceCode: https://github.com/JMR-dev/LibreMail
+IssueTracker: https://github.com/JMR-dev/LibreMail/issues
+Changelog: https://github.com/JMR-dev/LibreMail/releases
+
+AutoName: LibreMail
+
+RepoType: git
+Repo: https://github.com/JMR-dev/LibreMail.git
+
+Builds:
+  - versionName: 0.1.0
+    versionCode: 1
+    commit: v0.1.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+\.[0-9]+$
+CurrentVersion: 0.1.0
+CurrentVersionCode: 1
