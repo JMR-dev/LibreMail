@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.settings
 
+import android.Manifest
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -12,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -20,11 +25,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -32,11 +40,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
+import org.libremail.contacts.ContactPermissionDecision
+import org.libremail.contacts.ContactPermissionState
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.ui.LibreMailBottomBar
 import org.libremail.ui.TopDest
@@ -56,8 +67,27 @@ fun SettingsScreen(
     val appLockMessage by viewModel.appLockMessage.collectAsStateWithLifecycle()
     val batteryUnrestricted by viewModel.batteryUnrestricted.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val resources = LocalResources.current
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Contacts-autocomplete entry (#129): its on / off / blocked-in-settings state is derived from the
+    // live grant, the Activity's rationale signal, and whether the dialog was ever shown — recomputed
+    // on resume (e.g. back from system settings) and when the "requested" flag flips.
+    val contactsRequested by viewModel.contactsPermissionRequested.collectAsStateWithLifecycle()
+    var contactsState by remember { mutableStateOf(ContactPermissionState.DENIED) }
+    var showContactsRationale by remember { mutableStateOf(false) }
+    var showContactsBlocked by remember { mutableStateOf(false) }
+    fun resolveContactsState() = ContactPermissionDecision.resolve(
+        granted = viewModel.hasContactsPermission(),
+        showRationale = activity != null &&
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_CONTACTS),
+        alreadyRequested = contactsRequested,
+    )
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { contactsState = resolveContactsState() }
+    LaunchedEffect(contactsRequested) { contactsState = resolveContactsState() }
 
     // Surface a rejected app-lock toggle via the canonical snackbar pattern (matches MailboxScreen).
     // The ViewModel holds the @StringRes id; resolve it here via LocalResources (so it re-resolves on
@@ -69,8 +99,11 @@ fun SettingsScreen(
         }
     }
 
-    // Re-read the battery status on resume so it reflects any change made in system settings.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshBatteryStatus() }
+    // Re-read the battery + contacts state on resume so both reflect changes made in system settings.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshBatteryStatus()
+        contactsState = resolveContactsState()
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
@@ -105,6 +138,23 @@ fun SettingsScreen(
                 checked = settings.newMailNotifications,
                 onCheckedChange = viewModel::setNewMailNotifications,
                 subtitle = stringResource(R.string.settings_new_mail_summary),
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_contacts))
+            ContactAutocompleteRow(
+                state = contactsState,
+                onClick = {
+                    when (contactsState) {
+                        // Already on: send to system settings, the only place to turn it back off.
+                        ContactPermissionState.GRANTED ->
+                            runCatching { context.startActivity(viewModel.contactsSettingsIntent()) }
+                        // Re-requestable in-app: explain first (#128), then launch the system dialog.
+                        ContactPermissionState.DENIED -> showContactsRationale = true
+                        // Permanently denied: an in-app request is a no-op, so deep-link to settings.
+                        ContactPermissionState.BLOCKED -> showContactsBlocked = true
+                    }
+                },
             )
             HorizontalDivider()
 
@@ -211,6 +261,69 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (showContactsRationale) {
+        ContactsPermissionDialog(
+            title = stringResource(R.string.settings_contacts_dialog_title),
+            body = stringResource(R.string.settings_contacts_rationale),
+            confirm = stringResource(R.string.settings_contacts_allow),
+            onConfirm = {
+                showContactsRationale = false
+                // Mark the dialog as shown BEFORE launching, so a permanent denial reads as "blocked".
+                viewModel.markContactsPermissionRequested()
+                contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+            },
+            onDismiss = { showContactsRationale = false },
+        )
+    }
+    if (showContactsBlocked) {
+        ContactsPermissionDialog(
+            title = stringResource(R.string.settings_contacts_dialog_title),
+            body = stringResource(R.string.settings_contacts_blocked_body),
+            confirm = stringResource(R.string.settings_contacts_open_settings),
+            onConfirm = {
+                showContactsBlocked = false
+                runCatching { context.startActivity(viewModel.contactsSettingsIntent()) }
+            },
+            onDismiss = { showContactsBlocked = false },
+        )
+    }
+}
+
+/**
+ * The contacts-autocomplete row (#129). Its subtitle reflects the current [state]: on, off (tap to
+ * turn on), or blocked in system settings. Extracted so each state renders deterministically in tests.
+ */
+@Composable
+internal fun ContactAutocompleteRow(state: ContactPermissionState, onClick: () -> Unit) {
+    val subtitleRes = when (state) {
+        ContactPermissionState.GRANTED -> R.string.settings_contacts_autocomplete_on
+        ContactPermissionState.DENIED -> R.string.settings_contacts_autocomplete_off
+        ContactPermissionState.BLOCKED -> R.string.settings_contacts_autocomplete_blocked
+    }
+    ClickRow(
+        title = stringResource(R.string.settings_contacts_autocomplete),
+        subtitle = stringResource(subtitleRes),
+        onClick = onClick,
+    )
+}
+
+/** Shared confirm/cancel dialog for the contacts rationale (before a request) and the blocked case. */
+@Composable
+private fun ContactsPermissionDialog(
+    title: String,
+    body: String,
+    confirm: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable

@@ -67,8 +67,9 @@ class ComposeScreenTest {
 
     @Before
     fun grantContactsPermission() {
-        // ComposeScreen requests READ_CONTACTS on first composition; pre-grant it (before the test
-        // calls setContent) so no system permission dialog appears to block the headless run.
+        // ComposeScreen no longer requests READ_CONTACTS (the request moved to onboarding/#127); it
+        // only reads the current grant on resume. Pre-grant it (before setContent) so contactsAllowed
+        // resolves true and the autocomplete path stays exercised — no system dialog is ever shown.
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.grantRuntimePermission(
             instrumentation.targetContext.packageName,

@@ -23,6 +23,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.auth.OutlookAuthManager
+import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Message
 import org.libremail.push.BatteryOptimizationManager
@@ -85,6 +86,7 @@ class OnboardingFlowTest {
         val appContext = composeTestRule.activity.applicationContext
         val onboarding = OnboardingViewModel(
             BatteryOptimizationManager(appContext),
+            ContactsPermissionManager(appContext),
             SettingsRepository(appContext),
         )
         composeTestRule.setContent {

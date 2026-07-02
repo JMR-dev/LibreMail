@@ -36,6 +36,11 @@ object Routes {
     const val ONBOARDING_MANUAL = "onboarding/manual"
     const val ONBOARDING_ADD_ANOTHER = "onboarding/add_another"
 
+    // Optional onboarding step: invites the user to allow contacts access for on-device recipient
+    // autocomplete (#127). Shown only when the permission isn't already granted and the user hasn't
+    // handled it before; skippable, and precedes the battery step in the finish tail.
+    const val ONBOARDING_CONTACTS = "onboarding/contacts"
+
     // Optional final onboarding step: invites the user to allow unrestricted background/battery usage
     // so push (IMAP IDLE) and periodic sync aren't throttled by Doze (#49). Shown only when the app
     // isn't already exempt and the user hasn't handled it before; otherwise onboarding skips straight

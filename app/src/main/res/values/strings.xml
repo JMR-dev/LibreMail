@@ -151,6 +151,16 @@
     <string name="onboarding_battery_done_body">Background usage is unrestricted — new mail will arrive instantly.</string>
     <string name="onboarding_battery_continue">Continue to inbox</string>
 
+    <!-- Onboarding: optional contacts-access opt-in for recipient autocomplete (#127, #128) -->
+    <string name="onboarding_contacts_title">Suggest recipients as you type</string>
+    <string name="onboarding_contacts_body">Allow access to your contacts and LibreMail will suggest matching names and email addresses while you compose. This happens entirely on your device — your contacts are never uploaded or shared. It\'s optional; you can skip it and enter addresses yourself.</string>
+    <string name="onboarding_contacts_rationale">LibreMail needs the Contacts permission to suggest recipients. It\'s used only for on-device autocomplete — nothing is uploaded.</string>
+    <string name="onboarding_contacts_allow">Allow contacts access</string>
+    <string name="onboarding_contacts_not_now">Not now</string>
+    <string name="onboarding_contacts_done_title">Autocomplete is on</string>
+    <string name="onboarding_contacts_done_body">LibreMail will suggest recipients from your contacts as you compose — all on this device.</string>
+    <string name="onboarding_contacts_continue">Continue</string>
+
     <!-- Account setup (vendor picker) -->
     <string name="account_setup_outlook">Outlook or Hotmail</string>
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
@@ -287,6 +297,18 @@
     <string name="settings_adv_battery">Background battery usage</string>
     <string name="settings_adv_battery_unrestricted">Unrestricted — instant background mail is allowed.</string>
     <string name="settings_adv_battery_optimized">Optimized by Android — new mail may be delayed. Tap to allow unrestricted background usage.</string>
+
+    <!-- Contacts / recipient autocomplete (#129) -->
+    <string name="settings_contacts">Contacts</string>
+    <string name="settings_contacts_autocomplete">Recipient autocomplete</string>
+    <string name="settings_contacts_autocomplete_on">On — suggesting recipients from your contacts as you type. Tap to manage.</string>
+    <string name="settings_contacts_autocomplete_off">Off — tap to suggest recipients from your contacts. On-device only; never uploaded.</string>
+    <string name="settings_contacts_autocomplete_blocked">Blocked in system settings — tap to open settings and allow Contacts access.</string>
+    <string name="settings_contacts_dialog_title">Recipient autocomplete</string>
+    <string name="settings_contacts_rationale">LibreMail suggests recipients from your device contacts as you compose. This happens entirely on your device — your contacts are never uploaded or shared.</string>
+    <string name="settings_contacts_allow">Allow</string>
+    <string name="settings_contacts_blocked_body">Contacts access is turned off for LibreMail in Android settings. Open settings and allow Contacts to enable recipient autocomplete.</string>
+    <string name="settings_contacts_open_settings">Open settings</string>
 
     <!-- Diagnostics / debug reporting -->
     <string name="settings_diagnostics">Diagnostics</string>
