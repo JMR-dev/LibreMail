@@ -34,10 +34,20 @@ class FolderLabelsTest {
         smtp = ServerConfig("smtp", 587, MailSecurity.STARTTLS),
     )
 
-    /** Builds base labels the way the drawer does: the friendly role name, else the raw display name. */
+    /**
+     * Builds base labels from an independent, hand-written [friendly] map, NOT by calling the
+     * production label source [org.libremail.ui.mailbox.folderDisplayLabel] — that is `@Composable`
+     * (it reads `stringResource`) and can't run in a JVM unit test. So this is a stand-in literal
+     * fixture that only mirrors the `folder_*` string values by hand; it deliberately pins the
+     * de-duplication logic in [resolveDrawerLabels], not the role-to-wording mapping. A change to the
+     * `folder_*` strings (or a new [folderDisplayLabel] branch) is out of scope here and won't be
+     * caught by this suite — FolderDrawerTest (androidTest, real resources) guards that wiring.
+     */
     private fun baseLabelsOf(folders: List<Folder>, friendly: Map<FolderRole, String>) =
         folders.associate { it.fullName to (friendly[it.role] ?: it.displayName) }
 
+    // Hand-copied stand-ins for the current folder_* string values, not read from resources. See the
+    // note on baseLabelsOf: these pin the de-dup behavior, not the actual role-to-string wording.
     private val friendlyNames = mapOf(
         FolderRole.INBOX to "Inbox",
         FolderRole.SENT to "Sent",

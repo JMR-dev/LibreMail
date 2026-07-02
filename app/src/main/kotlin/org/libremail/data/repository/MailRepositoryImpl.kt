@@ -36,6 +36,7 @@ import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
+import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import java.io.File
@@ -67,6 +68,10 @@ class MailRepositoryImpl @Inject constructor(
         folderDao.observeForAccount(accountId).map { rows ->
             rows.map { it.toDomain() }
         }
+
+    override fun observeUnreadCounts(): Flow<List<UnreadCount>> = messageDao.observeUnreadCounts().map { rows ->
+        rows.map { it.toDomain() }
+    }
 
     override suspend fun refreshFolders(accountId: String): Result<Unit> = runCatching {
         val account = accountDao.getById(accountId)?.toDomain() ?: error("Account not found")

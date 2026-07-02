@@ -134,8 +134,9 @@ class IdleService : Service() {
         startAsForeground(mode)
         if (mode == PushMode.POLLING) {
             AppLog.i(TAG, "Battery low: pausing IMAP IDLE; mail arrives via 15-minute periodic sync")
-            // The periodic fallback is scheduled at every app start with KEEP, so this is normally a
-            // no-op — re-asserted here so the fallback provably exists whenever push is paused.
+            // The periodic fallback is already scheduled at every app start (UPDATE), so re-asserting it
+            // here is effectively a no-op — done anyway so the fallback provably exists whenever push is
+            // paused, without disturbing the running period.
             syncScheduler.schedulePeriodicSync()
         } else {
             AppLog.i(TAG, "Battery recovered: resuming IMAP IDLE push")

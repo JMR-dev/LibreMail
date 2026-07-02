@@ -68,6 +68,13 @@
     <string name="folder_archive">Archive</string>
     <string name="folder_spam">Spam</string>
     <string name="folder_trash">Trash</string>
+    <!-- Unread badge shown after a folder name; caps very large counts. -->
+    <string name="folder_unread_overflow">99+</string>
+    <!-- Screen-reader description for a folder's unread badge, e.g. "12 unread messages". -->
+    <plurals name="folder_unread_count_description">
+        <item quantity="one">%1$d unread message</item>
+        <item quantity="other">%1$d unread messages</item>
+    </plurals>
 
     <!-- Compose -->
     <string name="compose_from">From</string>

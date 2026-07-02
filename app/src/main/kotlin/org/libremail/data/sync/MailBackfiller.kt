@@ -54,12 +54,15 @@ class MailBackfiller @Inject constructor(
     private val mailRepository: MailRepository,
     private val maintenanceGate: MailMaintenanceGate,
 ) {
-    private data class FolderResult(val batches: Int, val complete: Boolean)
+    /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
+    private data class FolderResult(val batches: Int, val moreWork: Boolean)
 
     /**
      * Runs one bounded slice of backfill across all accounts and their synced folders. Does at most
-     * [maxBatches] server pages total, persisting progress after each, then returns whether any
-     * folder still has history left to fetch (so the caller may schedule another run sooner).
+     * [maxBatches] server pages total, persisting progress after each, then returns whether an
+     * immediate follow-up slice has more work to do (so the caller may chain another run). A folder
+     * that stalled (see the unresolved-UID guard in [backfillFolder]) stays incomplete but does not
+     * count as more work — it is retried on a future scheduled run instead of spun on back-to-back.
      */
     suspend fun runBackfill(maxBatches: Int = DEFAULT_MAX_BATCHES): Boolean = maintenanceGate.mutex.withLock {
         var remaining = maxBatches
@@ -71,9 +74,9 @@ class MailBackfiller @Inject constructor(
                 if (remaining <= 0) return@withLock true
                 // Per-folder failures (e.g. a transient server error) must not abort the whole slice.
                 val result = runCatching { backfillFolder(account, params, folder, policy, remaining) }
-                    .getOrElse { FolderResult(batches = 0, complete = false) }
+                    .getOrElse { FolderResult(batches = 0, moreWork = true) }
                 remaining -= result.batches
-                if (!result.complete) moreWork = true
+                if (result.moreWork) moreWork = true
             }
         }
         moreWork
@@ -88,57 +91,88 @@ class MailBackfiller @Inject constructor(
     ): FolderResult {
         val progress = backfillProgressDao.get(account.id, folder)
         if (progress?.complete == true) {
-            return FolderResult(batches = 0, complete = true)
+            return FolderResult(batches = 0, moreWork = false)
         }
 
         // Resume from the persisted low-water mark so paging is monotonic: it never re-descends into a
         // region an earlier run already reached, even after the pruner deletes rows above it. Falls back
         // to the lowest currently-cached UID on the very first run, before any progress is persisted.
-        var beforeUid = progress?.nextBeforeUid
+        // Both sources are guarded against unresolved-UID placeholders (#95): lowestSyncedUid excludes
+        // `uid <= 0` rows at the SQL level, and a stale persisted boundary `<= 0` is discarded rather
+        // than trusted — fetchOlderThan treats such a bound as "nothing older", which would falsely
+        // mark the folder fully backfilled.
+        var beforeUid = progress?.nextBeforeUid?.takeIf { it > 0L }
             ?: messageDao.lowestSyncedUid(account.id, folder)
             ?: Long.MAX_VALUE
         var batches = 0
+        var complete = false
+        var stalled = false
         while (batches < maxBatches) {
             currentCoroutineContext().ensureActive()
-            // Retention floor (#13 precedence): once the folder holds everything retention keeps, mark it
-            // complete and stop. Marking complete (rather than pausing) is what keeps backfill and the
-            // pruner from fighting: otherwise the pruner deleting aged-out rows would raise the oldest
-            // cached timestamp back above the age cutoff and re-open paging on the next run, forever. A
-            // retention change resets progress (AccountRepository.resetBackfillProgress) so loosening
-            // still resumes paging.
-            if (reachedRetentionFloor(account.id, folder, policy)) {
-                markComplete(account.id, folder, beforeUid)
-                return FolderResult(batches, complete = true)
+            // Count floor (#13 precedence): once the folder holds as many messages as retention keeps,
+            // stop before fetching another page. Unlike the age floor below, this can be decided from
+            // the cache alone: the count pruner keeps the newest-N by UID — exactly the order paging
+            // descends in — so a Date/UID inversion cannot make it stop early.
+            if (reachedCountFloor(account.id, folder, policy)) {
+                complete = true
+                break
             }
             val fetched = imapClient.fetchOlderThan(params, folder, beforeUid, BACKFILL_BATCH_SIZE)
             batches++
-            if (fetched.isEmpty()) {
-                // Genuine end of the folder — mark complete so it is skipped on future runs.
-                markComplete(account.id, folder, beforeUid)
-                return FolderResult(batches, complete = true)
-            }
             val entities = fetched.map { it.toEntity(account.id, folder) }
+            // Stop at the genuine end of the folder, or at the age floor (#13): a page ENTIRELY older
+            // than the Date cutoff. The age decision is made from the page actually fetched, NOT from
+            // the oldest cached timestamp — paging is by UID (arrival order) while the floor cuts by
+            // the Date header, so a single high-UID message with an old Date (moved/imported mail)
+            // would drag the cached minimum below the cutoff and end paging while within-retention
+            // history is still unfetched (#94). An entirely-old page is pure prune-fodder, so it is
+            // not persisted either. Both cases mark the folder complete (rather than pausing): the
+            // pruner deleting aged-out rows must never re-open paging on the next run, forever
+            // re-downloading what was just pruned. A retention change resets progress
+            // (AccountRepository.resetBackfillProgress) so loosening still resumes paging.
+            if (fetched.isEmpty() || entirelyBeyondAgeFloor(entities, policy)) {
+                complete = true
+                break
+            }
             persistBatch(entities)
-            beforeUid = entities.minOf { it.uid }
+            // Derive the next boundary only from resolved UIDs (#95): a row whose UID the server
+            // failed to resolve (UIDFolder.getUID returns -1) must not collapse the boundary to <= 0,
+            // where fetchOlderThan reads "nothing older" and the folder would be FALSELY marked fully
+            // backfilled. If a whole page came back unresolved, stall the folder: not complete (so a
+            // later run retries once the server behaves) but claiming no more work either — an
+            // immediate follow-up slice would just spin on the same page.
+            val nextBeforeUid = entities.mapNotNull { entity -> entity.uid.takeIf { it > 0L } }.minOrNull()
+            if (nextBeforeUid == null) {
+                stalled = true
+                break
+            }
+            beforeUid = nextBeforeUid
             backfillProgressDao.upsert(BackfillProgressEntity(account.id, folder, beforeUid, complete = false))
             prefetchIfEnabled(entities.map { it.id })
             // Breathe between pages so a large mailbox doesn't hammer the server.
             delay(BACKFILL_BATCH_DELAY_MS)
         }
-        return FolderResult(batches, complete = false)
+        if (complete) markComplete(account.id, folder, beforeUid)
+        return FolderResult(batches, moreWork = !complete && !stalled)
     }
 
-    /** True once the folder already holds as much as the retention policy would keep (or more). */
-    private suspend fun reachedRetentionFloor(accountId: String, folder: String, policy: RetentionPolicy): Boolean {
-        if (policy.isUnlimited) return false
-        policy.countLimit?.let { limit ->
-            if (messageDao.countSynced(accountId, folder) >= limit) return true
-        }
-        policy.ageCutoffMillis(System.currentTimeMillis())?.let { cutoff ->
-            val oldest = messageDao.oldestSyncedTimestamp(accountId, folder)
-            if (oldest != null && oldest < cutoff) return true
-        }
-        return false
+    /** True once the folder already holds as many messages as the count retention keeps (or more). */
+    private suspend fun reachedCountFloor(accountId: String, folder: String, policy: RetentionPolicy): Boolean {
+        val limit = policy.countLimit ?: return false
+        return messageDao.countSynced(accountId, folder) >= limit
+    }
+
+    /**
+     * True when a fetched page sits entirely below the age retention floor — every message on it is
+     * older than the policy's Date cutoff. Deciding per page (rather than from the single oldest
+     * cached timestamp) makes the floor robust to Date/UID inversions (#94): one old-Dated high-UID
+     * message ends paging only if a whole page around it is old too. The trade is deliberate — a
+     * pathologically interleaved mailbox may over-fetch (the pruner reclaims the excess), but
+     * backfill never silently gaps within-retention history.
+     */
+    private fun entirelyBeyondAgeFloor(page: List<MessageEntity>, policy: RetentionPolicy): Boolean {
+        val cutoff = policy.ageCutoffMillis(System.currentTimeMillis()) ?: return false
+        return page.isNotEmpty() && page.all { it.timestampMillis < cutoff }
     }
 
     /** Inserts backfilled headers; never deletes. Uncancellable so a persisted boundary always has its rows. */

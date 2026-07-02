@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.WorkManager
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
@@ -25,6 +26,7 @@ import org.libremail.data.sync.SyncScheduler
 import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.theme.LibreMailTheme
+import javax.inject.Provider
 
 /**
  * End-to-end test for the top-level message-downloading setting: tapping a policy must round-trip
@@ -54,7 +56,7 @@ class SettingsScreenTest {
             appLockManager,
             keyStore,
             BatteryOptimizationManager(context),
-            SyncScheduler(context),
+            SyncScheduler(Provider { WorkManager.getInstance(context) }),
         )
 
         composeTestRule.setContent {

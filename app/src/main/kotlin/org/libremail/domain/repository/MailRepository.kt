@@ -9,6 +9,7 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
+import org.libremail.domain.model.UnreadCount
 import java.io.File
 
 /**
@@ -20,6 +21,13 @@ interface MailRepository {
 
     /** The account's cached IMAP folders for the navigation drawer. */
     fun observeFolders(accountId: String): Flow<List<Folder>>
+
+    /**
+     * Live per-(account, folder) unread counts across every account, for the drawer's folder badges
+     * and the bold styling of accounts with unread mail. Only (account, folder) pairs that currently
+     * hold unread, folder-synced mail are emitted.
+     */
+    fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
     /** Refreshes the account's folder list from the server into the cache. */
     suspend fun refreshFolders(accountId: String): Result<Unit>

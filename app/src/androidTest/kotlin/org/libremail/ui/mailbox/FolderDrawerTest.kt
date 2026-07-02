@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,16 +43,20 @@ class FolderDrawerTest {
             folders = listOf(
                 folder("imap:a", "INBOX", "INBOX", FolderRole.INBOX),
                 folder("imap:a", "[Gmail]/Sent Mail", "Sent Mail", FolderRole.SENT),
-                folder("imap:a", "Archive", "Archive", FolderRole.ARCHIVE),
+                // Give ARCHIVE a server name that differs from its friendly label so the assertion
+                // below actually discriminates a role-to-label regression (displayName != friendly).
+                folder("imap:a", "[Gmail]/All Mail", "All Mail", FolderRole.ARCHIVE),
                 folder("imap:a", "Receipts", "Receipts", FolderRole.NORMAL),
             ),
         )
 
         composeTestRule.onNodeWithText(string(R.string.folder_inbox)).assertIsDisplayed()
-        composeTestRule.onNodeWithText(string(R.string.folder_archive)).assertIsDisplayed()
-        // Standard folders use the friendly role name ("Sent"), not the raw server name ("Sent Mail").
+        // Standard folders use the friendly role name, not the raw server name — verified for both
+        // Sent ("Sent Mail" -> "Sent") and Archive ("All Mail" -> "Archive").
         composeTestRule.onNodeWithText(string(R.string.folder_sent)).assertIsDisplayed()
         composeTestRule.onNodeWithText("Sent Mail").assertDoesNotExist()
+        composeTestRule.onNodeWithText(string(R.string.folder_archive)).assertIsDisplayed()
+        composeTestRule.onNodeWithText("All Mail").assertDoesNotExist()
         // Normal folders keep their server name.
         composeTestRule.onNodeWithText("Receipts").assertIsDisplayed()
         // A single account shows no account switcher / "All Inboxes" entry.
@@ -141,10 +146,34 @@ class FolderDrawerTest {
         assertTrue(unifiedTapped)
     }
 
+    @Test
+    fun folderWithUnreadMail_showsCountBadge_andReadFolderShowsNone() {
+        setContent(
+            accounts = listOf(alice),
+            drawerAccount = alice,
+            folders = listOf(
+                folder("imap:a", "INBOX", "INBOX", FolderRole.INBOX),
+                folder("imap:a", "Archive", "Archive", FolderRole.ARCHIVE),
+            ),
+            folderUnreadCounts = mapOf("INBOX" to 3),
+        )
+
+        // The inbox badge announces its exact count for screen readers.
+        val threeUnread = composeTestRule.activity.resources
+            .getQuantityString(R.plurals.folder_unread_count_description, 3, 3)
+        composeTestRule.onNodeWithContentDescription(threeUnread).assertIsDisplayed()
+        // Archive has no unread mail, so no badge is rendered for it.
+        val oneUnread = composeTestRule.activity.resources
+            .getQuantityString(R.plurals.folder_unread_count_description, 1, 1)
+        composeTestRule.onNodeWithContentDescription(oneUnread).assertDoesNotExist()
+    }
+
     private fun setContent(
         accounts: List<Account>,
         drawerAccount: Account?,
         folders: List<Folder>,
+        folderUnreadCounts: Map<String, Int> = emptyMap(),
+        accountsWithUnread: Set<String> = emptySet(),
         selectedAccountId: String? = null,
         selectedFolder: String = "INBOX",
         onSelectUnifiedInbox: () -> Unit = {},
@@ -158,6 +187,8 @@ class FolderDrawerTest {
                         accounts = accounts,
                         drawerAccount = drawerAccount,
                         folders = folders,
+                        folderUnreadCounts = folderUnreadCounts,
+                        accountsWithUnread = accountsWithUnread,
                         selectedAccountId = selectedAccountId,
                         selectedFolder = selectedFolder,
                         onSelectUnifiedInbox = onSelectUnifiedInbox,
