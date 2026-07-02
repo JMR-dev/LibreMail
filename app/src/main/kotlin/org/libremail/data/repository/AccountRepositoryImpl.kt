@@ -4,6 +4,7 @@ package org.libremail.data.repository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.dao.BackfillProgressDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
@@ -25,6 +26,7 @@ class AccountRepositoryImpl @Inject constructor(
     private val accountDao: AccountDao,
     private val messageDao: MessageDao,
     private val folderDao: FolderDao,
+    private val backfillProgressDao: BackfillProgressDao,
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
     private val syncScheduler: SyncScheduler,
@@ -47,6 +49,7 @@ class AccountRepositoryImpl @Inject constructor(
         credentialStore.saveSecret(account.id, password)
         mailNotifier.ensureAccountChannel(account)
         syncScheduler.syncNow()
+        syncScheduler.backfillNow() // start caching this account's full history in the background (#12)
         folders.map { it.fullName }
     }
 
@@ -62,6 +65,7 @@ class AccountRepositoryImpl @Inject constructor(
         credentialStore.saveSecret(account.id, authStateJson)
         mailNotifier.ensureAccountChannel(account)
         syncScheduler.syncNow()
+        syncScheduler.backfillNow() // start caching this account's full history in the background (#12)
         folders.map { it.fullName }
     }
 
@@ -69,9 +73,15 @@ class AccountRepositoryImpl @Inject constructor(
         accountDao.deleteById(id)
         credentialStore.delete(id)
         mailNotifier.deleteAccountChannel(id)
-        // Remove the account's cached mail (attachment rows cascade via the foreign key) and folders.
-        // The account_settings row is removed automatically by its cascading foreign key.
+        // Remove the account's cached mail (attachment rows cascade via the foreign key), folders, and
+        // backfill progress. The account_settings row is removed automatically by its cascading FK.
         messageDao.deleteByAccount(id)
         folderDao.deleteForAccount(id)
+        backfillProgressDao.deleteForAccount(id)
+    }
+
+    override suspend fun resetBackfillProgress(accountId: String?) {
+        if (accountId != null) backfillProgressDao.deleteForAccount(accountId) else backfillProgressDao.deleteAll()
+        syncScheduler.backfillNow()
     }
 }

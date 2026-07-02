@@ -96,6 +96,9 @@ android {
         buildConfig = true
     }
 
+    // Ship the exported Room schemas as androidTest assets so MigrationTestHelper can load them.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     // F-Droid compliance (issue #16): by default AGP embeds a "dependency info block" in the APK
     // signing block — a list of every dependency, encrypted so that ONLY Google Play can read it.
     // F-Droid's inclusion policy treats that opaque, Google-only blob as a blocker (it cannot be
@@ -196,6 +199,11 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.sqlcipher.android)
 
+    // Raise kotlinx-serialization to the version Room's schema-bundle serializers were compiled
+    // against (see libs.versions.toml). AGP 9 consistent resolution shares it with the androidTest
+    // classpath so MigrationTestHelper can parse the exported schema JSON.
+    implementation(platform(libs.kotlinx.serialization.bom))
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -210,4 +218,5 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.intents)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.room.testing)
 }

@@ -26,4 +26,12 @@ data class AccountSettingsEntity(
     val signature: String = "",
     val signatureEnabled: Boolean = true,
     val notificationsEnabled: Boolean = true,
+    /**
+     * Per-account device-only retention overrides (issue #13). `null` means "use the global default";
+     * `0` means an explicit "keep everything" (no limit). A positive value caps how many messages
+     * ([retentionCount], newest per folder) or how many months of history ([retentionMonths]) are kept
+     * on this device — the server copy is never touched.
+     */
+    val retentionCount: Int? = null,
+    val retentionMonths: Int? = null,
 )
