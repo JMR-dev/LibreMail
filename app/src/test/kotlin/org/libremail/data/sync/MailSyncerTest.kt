@@ -26,6 +26,9 @@ import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import org.libremail.power.BatteryStatus
+import org.libremail.power.BatteryStatusProvider
+import kotlin.test.assertEquals
 
 class MailSyncerTest {
 
@@ -48,6 +51,7 @@ class MailSyncerTest {
         context: Context = mockk(relaxed = true),
         accountSettings: AccountSettings = AccountSettings("acct"),
         globalSettings: AppSettings = AppSettings(),
+        battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
     ): MailSyncer {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getById("acct") } returns account
@@ -72,10 +76,14 @@ class MailSyncerTest {
             connectionFactory = connectionFactory,
             settingsRepository = settingsRepository,
             accountSettingsRepository = accountSettingsRepository,
+            batteryStatusProvider = batteryProvider(battery),
             notifier = mockk<MailNotifier>(relaxed = true),
             mailRepository = mailRepository,
         )
     }
+
+    private fun batteryProvider(battery: BatteryStatus): BatteryStatusProvider =
+        mockk<BatteryStatusProvider> { every { current() } returns battery }
 
     @Test
     fun `ALWAYS policy prefetches unfetched messages after the header sync`() = runTest {
@@ -147,6 +155,49 @@ class MailSyncerTest {
     }
 
     @Test
+    fun `low battery pauses prefetch even for ALWAYS, leaving the header sync untouched`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val lowBattery = BatteryStatus(percent = 15, isCharging = false)
+
+        val result = syncer(FetchPolicy.ALWAYS, repo, battery = lowBattery).syncFolder("acct", "INBOX")
+
+        assertEquals(0, result.getOrNull()) // header sync still ran and succeeded
+        coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+    }
+
+    @Test
+    fun `at exactly the 20 percent threshold prefetch is paused`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val threshold = BatteryStatus(percent = 20, isCharging = false)
+
+        syncer(FetchPolicy.ALWAYS, repo, battery = threshold).syncFolder("acct", "INBOX")
+
+        coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+    }
+
+    @Test
+    fun `a low battery on the charger still prefetches`() = runTest {
+        val repo = mockk<MailRepository>()
+        coEvery { repo.prefetchMessage(any()) } returns Result.success(Unit)
+        val chargingLow = BatteryStatus(percent = 15, isCharging = true)
+
+        syncer(FetchPolicy.ALWAYS, repo, battery = chargingLow).syncFolder("acct", "INBOX")
+
+        coVerify { repo.prefetchMessage("acct:INBOX:1") }
+    }
+
+    @Test
+    fun `prefetch resumes on the next sync once battery recovers`() = runTest {
+        val repo = mockk<MailRepository>()
+        coEvery { repo.prefetchMessage(any()) } returns Result.success(Unit)
+        val recovered = BatteryStatus(percent = 21, isCharging = false)
+
+        syncer(FetchPolicy.ALWAYS, repo, battery = recovered).syncFolder("acct", "INBOX")
+
+        coVerify { repo.prefetchMessage("acct:INBOX:1") }
+    }
+
+    @Test
     fun `notifies for new mail when both global and per-account notifications are enabled`() = runTest {
         val notifier = mockk<MailNotifier>(relaxed = true)
         notifyingSyncer(globalEnabled = true, accountEnabled = true, notifier = notifier).syncAccount("acct")
@@ -200,6 +251,7 @@ class MailSyncerTest {
             connectionFactory = connectionFactory,
             settingsRepository = settingsRepository,
             accountSettingsRepository = accountSettingsRepository,
+            batteryStatusProvider = batteryProvider(BatteryStatus(percent = 100, isCharging = false)),
             notifier = notifier,
             mailRepository = mockk(relaxed = true),
         )

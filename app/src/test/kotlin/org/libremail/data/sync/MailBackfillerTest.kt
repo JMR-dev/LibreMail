@@ -35,6 +35,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import org.libremail.power.BatteryStatus
+import org.libremail.power.BatteryStatusProvider
 import java.util.Date
 import java.util.Properties
 import kotlin.test.assertEquals
@@ -189,8 +191,42 @@ class MailBackfillerTest {
         assertNoDeletes()
     }
 
+    @Test
+    fun `low battery pauses the backfill content prefetch even for ALWAYS, but not header paging`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+
+        backfiller(
+            AccountSettings("acct"),
+            fetchPolicy = FetchPolicy.ALWAYS,
+            battery = BatteryStatus(percent = 15, isCharging = false),
+        ).runBackfill()
+
+        // #89 gates only the aggressive body/attachment prefetch; history headers keep paging in.
+        assertEquals(60, distinctCachedUids().size, "header paging itself is not battery-gated")
+        coVerify(exactly = 0) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+    }
+
+    @Test
+    fun `charging at low percent keeps the backfill content prefetch running`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+
+        backfiller(
+            AccountSettings("acct"),
+            fetchPolicy = FetchPolicy.ALWAYS,
+            battery = BatteryStatus(percent = 15, isCharging = true),
+        ).runBackfill()
+
+        coVerify(atLeast = 1) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+    }
+
     /** Builds a backfiller wired to GreenMail with the in-memory fakes and the given account settings. */
-    private fun backfiller(accountSettings: AccountSettings): MailBackfiller {
+    private fun backfiller(
+        accountSettings: AccountSettings,
+        fetchPolicy: FetchPolicy = FetchPolicy.ON_DEMAND,
+        battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
+    ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(accountEntity)
 
@@ -227,11 +263,14 @@ class MailBackfillerTest {
         coEvery { connectionFactory.imapParamsFor(any()) } returns params()
 
         val settingsRepository = mockk<SettingsRepository>()
-        coEvery { settingsRepository.fetchPolicy() } returns FetchPolicy.ON_DEMAND
+        coEvery { settingsRepository.fetchPolicy() } returns fetchPolicy
         every { settingsRepository.settings } returns flowOf(AppSettings())
 
         val accountSettingsRepository = mockk<AccountSettingsRepository>()
         coEvery { accountSettingsRepository.get("acct") } returns accountSettings
+
+        val batteryStatusProvider = mockk<BatteryStatusProvider> { every { current() } returns battery }
+        val mailRepository = mockk<MailRepository>(relaxed = true)
 
         return MailBackfiller(
             context = mockk<Context>(relaxed = true),
@@ -242,12 +281,17 @@ class MailBackfillerTest {
             connectionFactory = connectionFactory,
             settingsRepository = settingsRepository,
             accountSettingsRepository = accountSettingsRepository,
-            mailRepository = mockk<MailRepository>(relaxed = true),
+            batteryStatusProvider = batteryStatusProvider,
+            mailRepository = mailRepository,
             maintenanceGate = MailMaintenanceGate(),
-        ).also { lastMessageDao = messageDao }
+        ).also {
+            lastMessageDao = messageDao
+            lastMailRepository = mailRepository
+        }
     }
 
     private var lastMessageDao: MessageDao? = null
+    private var lastMailRepository: MailRepository? = null
 
     /** Seeds the in-memory cache with the newest [WINDOW] headers, mimicking a prior foreground sync. */
     private suspend fun seedForegroundWindow() {

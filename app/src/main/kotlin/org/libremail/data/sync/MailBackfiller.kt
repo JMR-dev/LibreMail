@@ -17,7 +17,6 @@ import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
-import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.effectiveRetention
@@ -25,6 +24,7 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import org.libremail.power.BatteryStatusProvider
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -50,6 +50,7 @@ class MailBackfiller @Inject constructor(
     private val connectionFactory: MailConnectionFactory,
     private val settingsRepository: SettingsRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
+    private val batteryStatusProvider: BatteryStatusProvider,
     private val mailRepository: MailRepository,
     private val maintenanceGate: MailMaintenanceGate,
 ) {
@@ -169,16 +170,20 @@ class MailBackfiller @Inject constructor(
     }
 
     /**
-     * Pre-caches each backfilled message's body/attachments per the [FetchPolicy] (headers first,
-     * bodies per policy — issue #12). Best-effort and cancellable between messages so an interruption
-     * stops promptly; anything not fetched is filled in lazily when the message is opened.
+     * Pre-caches each backfilled message's body/attachments per the user's fetch policy (headers
+     * first, bodies per policy — issue #12), pausing at low battery regardless of policy — the same
+     * [SyncResourcePolicy.shouldPrefetchContent] gate as [MailSyncer]'s prefetch, so the foreground
+     * and backfill content paths can never disagree (#88/#89). Header paging above is not gated here:
+     * WorkManager's battery-not-low constraint on the backfill work is the scheduler-level control.
+     * Best-effort and cancellable between messages so an interruption stops promptly; anything not
+     * fetched is filled in lazily when the message is opened.
      */
     private suspend fun prefetchIfEnabled(ids: List<String>) {
-        val shouldPrefetch = when (settingsRepository.fetchPolicy()) {
-            FetchPolicy.ALWAYS -> true
-            FetchPolicy.WIFI_ONLY -> context.isActiveNetworkUnmetered()
-            FetchPolicy.ON_DEMAND -> false
-        }
+        val shouldPrefetch = SyncResourcePolicy.shouldPrefetchContent(
+            policy = settingsRepository.fetchPolicy(),
+            unmetered = { context.isActiveNetworkUnmetered() },
+            battery = batteryStatusProvider.current(),
+        )
         if (!shouldPrefetch) return
         for (id in ids) {
             currentCoroutineContext().ensureActive()

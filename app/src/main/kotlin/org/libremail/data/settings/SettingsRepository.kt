@@ -29,9 +29,14 @@ internal val Context.settingsDataStore: DataStore<Preferences> by preferencesDat
 
 /**
  * How aggressively the app downloads message content during sync.
- * - [ALWAYS]: fetch full bodies and all attachments on any connection (default).
+ * - [ALWAYS]: fetch full bodies and all attachments on any connection.
  * - [WIFI_ONLY]: fetch full content only on an unmetered network; otherwise behave like [ON_DEMAND].
+ *   The default (#88): with the mailbox's full-history backfill, defaulting to [ALWAYS] would
+ *   silently download every message and attachment over cellular on a fresh install.
  * - [ON_DEMAND]: sync headers only; fetch a message's body/attachments lazily when it's opened.
+ *
+ * Regardless of policy, the prefetch also pauses at low battery — a runtime gate, not a setting
+ * (see [org.libremail.data.sync.SyncResourcePolicy]).
  */
 enum class FetchPolicy { ALWAYS, WIFI_ONLY, ON_DEMAND }
 
@@ -45,7 +50,7 @@ data class AppSettings(
     val encryptCache: Boolean = false,
     val appLock: Boolean = false,
     val includeInBackup: Boolean = false,
-    val fetchPolicy: FetchPolicy = FetchPolicy.ALWAYS,
+    val fetchPolicy: FetchPolicy = FetchPolicy.WIFI_ONLY,
     /**
      * Global device-only retention defaults (issue #13), applied to accounts that don't override them.
      * `0` means "keep everything" (the default), matching the fetch-all history behaviour of #12.
@@ -82,8 +87,11 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
     encryptCache = this[Keys.ENCRYPT_CACHE] ?: false,
     appLock = this[Keys.APP_LOCK] ?: false,
     includeInBackup = this[Keys.INCLUDE_IN_BACKUP] ?: false,
+    // The fallback here (not just the AppSettings default) must be WIFI_ONLY so existing installs
+    // that never touched the setting also pick up the safer default (#88). An explicitly chosen
+    // policy is stored and always wins.
     fetchPolicy = this[Keys.FETCH_POLICY]?.let { runCatching { FetchPolicy.valueOf(it) }.getOrNull() }
-        ?: FetchPolicy.ALWAYS,
+        ?: FetchPolicy.WIFI_ONLY,
     retentionCount = this[Keys.RETENTION_COUNT] ?: 0,
     retentionMonths = this[Keys.RETENTION_MONTHS] ?: 0,
 )
