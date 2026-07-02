@@ -257,9 +257,16 @@ class MailRepositoryImpl @Inject constructor(
         }
     }
 
-    /** Resolves the full name of an account's folder for [role], refreshing the cache once if needed. */
+    /**
+     * Resolves the full name of an account's folder for [role], refreshing the cache once if needed.
+     * Among same-role selectable folders (e.g. `[Gmail]/Spam` via RFC 6154 `\Junk` plus a user label
+     * "Spam" matched by name), the server-advertised special-use folder wins regardless of LIST order,
+     * so mail reaches the provider's built-in mailbox; absent one, the earliest LISTed folder is kept
+     * (`maxByOrNull` returns the first max).
+     */
     private suspend fun resolveRoleFolder(accountId: String, role: FolderRole): String? {
-        fun pick(folders: List<FolderEntity>) = folders.firstOrNull { it.role == role.name && it.selectable }?.fullName
+        fun pick(folders: List<FolderEntity>) =
+            folders.filter { it.role == role.name && it.selectable }.maxByOrNull { it.specialUse }?.fullName
         pick(folderDao.getForAccountOnce(accountId))?.let { return it }
         // The folder cache can be cold (the user may not have opened the drawer yet); refresh and retry.
         runCatching { refreshFolders(accountId) }

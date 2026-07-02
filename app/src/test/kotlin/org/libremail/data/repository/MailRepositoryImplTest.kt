@@ -399,8 +399,73 @@ class MailRepositoryImplTest {
         coVerify { imapClient.moveMessages(any(), "INBOX", listOf("14"), "Archive") }
     }
 
-    private fun folderEntity(fullName: String, role: String) =
-        FolderEntity("acct", fullName, fullName.substringAfterLast('/'), role, selectable = true, sortOrder = 0)
+    @Test
+    fun `reportSpam prefers the special-use spam folder when the user folder is listed first`() = runTest {
+        val id = "acct:INBOX:16"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        // A user label "Spam" (role from its name) is LISTed before Gmail's built-in \Junk folder.
+        coEvery { folderDao.getForAccountOnce("acct") } returns listOf(
+            folderEntity("Spam", "SPAM"),
+            folderEntity("[Gmail]/Spam", "SPAM", specialUse = true),
+        )
+
+        val result = repository.reportSpam(listOf(id))
+
+        assertTrue(result.isSuccess)
+        coVerify { imapClient.moveMessages(any(), "INBOX", listOf("16"), "[Gmail]/Spam") }
+        coVerify(exactly = 0) { imapClient.moveMessages(any(), any(), any(), "Spam") }
+    }
+
+    @Test
+    fun `reportSpam prefers the special-use spam folder when it is listed first`() = runTest {
+        val id = "acct:INBOX:18"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { folderDao.getForAccountOnce("acct") } returns listOf(
+            folderEntity("[Gmail]/Spam", "SPAM", specialUse = true),
+            folderEntity("Spam", "SPAM"),
+        )
+
+        val result = repository.reportSpam(listOf(id))
+
+        assertTrue(result.isSuccess)
+        coVerify { imapClient.moveMessages(any(), "INBOX", listOf("18"), "[Gmail]/Spam") }
+        coVerify(exactly = 0) { imapClient.moveMessages(any(), any(), any(), "Spam") }
+    }
+
+    @Test
+    fun `reportSpam keeps the first listed folder when no special-use folder holds the role`() = runTest {
+        val id = "acct:INBOX:20"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        // No SPECIAL-USE advertised (common outside the big providers): LIST order still decides.
+        coEvery { folderDao.getForAccountOnce("acct") } returns listOf(
+            folderEntity("Junk", "SPAM"),
+            folderEntity("Spam", "SPAM"),
+        )
+
+        val result = repository.reportSpam(listOf(id))
+
+        assertTrue(result.isSuccess)
+        coVerify { imapClient.moveMessages(any(), "INBOX", listOf("20"), "Junk") }
+    }
+
+    private fun folderEntity(fullName: String, role: String, specialUse: Boolean = false) = FolderEntity(
+        accountId = "acct",
+        fullName = fullName,
+        displayName = fullName.substringAfterLast('/'),
+        role = role,
+        selectable = true,
+        sortOrder = 0,
+        specialUse = specialUse,
+    )
 
     private fun attachmentEntity(messageId: String, partIndex: Int, filename: String) =
         AttachmentEntity(messageId, partIndex, filename, "application/octet-stream", 10L)
