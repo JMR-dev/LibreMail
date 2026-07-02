@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
@@ -25,6 +26,8 @@ data class ReaderUiState(
     val loading: Boolean = true,
     val message: Message? = null,
     val attachments: List<Attachment> = emptyList(),
+    /** Inline `cid:` images for the HTML body, keyed by normalized Content-ID (see [HtmlBody]). */
+    val inlineImages: Map<String, InlineImage> = emptyMap(),
     val downloading: Set<Int> = emptySet(),
     /** Part indexes whose bytes are already cached on disk (openable offline). */
     val downloaded: Set<Int> = emptySet(),
@@ -63,7 +66,15 @@ class ReaderViewModel @Inject constructor(
         }
         viewModelScope.launch {
             repository.openMessage(messageId).fold(
-                onSuccess = { message -> _state.update { it.copy(loading = false, message = message) } },
+                onSuccess = { message ->
+                    _state.update { it.copy(loading = false, message = message) }
+                    // Resolve inline cid: images so the WebView can embed them. Runs after openMessage
+                    // has cached the parts; skipped for plain-text mail and messages with none.
+                    if (message.isHtml) {
+                        val images = repository.inlineImages(messageId).associateBy { it.contentId }
+                        if (images.isNotEmpty()) _state.update { it.copy(inlineImages = images) }
+                    }
+                },
                 onFailure = { e ->
                     _state.update {
                         it.copy(

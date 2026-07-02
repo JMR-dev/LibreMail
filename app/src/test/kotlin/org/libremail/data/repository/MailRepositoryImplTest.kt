@@ -418,6 +418,32 @@ class MailRepositoryImplTest {
     }
 
     @Test
+    fun `inlineImages resolves cid parts to their cached bytes and excludes real attachments`() = runTest {
+        val cache = Files.createTempDirectory("attach").toFile()
+        every { context.cacheDir } returns cache
+        val id = "acct:INBOX:30"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { attachmentDao.getForMessage(id) } returns listOf(
+            AttachmentEntity(id, 0, "logo.png", "image/png", 4, contentId = "logo1"),
+            AttachmentEntity(id, 1, "invoice.pdf", "application/pdf", 10, contentId = null),
+        )
+        // The inline part's bytes are already cached, so no network fetch is needed.
+        File(cache, "attachments/acct_INBOX_30/0/logo.png").apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(9, 8, 7))
+        }
+
+        val images = repository.inlineImages(id)
+
+        assertEquals(1, images.size)
+        assertEquals("logo1", images.first().contentId)
+        assertEquals("image/png", images.first().mimeType)
+        assertTrue(images.first().bytes.contentEquals(byteArrayOf(9, 8, 7)))
+        // The ordinary attachment (contentId == null) must never be pulled in as an inline image.
+        coVerify(exactly = 0) { imapClient.fetchAttachment(any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `prefetchMessage caches the body and downloads attachments`() = runTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
