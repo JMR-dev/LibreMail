@@ -9,6 +9,8 @@ import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 
 class FolderLabelsTest {
 
@@ -213,5 +215,89 @@ class FolderLabelsTest {
             providerLabel(account("a@outlook.com", "outlook.office365.com", AuthType.OAUTH_OUTLOOK)),
         )
         assertEquals("example.org", providerLabel(account("alice@example.org", "imap.example.org")))
+    }
+
+    // #69: host→brand matching is consolidated in MailProvider.brandFor and reached via providerLabel.
+    @Test
+    fun `providerLabel matches Gmail's legacy googlemail host via a provider alias`() {
+        assertEquals("Gmail", providerLabel(account("a@gmail.com", "imap.googlemail.com")))
+    }
+
+    @Test
+    fun `providerLabel brands a manually configured Office 365 host as Outlook without OAuth`() {
+        assertEquals("Outlook", providerLabel(account("a@contoso.com", "outlook.office365.com")))
+    }
+
+    @Test
+    fun `providerLabel does not brand an unrelated host that merely contains outlook`() {
+        // Over-match guard: the old contains("outlook") check would have branded this as Outlook.
+        assertEquals("example.com", providerLabel(account("a@example.com", "outlook.example.com")))
+    }
+
+    // #68: the resolver formats disambiguated labels through the supplied patterns (externalized to
+    // strings.xml), rather than hardcoded string interpolation.
+    @Test
+    fun `resolveDrawerLabels formats disambiguated labels using the supplied patterns`() {
+        val folders = listOf(
+            folder("[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, specialUse = true),
+            folder("Drafts", "Drafts", FolderRole.DRAFTS),
+            folder("Work/Reports"),
+            folder("Personal/Reports"),
+        )
+        val labels = resolveDrawerLabels(
+            folders,
+            baseLabelsOf(folders, friendlyNames),
+            "Gmail",
+            LabelPatterns(withProvider = "%1\$s @ %2\$s", withParent = "%1\$s <%2\$s>"),
+        )
+        assertEquals("Drafts @ Gmail", labels["[Gmail]/Drafts"])
+        assertEquals("Reports <Work>", labels["Work/Reports"])
+        assertEquals("Reports <Personal>", labels["Personal/Reports"])
+    }
+
+    @Test
+    fun `resolveDrawerLabels uses the supplied path pattern for the full-path safety net`() {
+        val folders = listOf(
+            folder("[Gmail]/All Mail", "All Mail", FolderRole.ARCHIVE, specialUse = true),
+            folder("Archives", "Archives", FolderRole.ARCHIVE, specialUse = true),
+        )
+        val labels = resolveDrawerLabels(
+            folders,
+            baseLabelsOf(folders, friendlyNames),
+            "Gmail",
+            LabelPatterns(withPath = "%1\$s {%2\$s}"),
+        )
+        assertEquals("Archive - Gmail {[Gmail]/All Mail}", labels["[Gmail]/All Mail"])
+        assertEquals("Archive - Gmail {Archives}", labels["Archives"])
+    }
+
+    // #67: the resolver short-circuits when nothing collides, returning the base labels unchanged...
+    @Test
+    fun `resolveDrawerLabels returns the base labels unchanged when nothing collides`() {
+        val folders = listOf(folder("Receipts"), folder("Work/Reports"))
+        val baseLabels = baseLabelsOf(folders, friendlyNames)
+        assertSame(baseLabels, resolveDrawerLabels(folders, baseLabels, "Gmail"))
+    }
+
+    // ...and fails loudly rather than silently reverting to un-deduplicated labels on a missing key.
+    @Test
+    fun `resolveDrawerLabels fails fast when a folder has no base label`() {
+        val folders = listOf(
+            folder("Inbox", "Inbox", FolderRole.INBOX),
+            folder("Orphan"),
+        )
+        val incompleteBaseLabels = mapOf("Inbox" to "Inbox")
+        assertFailsWith<NoSuchElementException> {
+            resolveDrawerLabels(folders, incompleteBaseLabels, "Gmail")
+        }
+    }
+
+    @Test
+    fun `resolveDrawerLabels is deterministic for equal inputs`() {
+        val folders = listOf(
+            folder("[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, specialUse = true),
+            folder("Drafts", "Drafts", FolderRole.DRAFTS),
+        )
+        assertEquals(resolve(folders, "Gmail"), resolve(folders, "Gmail"))
     }
 }
