@@ -14,13 +14,13 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
-import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.effectiveRetention
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import org.libremail.power.BatteryStatusProvider
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,6 +34,7 @@ class MailSyncer @Inject constructor(
     private val connectionFactory: MailConnectionFactory,
     private val settingsRepository: SettingsRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
+    private val batteryStatusProvider: BatteryStatusProvider,
     private val notifier: MailNotifier,
     private val mailRepository: MailRepository,
 ) : Syncer {
@@ -158,15 +159,18 @@ class MailSyncer @Inject constructor(
 
     /**
      * Aggressively pre-caches each not-yet-fetched message's full content (body + attachments) per the
-     * user's [FetchPolicy]. Runs outside [syncMutex] so these downloads don't block pull-to-refresh or
-     * other syncs, and is cancellable between messages so an IDLE renewal stops it promptly.
+     * user's fetch policy, pausing at low battery regardless of policy — see
+     * [SyncResourcePolicy.shouldPrefetchContent] (#89). The header sync above is never gated: mail
+     * keeps arriving, and a skipped prefetch is simply retried on the next sync once battery/network
+     * recover. Runs outside [syncMutex] so these downloads don't block pull-to-refresh or other syncs,
+     * and is cancellable between messages so an IDLE renewal stops it promptly.
      */
     private suspend fun prefetchIfEnabled(account: Account, folder: String) {
-        val shouldPrefetch = when (settingsRepository.fetchPolicy()) {
-            FetchPolicy.ALWAYS -> true
-            FetchPolicy.WIFI_ONLY -> context.isActiveNetworkUnmetered()
-            FetchPolicy.ON_DEMAND -> false
-        }
+        val shouldPrefetch = SyncResourcePolicy.shouldPrefetchContent(
+            policy = settingsRepository.fetchPolicy(),
+            unmetered = { context.isActiveNetworkUnmetered() },
+            battery = batteryStatusProvider.current(),
+        )
         if (!shouldPrefetch) return
         for (id in messageDao.getUnfetchedIds(account.id, folder)) {
             currentCoroutineContext().ensureActive()
