@@ -126,6 +126,46 @@ class MailRepositoryImplTest {
     }
 
     @Test
+    fun `openMessage derives a readable plain-text snippet from an HTML body`() = runTest {
+        val id = "acct:INBOX:20"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchBodyMarkingSeen(any(), "INBOX", "20") } returns MessageContent(
+            "<style>.x{color:red}</style><p>Tom &amp; Jerry say &quot;hi&quot;</p>",
+            isHtml = true,
+        )
+        val snippet = slot<String>()
+        coEvery { messageDao.updateBody(id, any(), any(), capture(snippet)) } just Runs
+        coEvery { messageDao.setRead(id, true) } just Runs
+
+        repository.openMessage(id)
+
+        // Style content must not leak and entities must be decoded (the derivation honors isHtml).
+        assertEquals("Tom & Jerry say \"hi\"", snippet.captured)
+    }
+
+    @Test
+    fun `prefetchMessage leaves a plain-text body's literal angle brackets in the snippet`() = runTest {
+        val cache = Files.createTempDirectory("attach").toFile()
+        every { context.cacheDir } returns cache
+        val id = "acct:INBOX:21"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "21") } returns
+            MessageContent("Reply to <ada@example.org>:  3 < 5", isHtml = false)
+        val snippet = slot<String>()
+        coEvery { messageDao.updateBody(id, any(), any(), capture(snippet)) } just Runs
+        coEvery { attachmentDao.getForMessage(id) } returns emptyList()
+
+        repository.prefetchMessage(id)
+
+        // No tag stripping for plain text — only whitespace collapsing (and the length cap) applies.
+        assertEquals("Reply to <ada@example.org>: 3 < 5", snippet.captured)
+    }
+
+    @Test
     fun `archive moves messages to the account's archive folder and drops the local rows`() = runTest {
         val id = "acct:INBOX:5"
         coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")

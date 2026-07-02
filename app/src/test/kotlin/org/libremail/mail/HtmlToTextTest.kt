@@ -33,6 +33,22 @@ class HtmlToTextTest {
     }
 
     @Test
+    fun `decodes numeric character references in decimal and hex`() {
+        assertEquals("It’s fine", HtmlToText.convert("It&#8217;s fine"))
+        assertEquals("It’s fine", HtmlToText.convert("It&#x2019;s fine"))
+    }
+
+    @Test
+    fun `decoding is single-pass so a decoded character is never re-decoded`() {
+        assertEquals("&lt;b&gt;", HtmlToText.convert("&amp;lt;b&amp;gt;"))
+    }
+
+    @Test
+    fun `unknown or malformed references are left as-is`() {
+        assertEquals("&bogus; &#; stays", HtmlToText.convert("&bogus; &#; stays"))
+    }
+
+    @Test
     fun `collapses excess whitespace`() {
         val converted = HtmlToText.convert("<p>Hello    there</p>\n\n\n<p>bye</p>")
         assertTrue(converted.contains("Hello there"), converted)
