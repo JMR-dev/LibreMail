@@ -12,6 +12,7 @@ webkit = "1.12.1"
 biometric = "1.1.0"
 composeBom = "2026.06.00"
 room = "2.8.4"
+paging = "3.3.6"
 sqlcipher = "4.16.0"
 datastore = "1.2.1"
 work = "2.11.2"
@@ -72,8 +73,17 @@ androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = 
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 # Room MigrationTestHelper (instrumented migration tests).
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+# Room PagingSource support — lets @Query methods return androidx.paging.PagingSource.
+androidx-room-paging = { group = "androidx.room", name = "room-paging", version.ref = "room" }
 # SQLCipher — opt-in at-rest encryption of the Room cache.
 sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
+
+# Paging 3 — pages the unified "All inboxes" list so its query/recomposition cost scales with the
+# visible window, not the whole cache (issue #124). runtime = Pager/PagingData; compose =
+# collectAsLazyPagingItems; testing = asSnapshot for JVM unit tests.
+androidx-paging-runtime = { group = "androidx.paging", name = "paging-runtime", version.ref = "paging" }
+androidx-paging-compose = { group = "androidx.paging", name = "paging-compose", version.ref = "paging" }
+androidx-paging-testing = { group = "androidx.paging", name = "paging-testing", version.ref = "paging" }
 
 # DataStore (settings) / WorkManager (sync) — wired in later increments
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

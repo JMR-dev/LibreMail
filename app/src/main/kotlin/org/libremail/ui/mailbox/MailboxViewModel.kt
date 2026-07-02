@@ -4,10 +4,13 @@ package org.libremail.ui.mailbox
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -116,26 +119,61 @@ class MailboxViewModel @Inject constructor(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
+    /**
+     * The list-rendered messages: a per-account folder (SQL-scoped and already flat, issue #86) or —
+     * for the unified inbox — *only* an active search's matches across accounts. The unified **browse**
+     * list is paged instead (see [pagedMessages], issue #124), so this flow stays empty while browsing
+     * the unified inbox and the whole cache is never pulled into memory on each write.
+     */
     val messages: StateFlow<List<Message>> =
         combine(_selectedAccountId, _selectedFolder) { accountId, folder -> accountId to folder }
             .distinctUntilChanged()
             .flatMapLatest { (accountId, folder) ->
-                // Scope the query in SQL to the viewed account+folder (or [folder] across accounts for
-                // the unified inbox) so Room only re-queries/re-emits when those rows change, and the
-                // cost scales with the folder, not the whole cache (issue #86).
-                val scoped = if (accountId == null) {
-                    mailRepository.observeUnifiedFolderMessages(folder)
+                if (accountId != null) {
+                    // Per-account+folder: the SQL-scoped, already-flat list. The one client-side pass
+                    // distinguishes the normal list (synced rows) from an active search (any matching
+                    // row, including transient server-search hits) over the small folder-scoped set.
+                    combine(mailRepository.observeFolderMessages(accountId, folder), _searchQuery) { rows, query ->
+                        val q = query.trim()
+                        rows.filter { if (q.isEmpty()) it.inInbox else it.matchesSearch(q) }
+                    }
                 } else {
-                    mailRepository.observeFolderMessages(accountId, folder)
-                }
-                // The only remaining client-side pass distinguishes the normal list (synced rows) from
-                // an active search (any matching row, including transient server-search hits) — a match
-                // over the small folder-scoped set, never the whole cache.
-                combine(scoped, _searchQuery) { rows, query ->
-                    val q = query.trim()
-                    rows.filter { if (q.isEmpty()) it.inInbox else it.matchesSearch(q) }
+                    // Unified inbox: browse is paged via [pagedMessages]; this backs only an active
+                    // search over the folder's rows across accounts (bounded by the per-account search
+                    // limit), staying empty while browsing so the whole inbox is never materialized.
+                    _searchQuery.flatMapLatest { query ->
+                        val q = query.trim()
+                        if (q.isEmpty()) {
+                            flowOf(emptyList())
+                        } else {
+                            mailRepository.observeUnifiedFolderMessages(folder)
+                                .map { rows -> rows.filter { it.matchesSearch(q) } }
+                        }
+                    }
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The unified "All inboxes" browse list as a paged stream (issue #124): folder-synced rows across
+     * every account, newest-first, loaded a window at a time so query/mapping/recomposition cost scale
+     * with the screen, not the total cache. Emits empty paging data whenever a concrete account is
+     * selected or a search is active (those render from [messages]).
+     */
+    val pagedMessages: Flow<PagingData<Message>> =
+        combine(
+            _selectedAccountId,
+            _selectedFolder,
+            _searchQuery.map { it.isBlank() }.distinctUntilChanged(),
+        ) { accountId, folder, browsing -> Triple(accountId, folder, browsing) }
+            .distinctUntilChanged()
+            .flatMapLatest { (accountId, folder, browsing) ->
+                if (accountId == null && browsing) {
+                    mailRepository.pagedUnifiedFolderMessages(folder)
+                } else {
+                    flowOf(PagingData.empty())
+                }
+            }
+            .cachedIn(viewModelScope)
 
     val draftCount: StateFlow<Int> = mailRepository.observeDrafts()
         .map { it.size }
@@ -156,6 +194,11 @@ class MailboxViewModel @Inject constructor(
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     val selectedIds: StateFlow<Set<String>> = _selectedIds.asStateFlow()
 
+    // Account id per selected message id, captured at selection time. The unified inbox is paged
+    // (issue #124), so the full list isn't held in memory; this lets [selectionAccountId] decide
+    // whether a selection sits within a single account (→ Move offered) without materializing it.
+    private val selectionAccounts = MutableStateFlow<Map<String, String>>(emptyMap())
+
     private val _pendingConfirm = MutableStateFlow<PendingAction?>(null)
     val pendingConfirm: StateFlow<PendingAction?> = _pendingConfirm.asStateFlow()
 
@@ -173,9 +216,8 @@ class MailboxViewModel @Inject constructor(
 
     /** The single account every selected message belongs to, or null if the selection spans accounts. */
     private val selectionAccountId: StateFlow<String?> =
-        combine(_selectedIds, messages) { ids, msgs ->
-            msgs.filter { it.id in ids }.map { it.accountId }.distinct().singleOrNull()
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        selectionAccounts.map { it.values.distinct().singleOrNull() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Whether "Move" is offered: only when the whole selection sits in a single account's folder tree. */
     val canMove: StateFlow<Boolean> = selectionAccountId
@@ -187,20 +229,30 @@ class MailboxViewModel @Inject constructor(
         .flatMapLatest { acct -> if (acct == null) flowOf(emptyList()) else mailRepository.observeFolders(acct) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun startSelection(id: String) {
+    fun startSelection(id: String, accountId: String) {
         _selectedIds.value = setOf(id)
+        selectionAccounts.value = mapOf(id to accountId)
     }
 
-    fun toggleSelection(id: String) {
-        _selectedIds.value = _selectedIds.value.let { if (id in it) it - id else it + id }
+    fun toggleSelection(id: String, accountId: String) {
+        if (id in _selectedIds.value) {
+            _selectedIds.value = _selectedIds.value - id
+            selectionAccounts.value = selectionAccounts.value - id
+        } else {
+            _selectedIds.value = _selectedIds.value + id
+            selectionAccounts.value = selectionAccounts.value + (id to accountId)
+        }
     }
 
     fun clearSelection() {
         _selectedIds.value = emptySet()
+        selectionAccounts.value = emptyMap()
     }
 
-    fun selectAll() {
-        _selectedIds.value = messages.value.map { it.id }.toSet()
+    /** Selects everything currently shown; [items] is the visible list (paged snapshot or list). */
+    fun selectAll(items: List<Message>) {
+        _selectedIds.value = items.map { it.id }.toSet()
+        selectionAccounts.value = items.associate { it.id to it.accountId }
     }
 
     fun archiveSelected() = runOnSelection { mailRepository.archive(it) }

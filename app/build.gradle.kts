@@ -200,8 +200,13 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
     ksp(libs.androidx.room.compiler)
     implementation(libs.sqlcipher.android)
+
+    // Paging 3 — the unified inbox list is paged so its cost scales with the screen (issue #124).
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
 
     // Raise kotlinx-serialization to the version Room's schema-bundle serializers were compiled
     // against (see libs.versions.toml). AGP 9 consistent resolution shares it with the androidTest
@@ -214,6 +219,8 @@ dependencies {
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
     testImplementation(libs.greenmail)
+    // asSnapshot() drives a PagingData flow to a concrete list in JVM unit tests (issue #124).
+    testImplementation(libs.androidx.paging.testing)
     // The real org.json for unit tests (android.jar ships a stubbed, no-op version).
     testImplementation("org.json:json:20231013")
 

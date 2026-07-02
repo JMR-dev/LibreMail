@@ -3,6 +3,10 @@ package org.libremail.data.repository
 
 import android.content.Context
 import android.net.Uri
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.map
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
 import kotlinx.coroutines.flow.Flow
@@ -65,6 +69,19 @@ class MailRepositoryImpl @Inject constructor(
 
     override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
         messageDao.observeUnifiedFolderSummaries(folder).map { rows -> rows.map { it.toDomain() } }
+
+    override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> = Pager(
+        config = PagingConfig(
+            // A page comfortably exceeds a screenful so scrolling rarely waits on a load; loading
+            // three pages up front fills the first viewport without a visible gap. Placeholders
+            // are off: the row height varies (snippet/account label), so a fixed-height placeholder
+            // would jump, and the list never needs a scrollbar sized to the full (uncounted) inbox.
+            pageSize = MAILBOX_PAGE_SIZE,
+            initialLoadSize = MAILBOX_PAGE_SIZE * 3,
+            enablePlaceholders = false,
+        ),
+        pagingSourceFactory = { messageDao.pagingUnifiedFolderSummaries(folder) },
+    ).flow.map { page -> page.map { it.toDomain() } }
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> =
         folderDao.observeForAccount(accountId).map { rows ->
@@ -379,6 +396,9 @@ class MailRepositoryImpl @Inject constructor(
 }
 
 private const val SEARCH_LIMIT = 50
+
+/** Rows per page for the unified inbox (issue #124) — a page is a few screenfuls of message rows. */
+private const val MAILBOX_PAGE_SIZE = 40
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
