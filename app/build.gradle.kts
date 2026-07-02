@@ -106,6 +106,9 @@ android {
         includeInBundle = false
     }
 
+    // Ship the exported Room schemas as androidTest assets so MigrationTestHelper can load them.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     packaging {
         resources {
             // Angus Mail / Jakarta Activation (added later) ship duplicate META-INF entries.
@@ -147,7 +150,7 @@ android {
     }
 }
 
-// Export Room schemas so migrations can be validated by instrumented MigrationTestHelper tests.
+// Export Room schemas so the instrumented MigrationTest can replay and validate each migration.
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -196,6 +199,11 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.sqlcipher.android)
 
+    // Raise kotlinx-serialization to the version Room's schema-bundle serializers were compiled
+    // against (see libs.versions.toml). AGP 9 consistent resolution shares it with the androidTest
+    // classpath so MigrationTestHelper can parse the exported schema JSON.
+    implementation(platform(libs.kotlinx.serialization.bom))
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -210,4 +218,5 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.intents)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.room.testing)
 }

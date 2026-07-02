@@ -22,9 +22,9 @@ import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 
 /**
- * Schema-behavior tests on the real (v7) Room database. (Migrations from versions before
- * exportSchema was enabled can't be replayed with MigrationTestHelper, since their schema JSONs
- * were never exported; exportSchema is now on so future migrations can be tested.)
+ * Schema-behavior tests on a fresh in-memory database at the current version. The migration DDL
+ * itself is exercised by [MigrationTest], which replays the schema chain exported to app/schemas.
+ * (Migrations from before v7 predate schema export, so they can't be replayed there.)
  */
 @RunWith(AndroidJUnit4::class)
 class LibreMailDatabaseTest {
