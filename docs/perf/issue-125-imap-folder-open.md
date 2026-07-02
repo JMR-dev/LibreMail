@@ -153,6 +153,11 @@ real device — which this environment cannot provide — forcing an implementat
 Per #125's "investigation/spike first" guidance, this change ships the measurement harness + analysis
 and **defers the pool to a measured follow-up**.
 
+> **Follow-up spike.** A flag-gated (default OFF) prototype of this reuse now exists, with the harness
+> flipped to prove it collapses `N` opens to one connection / one LOGIN. See
+> [`issue-125-connection-reuse-spike.md`](issue-125-connection-reuse-spike.md) for the prototype
+> design, the flag-off-vs-on proof, and the per-decision trade-offs.
+
 **Already correct — do not redo.** Optimistic render-from-cache is already the architecture
 (`selectFolder` renders cached rows instantly; the network sync is a background refresh). #125's
 "optimistic render while the network catches up" is satisfied; only connection reuse remains.
