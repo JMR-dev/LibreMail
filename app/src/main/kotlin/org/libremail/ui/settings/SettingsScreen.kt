@@ -132,41 +132,6 @@ fun SettingsScreen(
             ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
             HorizontalDivider()
 
-            SectionHeader(stringResource(R.string.settings_notifications))
-            SwitchRow(
-                title = stringResource(R.string.settings_new_mail),
-                checked = settings.newMailNotifications,
-                onCheckedChange = viewModel::setNewMailNotifications,
-                subtitle = stringResource(R.string.settings_new_mail_summary),
-            )
-            HorizontalDivider()
-
-            SectionHeader(stringResource(R.string.settings_contacts))
-            ContactAutocompleteRow(
-                state = contactsState,
-                onClick = {
-                    when (contactsState) {
-                        // Already on: send to system settings, the only place to turn it back off.
-                        ContactPermissionState.GRANTED ->
-                            runCatching { context.startActivity(viewModel.contactsSettingsIntent()) }
-                        // Re-requestable in-app: explain first (#128), then launch the system dialog.
-                        ContactPermissionState.DENIED -> showContactsRationale = true
-                        // Permanently denied: an in-app request is a no-op, so deep-link to settings.
-                        ContactPermissionState.BLOCKED -> showContactsBlocked = true
-                    }
-                },
-            )
-            HorizontalDivider()
-
-            SectionHeader(stringResource(R.string.settings_appearance))
-            SwitchRow(
-                title = stringResource(R.string.settings_dynamic_color),
-                checked = settings.dynamicColor,
-                onCheckedChange = viewModel::setDynamicColor,
-                subtitle = stringResource(R.string.settings_dynamic_color_summary),
-            )
-            HorizontalDivider()
-
             SectionHeader(stringResource(R.string.settings_downloading))
             RadioRow(
                 title = stringResource(R.string.fetch_always),
@@ -188,11 +153,35 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
-            SectionHeader(stringResource(R.string.settings_diagnostics))
-            ClickRow(
-                title = stringResource(R.string.settings_report_problem),
-                subtitle = stringResource(R.string.settings_report_problem_summary),
-                onClick = onReportProblem,
+            SectionHeader(stringResource(R.string.settings_contacts))
+            ContactAutocompleteRow(
+                state = contactsState,
+                onClick = {
+                    when (contactsState) {
+                        // Already on: send to system settings, the only place to turn it back off.
+                        ContactPermissionState.GRANTED ->
+                            runCatching { context.startActivity(viewModel.contactsSettingsIntent()) }
+                        // Re-requestable in-app: explain first (#128), then launch the system dialog.
+                        ContactPermissionState.DENIED -> showContactsRationale = true
+                        // Permanently denied: an in-app request is a no-op, so deep-link to settings.
+                        ContactPermissionState.BLOCKED -> showContactsBlocked = true
+                    }
+                },
+            )
+            HorizontalDivider()
+
+            SectionHeader(stringResource(R.string.settings_appearance))
+            Text(
+                text = stringResource(R.string.settings_appearance_summary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            SwitchRow(
+                title = stringResource(R.string.settings_dynamic_color),
+                checked = settings.dynamicColor,
+                onCheckedChange = viewModel::setDynamicColor,
+                subtitle = stringResource(R.string.settings_dynamic_color_summary),
             )
             HorizontalDivider()
 
@@ -205,6 +194,15 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
+            SectionHeader(stringResource(R.string.settings_notifications))
+            SwitchRow(
+                title = stringResource(R.string.settings_new_mail),
+                checked = settings.newMailNotifications,
+                onCheckedChange = viewModel::setNewMailNotifications,
+                subtitle = stringResource(R.string.settings_new_mail_summary),
+            )
+            HorizontalDivider()
+
             // Global device-only retention default (issue #13); accounts may override it.
             RetentionSection(
                 count = settings.retentionCount,
@@ -212,6 +210,15 @@ fun SettingsScreen(
                 includeUseDefault = false,
                 onCountChange = { viewModel.setRetentionCount(it ?: 0) },
                 onMonthsChange = { viewModel.setRetentionMonths(it ?: 0) },
+            )
+            HorizontalDivider()
+
+            // Standalone trailing action, no section header — matches AccountSettingsScreen's
+            // "Remove account" row; self-explanatory as the last item in the list (#158).
+            ClickRow(
+                title = stringResource(R.string.settings_report_problem),
+                subtitle = stringResource(R.string.settings_report_problem_summary),
+                onClick = onReportProblem,
             )
             HorizontalDivider()
 
