@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui
 
+import androidx.paging.PagingData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -91,6 +92,9 @@ class FakeMailRepository(
 
     override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
         flowOf(messages.filter { it.folder == folder })
+
+    override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> =
+        flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(
         folders.filter {
