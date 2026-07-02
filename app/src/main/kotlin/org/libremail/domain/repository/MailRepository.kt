@@ -17,7 +17,15 @@ import java.io.File
  * The UI always reads from here; the cache is the single source of truth.
  */
 interface MailRepository {
-    fun observeMessages(): Flow<List<Message>>
+    /**
+     * The cached messages of one account's [folder], newest-first — the scoped source for the mailbox
+     * list (issue #86). Includes transient server-search rows so search can surface them; the caller
+     * filters `inInbox`/query. Re-emits only when that folder's rows change, not on every cache write.
+     */
+    fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>>
+
+    /** Like [observeFolderMessages] but for [folder] across every account (the unified inbox). */
+    fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>>
 
     /** The account's cached IMAP folders for the navigation drawer. */
     fun observeFolders(accountId: String): Flow<List<Folder>>

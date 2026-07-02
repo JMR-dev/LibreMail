@@ -25,6 +25,36 @@ interface MessageDao {
     fun observeSummaries(): Flow<List<MessageSummary>>
 
     /**
+     * Mailbox-list projection scoped in SQL to one account's [folder], newest-first. Unlike
+     * [observeSummaries] this pulls only that folder's rows and re-emits only when they actually
+     * change, so the mailbox list's cost scales with what's shown, not the whole cache (issue #86).
+     * `inInbox` is *not* filtered here so the one query serves both the normal list (caller keeps
+     * `inInbox = 1` rows) and search (caller keeps rows matching the query, including transient
+     * `inInbox = 0` server-search hits). Served by the existing `(accountId, folder, uid)` index (its
+     * `(accountId, folder)` prefix), so no new index — and no schema migration — is needed.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE accountId = :accountId AND folder = :folder ORDER BY timestampMillis DESC",
+    )
+    fun observeFolderSummaries(accountId: String, folder: String): Flow<List<MessageSummary>>
+
+    /**
+     * Unified-inbox projection: [folder] across every account, newest-first. Scoped in SQL like
+     * [observeFolderSummaries] but without an account predicate (issue #86). No existing index leads
+     * with `folder`, so this still scans in timestamp order — far cheaper than [observeSummaries] (it
+     * materializes only this folder's rows, not the whole cache) but not O(1); a large multi-account
+     * unified inbox is a candidate for a `(folder, inInbox, timestampMillis)` index + paging.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE folder = :folder ORDER BY timestampMillis DESC",
+    )
+    fun observeUnifiedFolderSummaries(folder: String): Flow<List<MessageSummary>>
+
+    /**
      * Live per-(account, folder) unread counts for the drawer's folder badges and the bold styling of
      * accounts with unread mail. Counts only folder-synced rows (`inInbox = 1`), so transient
      * server-search hits never inflate a badge; read rows and folders with no unread mail are simply

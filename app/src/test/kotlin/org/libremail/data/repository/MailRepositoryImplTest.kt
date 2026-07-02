@@ -74,22 +74,33 @@ class MailRepositoryImplTest {
     )
 
     @Test
-    fun `observeMessages is empty when the cache is empty`() = runTest {
-        every { messageDao.observeSummaries() } returns flowOf(emptyList())
-        repository.observeMessages().test {
+    fun `observeFolderMessages is empty when the folder has no cached rows`() = runTest {
+        every { messageDao.observeFolderSummaries("acct", "INBOX") } returns flowOf(emptyList())
+        repository.observeFolderMessages("acct", "INBOX").test {
             assertTrue(awaitItem().isEmpty())
             awaitComplete()
         }
     }
 
     @Test
-    fun `observeMessages maps cached entities`() = runTest {
-        every { messageDao.observeSummaries() } returns flowOf(listOf(messageSummary("1", "INBOX")))
-        repository.observeMessages().test {
+    fun `observeFolderMessages maps the folder's cached entities`() = runTest {
+        every { messageDao.observeFolderSummaries("acct", "INBOX") } returns
+            flowOf(listOf(messageSummary("1", "INBOX")))
+        repository.observeFolderMessages("acct", "INBOX").test {
             val items = awaitItem()
             assertEquals(1, items.size)
             assertEquals("Ada", items.first().sender)
             assertEquals("INBOX", items.first().folder)
+            awaitComplete()
+        }
+    }
+
+    @Test
+    fun `observeUnifiedFolderMessages maps the folder's rows across accounts`() = runTest {
+        every { messageDao.observeUnifiedFolderSummaries("INBOX") } returns
+            flowOf(listOf(messageSummary("1", "INBOX")))
+        repository.observeUnifiedFolderMessages("INBOX").test {
+            assertEquals(1, awaitItem().size)
             awaitComplete()
         }
     }

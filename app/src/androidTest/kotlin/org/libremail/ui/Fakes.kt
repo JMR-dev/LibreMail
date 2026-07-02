@@ -86,7 +86,11 @@ class FakeMailRepository(
     val movedToFolder = mutableListOf<Pair<List<String>, String>>()
     val replyDrafts = mutableListOf<Pair<String, ReplyMode>>()
 
-    override fun observeMessages(): Flow<List<Message>> = flowOf(messages)
+    override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
+        flowOf(messages.filter { it.accountId == accountId && it.folder == folder })
+
+    override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
+        flowOf(messages.filter { it.folder == folder })
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(
         folders.filter {
