@@ -66,11 +66,13 @@ class SettingsViewModel @Inject constructor(
     fun setRetentionCount(value: Int) = update {
         settingsRepository.setRetentionCount(value)
         syncScheduler.pruneNow()
+        accountRepository.resetBackfillProgress(null)
     }
 
     fun setRetentionMonths(value: Int) = update {
         settingsRepository.setRetentionMonths(value)
         syncScheduler.pruneNow()
+        accountRepository.resetBackfillProgress(null)
     }
 
     private inline fun update(crossinline action: suspend () -> Unit) {

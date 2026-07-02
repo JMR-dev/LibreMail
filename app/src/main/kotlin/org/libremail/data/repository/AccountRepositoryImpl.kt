@@ -79,4 +79,9 @@ class AccountRepositoryImpl @Inject constructor(
         folderDao.deleteForAccount(id)
         backfillProgressDao.deleteForAccount(id)
     }
+
+    override suspend fun resetBackfillProgress(accountId: String?) {
+        if (accountId != null) backfillProgressDao.deleteForAccount(accountId) else backfillProgressDao.deleteAll()
+        syncScheduler.backfillNow()
+    }
 }

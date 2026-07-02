@@ -259,5 +259,11 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
                 "`nextBeforeUid` INTEGER NOT NULL, `complete` INTEGER NOT NULL, " +
                 "PRIMARY KEY(`accountId`, `folder`))",
         )
+
+        // Index the folder-scoped UID probes the backfill/reconcile hot paths run on every page/sync.
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_messages_accountId_folder_uid` " +
+                "ON `messages` (`accountId`, `folder`, `uid`)",
+        )
     }
 }

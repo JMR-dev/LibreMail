@@ -68,28 +68,30 @@ class MessageDaoRetentionTest {
     )
 
     /**
-     * The count-based prune boundary keeps the newest [keep] by recency and returns the REST for
-     * deletion, breaking timestamp ties by the higher UID. This pins the ordering *direction* (a
-     * flipped `DESC` would keep the OLDEST rows — i.e. locally delete the user's most recent mail) and
-     * the tie-break, neither of which the mocked-DAO unit tests can catch.
+     * The count-based prune boundary keeps the newest [keep] by ARRIVAL (server UID) and returns the
+     * REST for deletion. Keeping by UID — not by the Date header — matches the newest-by-UID recent
+     * window foreground sync re-fetches, so a high-UID/old-Date message isn't re-downloaded every sync
+     * and re-pruned every cycle. This pins the ordering column (a Date-ordered keep would evict the
+     * high-UID/old-Date row) and its direction (a flipped DESC would keep the OLDEST arrivals).
      */
     @Test
-    fun syncedIdsBeyondCountInFolderKeepsNewestByTimestampThenUid() = runBlocking {
+    fun syncedIdsBeyondCountInFolderKeepsNewestByArrivalUid() = runBlocking {
         dao.insertNew(
             listOf(
-                message("A", uid = 30, timestampMillis = 300), // newest
-                message("B", uid = 25, timestampMillis = 200), // ties C on timestamp; higher uid => newer
-                message("C", uid = 20, timestampMillis = 200),
-                message("D", uid = 10, timestampMillis = 100), // oldest
+                message("recent-old-date", uid = 100, timestampMillis = 50), // newest arrival, oldest Date
+                message("A", uid = 30, timestampMillis = 300),
+                message("B", uid = 25, timestampMillis = 200),
+                message("D", uid = 10, timestampMillis = 100),
                 // Scoping decoys: a search-only row and another folder must never enter the ranking.
                 message("SR", uid = 99, timestampMillis = 999, inInbox = false),
                 message("AR", uid = 5, timestampMillis = 50, folder = "Archive"),
             ),
         )
 
-        // Keep the newest 2 (A, B); the rest are prunable. B is kept over C purely by the uid tie-break.
+        // Keep the newest 2 by UID (recent-old-date, A); the rest are prunable. A Date-ordered keep would
+        // wrongly evict recent-old-date (oldest Date) and keep B.
         assertEquals(
-            setOf("C", "D"),
+            setOf("B", "D"),
             dao.syncedIdsBeyondCountInFolder("acct", "INBOX", keep = 2).toSet(),
         )
         // Keeping at least as many as exist prunes nothing.

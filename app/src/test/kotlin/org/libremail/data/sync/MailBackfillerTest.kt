@@ -35,6 +35,7 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import java.util.Date
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -142,11 +143,49 @@ class MailBackfillerTest {
 
         assertTrue(afterFirst >= 60, "must fetch at least up to the retention floor")
         assertTrue(afterFirst < TOTAL, "must NOT page the entire 120-message history")
-        // Paused at the floor (NOT marked complete, so a later loosening could resume), and stable:
-        // running again fetches nothing more.
-        assertFalse(progress["acct" to "INBOX"]!!.complete)
+        // Marked complete at the floor so the pruner deleting aged-out rows can't re-open paging (a
+        // retention change resets progress to resume); stable — running again fetches nothing more.
+        assertTrue(progress["acct" to "INBOX"]!!.complete)
         backfiller.runBackfill()
         assertEquals(afterFirst, cached.size, "at the floor, further runs must not fetch more")
+        assertNoDeletes()
+    }
+
+    /**
+     * Regression for the #12/#13 AGE-retention contention: reaching the age floor marks the folder
+     * complete, so the pruner deleting aged-out rows — which raises the oldest cached timestamp back
+     * above the cutoff — can't re-open paging. Before the fix, the next run re-fetched exactly the rows
+     * the pruner had just deleted, an endless re-download/re-prune loop. (The count floor was already a
+     * fixpoint, so only an age-based case exercises this.)
+     */
+    @Test
+    fun `reaching the age floor is sticky across a prune, so backfill never re-fetches`() = runTest {
+        val now = System.currentTimeMillis()
+        // UID order follows append order: the first 60 are ~8 months old (beyond the 6-month cutoff),
+        // the last 60 are recent (within retention).
+        val old = (1..60).map { now - 8 * MONTH_MILLIS - it * DAY_MILLIS }
+        val recent = (1..60).map { now - it * DAY_MILLIS }
+        appendMessages(old + recent)
+        seedForegroundWindow()
+
+        val backfiller = backfiller(AccountSettings("acct", retentionMonths = 6))
+        backfiller.runBackfill()
+
+        assertEquals(
+            true,
+            progress["acct" to "INBOX"]!!.complete,
+            "backfill marks the folder complete at the age floor",
+        )
+        val offeredBeforePrune = totalOffered
+
+        // Simulate the pruner: drop every cached row older than the 6-month cutoff. This raises the
+        // oldest cached timestamp back above the cutoff — the state that used to re-open paging.
+        val cutoff = now - 6 * MONTH_MILLIS
+        cached.removeAll { it.timestampMillis < cutoff }
+
+        backfiller.runBackfill()
+
+        assertEquals(offeredBeforePrune, totalOffered, "a floored folder must not re-fetch after a prune")
         assertNoDeletes()
     }
 
@@ -222,12 +261,17 @@ class MailBackfillerTest {
     private fun assertNoDeletes() {
         val dao = lastMessageDao ?: return
         coVerify(exactly = 0) { dao.deleteByIds(any()) }
-        coVerify(exactly = 0) { dao.deleteSyncedNotIn(any(), any(), any()) }
         coVerify(exactly = 0) { dao.deleteSyncedInWindowNotIn(any(), any(), any(), any()) }
         coVerify(exactly = 0) { dao.deleteSyncedByAccountFolder(any(), any()) }
     }
 
-    private fun appendMessages(count: Int) {
+    private fun appendMessages(count: Int) = appendMessages(List<Long?>(count) { null })
+
+    /**
+     * Appends messages to INBOX with the given per-message sent dates (null = server default, ~now).
+     * UID order follows list order, so earlier entries get lower UIDs.
+     */
+    private fun appendMessages(sentDates: List<Long?>) {
         val props = Properties().apply {
             put("mail.store.protocol", "imap")
             put("mail.imap.host", "127.0.0.1")
@@ -239,12 +283,13 @@ class MailBackfillerTest {
         try {
             val inbox = store.getFolder("INBOX")
             inbox.open(Folder.READ_WRITE)
-            val messages = (1..count).map { i ->
+            val messages = sentDates.mapIndexed { i, millis ->
                 MimeMessage(session).apply {
                     setFrom(InternetAddress("sender$i@example.org"))
                     setRecipient(Message.RecipientType.TO, InternetAddress("alice@example.org"))
                     subject = "Message $i"
                     setText("Body of message $i")
+                    if (millis != null) sentDate = Date(millis)
                 }
             }.toTypedArray()
             inbox.appendMessages(messages)
@@ -257,5 +302,7 @@ class MailBackfillerTest {
     private companion object {
         const val TOTAL = 120
         const val WINDOW = 50
+        private const val DAY_MILLIS = 24L * 60 * 60 * 1000
+        private const val MONTH_MILLIS = 30L * DAY_MILLIS
     }
 }

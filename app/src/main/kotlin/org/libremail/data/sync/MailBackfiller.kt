@@ -2,14 +2,11 @@
 package org.libremail.data.sync
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.libremail.data.local.dao.AccountDao
@@ -23,6 +20,7 @@ import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.settings.effectiveRetention
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.MailRepository
@@ -67,7 +65,7 @@ class MailBackfiller @Inject constructor(
         var moreWork = false
         for (account in accountDao.getAll().map { it.toDomain() }) {
             val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: continue
-            val policy = effectivePolicy(account.id)
+            val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             for (folder in messageDao.syncedFolders(account.id)) {
                 if (remaining <= 0) return@withLock true
                 // Per-folder failures (e.g. a transient server error) must not abort the whole slice.
@@ -87,23 +85,29 @@ class MailBackfiller @Inject constructor(
         policy: RetentionPolicy,
         maxBatches: Int,
     ): FolderResult {
-        if (backfillProgressDao.get(account.id, folder)?.complete == true) {
+        val progress = backfillProgressDao.get(account.id, folder)
+        if (progress?.complete == true) {
             return FolderResult(batches = 0, complete = true)
         }
 
-        // Always page strictly below the LOWEST currently-cached UID. Deriving the boundary from the
-        // cache (rather than a stored cursor) keeps backfill gap-free even after the pruner raised the
-        // floor, and lets a later loosening of retention resume filling automatically. The mutex in
-        // runBackfill keeps the pruner from moving this boundary mid-run.
-        var beforeUid = messageDao.lowestSyncedUid(account.id, folder) ?: Long.MAX_VALUE
+        // Resume from the persisted low-water mark so paging is monotonic: it never re-descends into a
+        // region an earlier run already reached, even after the pruner deletes rows above it. Falls back
+        // to the lowest currently-cached UID on the very first run, before any progress is persisted.
+        var beforeUid = progress?.nextBeforeUid
+            ?: messageDao.lowestSyncedUid(account.id, folder)
+            ?: Long.MAX_VALUE
         var batches = 0
         while (batches < maxBatches) {
             currentCoroutineContext().ensureActive()
-            // Retention floor (#13 precedence): pause — but do NOT mark complete — once the device-only
-            // limit is reached, so backfill and the pruner never contend for the same messages and a
-            // later loosening of the limit resumes paging from where it stopped.
+            // Retention floor (#13 precedence): once the folder holds everything retention keeps, mark it
+            // complete and stop. Marking complete (rather than pausing) is what keeps backfill and the
+            // pruner from fighting: otherwise the pruner deleting aged-out rows would raise the oldest
+            // cached timestamp back above the age cutoff and re-open paging on the next run, forever. A
+            // retention change resets progress (AccountRepository.resetBackfillProgress) so loosening
+            // still resumes paging.
             if (reachedRetentionFloor(account.id, folder, policy)) {
-                return FolderResult(batches, complete = false)
+                markComplete(account.id, folder, beforeUid)
+                return FolderResult(batches, complete = true)
             }
             val fetched = imapClient.fetchOlderThan(params, folder, beforeUid, BACKFILL_BATCH_SIZE)
             batches++
@@ -138,18 +142,25 @@ class MailBackfiller @Inject constructor(
 
     /** Inserts backfilled headers; never deletes. Uncancellable so a persisted boundary always has its rows. */
     private suspend fun persistBatch(entities: List<MessageEntity>) = withContext(NonCancellable) {
-        messageDao.insertNew(entities)
         val ids = entities.map { it.id }
-        messageDao.markSynced(ids)
-        entities.forEach {
-            messageDao.updateHeaderContent(
-                id = it.id,
-                sender = it.sender,
-                senderEmail = it.senderEmail,
-                subject = it.subject,
-                timestampMillis = it.timestampMillis,
-                uid = it.uid,
-            )
+        // insertNew (IGNORE) writes brand-new rows in full — headers, uid, and inInbox = 1 — so only rows
+        // that ALREADY existed (e.g. a former search-only row) need their membership/header refreshed.
+        // Limiting the updates to those avoids a redundant per-row UPDATE for every freshly-inserted row.
+        val preexisting = messageDao.existingIds(ids).toHashSet()
+        messageDao.insertNew(entities)
+        val toRefresh = entities.filter { it.id in preexisting }
+        if (toRefresh.isNotEmpty()) {
+            messageDao.markSynced(toRefresh.map { it.id })
+            toRefresh.forEach {
+                messageDao.updateHeaderContent(
+                    id = it.id,
+                    sender = it.sender,
+                    senderEmail = it.senderEmail,
+                    subject = it.subject,
+                    timestampMillis = it.timestampMillis,
+                    uid = it.uid,
+                )
+            }
         }
     }
 
@@ -165,7 +176,7 @@ class MailBackfiller @Inject constructor(
     private suspend fun prefetchIfEnabled(ids: List<String>) {
         val shouldPrefetch = when (settingsRepository.fetchPolicy()) {
             FetchPolicy.ALWAYS -> true
-            FetchPolicy.WIFI_ONLY -> isUnmetered()
+            FetchPolicy.WIFI_ONLY -> context.isActiveNetworkUnmetered()
             FetchPolicy.ON_DEMAND -> false
         }
         if (!shouldPrefetch) return
@@ -173,23 +184,6 @@ class MailBackfiller @Inject constructor(
             currentCoroutineContext().ensureActive()
             mailRepository.prefetchMessage(id)
         }
-    }
-
-    private suspend fun effectivePolicy(accountId: String): RetentionPolicy {
-        val account = accountSettingsRepository.get(accountId)
-        val global = settingsRepository.settings.first()
-        return RetentionPolicy.resolve(
-            accountCount = account.retentionCount,
-            accountMonths = account.retentionMonths,
-            defaultCount = global.retentionCount,
-            defaultMonths = global.retentionMonths,
-        )
-    }
-
-    private fun isUnmetered(): Boolean {
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
-        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
     private companion object {

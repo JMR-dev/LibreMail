@@ -2,13 +2,10 @@
 package org.libremail.data.sync
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -18,8 +15,8 @@ import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.FetchPolicy
-import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.settings.effectiveRetention
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
@@ -43,7 +40,7 @@ class MailSyncer @Inject constructor(
     // Serializes all syncing: syncAll/syncAccount/syncFolder are invoked concurrently by the periodic
     // worker, pull-to-refresh, one-shot syncs, folder opens, and one IDLE watcher per account. Without
     // this, two runs can both compute the same message as "new" (double-notify) or let a stale
-    // deleteSyncedNotIn snapshot delete a row another run just inserted.
+    // deleteSyncedInWindowNotIn snapshot delete a row another run just inserted.
     private val syncMutex = Mutex()
 
     /** Syncs every account's inbox. Succeeds if at least one account synced (or there are none). */
@@ -128,9 +125,14 @@ class MailSyncer @Inject constructor(
                     }
                     // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older
                     // history paged in by the background backfill (issue #12) survives each foreground sync
-                    // instead of being wiped by a whole-folder "not in the recent 50" delete.
-                    val minWindowUid = entities.minOf { it.uid }
-                    messageDao.deleteSyncedInWindowNotIn(account.id, folder, minWindowUid, ids)
+                    // instead of being wiped by a whole-folder "not in the recent 50" delete. Bound the
+                    // window by the lowest POSITIVE fetched UID: a message whose UID couldn't be resolved
+                    // (UIDFolder.getUID returns -1) must not collapse the bound to <= 0 and turn this into a
+                    // whole-folder delete that wipes the backfilled history below the window.
+                    val minWindowUid = entities.mapNotNull { entity -> entity.uid.takeIf { it > 0L } }.minOrNull()
+                    if (minWindowUid != null) {
+                        messageDao.deleteSyncedInWindowNotIn(account.id, folder, minWindowUid, ids)
+                    }
                 }
 
                 val shouldNotify = notify &&
@@ -150,14 +152,7 @@ class MailSyncer @Inject constructor(
      * would immediately trim. Age-only or unlimited retention leaves the full window in place.
      */
     private suspend fun recentWindowFor(account: Account): Int {
-        val accountSettings = accountSettingsRepository.get(account.id)
-        val global = settingsRepository.settings.first()
-        val policy = RetentionPolicy.resolve(
-            accountCount = accountSettings.retentionCount,
-            accountMonths = accountSettings.retentionMonths,
-            defaultCount = global.retentionCount,
-            defaultMonths = global.retentionMonths,
-        )
+        val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
         return policy.countLimit?.let { minOf(FETCH_LIMIT, it) } ?: FETCH_LIMIT
     }
 
@@ -169,7 +164,7 @@ class MailSyncer @Inject constructor(
     private suspend fun prefetchIfEnabled(account: Account, folder: String) {
         val shouldPrefetch = when (settingsRepository.fetchPolicy()) {
             FetchPolicy.ALWAYS -> true
-            FetchPolicy.WIFI_ONLY -> isUnmetered()
+            FetchPolicy.WIFI_ONLY -> context.isActiveNetworkUnmetered()
             FetchPolicy.ON_DEMAND -> false
         }
         if (!shouldPrefetch) return
@@ -177,13 +172,6 @@ class MailSyncer @Inject constructor(
             currentCoroutineContext().ensureActive()
             mailRepository.prefetchMessage(id) // best-effort; swallows its own per-message failures
         }
-    }
-
-    /** True when the active network is unmetered (e.g. Wi-Fi), used by [FetchPolicy.WIFI_ONLY]. */
-    private fun isUnmetered(): Boolean {
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
-        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
     private companion object {

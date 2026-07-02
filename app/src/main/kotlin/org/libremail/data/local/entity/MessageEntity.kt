@@ -8,7 +8,10 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "messages",
-    indices = [Index("accountId"), Index("timestampMillis")],
+    // The (accountId, folder, uid) index serves the folder-scoped UID probes the backfill/reconcile
+    // hot paths run on every page/sync: MIN(uid) (lowestSyncedUid) and the uid >= window bound
+    // (deleteSyncedInWindowNotIn / syncedIdsBeyondCountInFolder).
+    indices = [Index("accountId"), Index("timestampMillis"), Index("accountId", "folder", "uid")],
 )
 data class MessageEntity(
     @PrimaryKey val id: String,

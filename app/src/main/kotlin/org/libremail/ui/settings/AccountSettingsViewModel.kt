@@ -66,6 +66,7 @@ class AccountSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             accountSettingsRepository.setRetentionCount(accountId, value)
             syncScheduler.pruneNow()
+            accountRepository.resetBackfillProgress(accountId)
         }
     }
 
@@ -73,6 +74,7 @@ class AccountSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             accountSettingsRepository.setRetentionMonths(accountId, value)
             syncScheduler.pruneNow()
+            accountRepository.resetBackfillProgress(accountId)
         }
     }
 

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
+import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.DraftDao
@@ -357,9 +358,8 @@ class MailRepositoryImpl @Inject constructor(
      * and avoids filename collisions between messages.
      */
     private fun attachmentFile(messageId: String, partIndex: Int, filename: String): File {
-        val safeId = messageId.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val safeName = filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
-        return File(context.cacheDir, "attachments/$safeId/$partIndex/$safeName")
+        return File(attachmentCacheDir(context.cacheDir, messageId), "$partIndex/$safeName")
     }
 }
 

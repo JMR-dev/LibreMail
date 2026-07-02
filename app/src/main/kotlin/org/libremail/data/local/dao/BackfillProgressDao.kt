@@ -12,12 +12,13 @@ interface BackfillProgressDao {
     @Query("SELECT * FROM backfill_progress WHERE accountId = :accountId AND folder = :folder LIMIT 1")
     suspend fun get(accountId: String, folder: String): BackfillProgressEntity?
 
-    @Query("SELECT * FROM backfill_progress WHERE accountId = :accountId")
-    suspend fun getForAccount(accountId: String): List<BackfillProgressEntity>
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(progress: BackfillProgressEntity)
 
     @Query("DELETE FROM backfill_progress WHERE accountId = :accountId")
     suspend fun deleteForAccount(accountId: String)
+
+    /** Clears all backfill progress (e.g. when the global retention default changes) so it re-evaluates. */
+    @Query("DELETE FROM backfill_progress")
+    suspend fun deleteAll()
 }

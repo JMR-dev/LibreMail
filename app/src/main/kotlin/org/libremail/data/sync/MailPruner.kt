@@ -5,14 +5,14 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
+import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
-import java.io.File
+import org.libremail.data.settings.effectiveRetention
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,17 +37,10 @@ class MailPruner @Inject constructor(
 ) {
     /** Prunes every account to its effective retention policy. Returns the number of messages removed. */
     suspend fun prune(nowMillis: Long = System.currentTimeMillis()): Int = maintenanceGate.mutex.withLock {
-        val global = settingsRepository.settings.first()
         var removed = 0
         for (account in accountDao.getAll()) {
             currentCoroutineContext().ensureActive()
-            val settings = accountSettingsRepository.get(account.id)
-            val policy = RetentionPolicy.resolve(
-                accountCount = settings.retentionCount,
-                accountMonths = settings.retentionMonths,
-                defaultCount = global.retentionCount,
-                defaultMonths = global.retentionMonths,
-            )
+            val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             if (policy.isUnlimited) continue
             removed += pruneAccount(account.id, policy, nowMillis)
         }
@@ -80,8 +73,7 @@ class MailPruner @Inject constructor(
 
     /** Removes the per-message on-disk attachment cache (keyed the same way MailRepositoryImpl writes it). */
     private fun deleteCacheFiles(messageId: String) {
-        val safeId = messageId.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        runCatching { File(context.cacheDir, "attachments/$safeId").deleteRecursively() }
+        runCatching { attachmentCacheDir(context.cacheDir, messageId).deleteRecursively() }
     }
 
     private companion object {

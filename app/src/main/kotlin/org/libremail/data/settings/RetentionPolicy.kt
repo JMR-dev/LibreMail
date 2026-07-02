@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.settings
 
+import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.time.ZoneOffset
 
@@ -48,4 +49,26 @@ data class RetentionPolicy(val count: Int, val months: Int) {
                 months = (accountMonths ?: defaultMonths).coerceAtLeast(0),
             )
     }
+}
+
+/**
+ * The effective retention policy for [accountId], resolving its per-account overrides against the
+ * global default. Read through the same [AccountSettingsRepository] / [SettingsRepository] every
+ * enforcement site uses — the foreground fetch window ([org.libremail.data.sync.MailSyncer]), the
+ * backfill floor ([org.libremail.data.sync.MailBackfiller]), and the pruner
+ * ([org.libremail.data.sync.MailPruner]) — so none of them can resolve a different floor, the
+ * divergence that would otherwise let backfill and prune fight over the same rows.
+ */
+internal suspend fun AccountSettingsRepository.effectiveRetention(
+    settings: SettingsRepository,
+    accountId: String,
+): RetentionPolicy {
+    val account = get(accountId)
+    val global = settings.settings.first()
+    return RetentionPolicy.resolve(
+        accountCount = account.retentionCount,
+        accountMonths = account.retentionMonths,
+        defaultCount = global.retentionCount,
+        defaultMonths = global.retentionMonths,
+    )
 }

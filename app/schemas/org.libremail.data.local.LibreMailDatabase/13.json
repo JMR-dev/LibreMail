@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 13,
-    "identityHash": "c064a4da054e0f98b4688ea2d04ecaec",
+    "identityHash": "e4f7ef1e0d780324d6eec3efced768ae",
     "entities": [
       {
         "tableName": "accounts",
@@ -256,6 +256,17 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_timestampMillis` ON `${TABLE_NAME}` (`timestampMillis`)"
+          },
+          {
+            "name": "index_messages_accountId_folder_uid",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "folder",
+              "uid"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_accountId_folder_uid` ON `${TABLE_NAME}` (`accountId`, `folder`, `uid`)"
           }
         ]
       },
@@ -654,7 +665,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c064a4da054e0f98b4688ea2d04ecaec')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e4f7ef1e0d780324d6eec3efced768ae')"
     ]
   }
 }
