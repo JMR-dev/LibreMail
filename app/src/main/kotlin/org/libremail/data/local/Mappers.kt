@@ -8,6 +8,7 @@ import org.libremail.data.local.entity.AccountSettingsEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
+import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.OutboxEntity
@@ -26,6 +27,7 @@ import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.SmtpParams
+import org.libremail.domain.model.UnreadCount
 import org.libremail.mail.AttachmentPart
 import org.libremail.mail.FetchedFolder
 import org.libremail.mail.FetchedMessage
@@ -166,6 +168,12 @@ internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEn
     selectable = selectable,
     sortOrder = sortOrder,
     specialUse = FolderRole.isServerSpecial(attributes),
+)
+
+internal fun FolderUnreadCount.toDomain(): UnreadCount = UnreadCount(
+    accountId = accountId,
+    folder = folder,
+    count = unreadCount,
 )
 
 internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
