@@ -29,6 +29,12 @@ enum class MailProvider(
     val displayName: String,
     /** The page where the user creates an app password for this provider. */
     val appPasswordHelpUrl: String,
+    /**
+     * Setup instructions for the provider's two-factor prerequisite, or null when there isn't one.
+     * Only Gmail refuses to create app passwords until 2-Step Verification is on, so only Gmail
+     * links its setup article; Yahoo and iCloud gate nothing on it.
+     */
+    val twoFactorHelpUrl: String? = null,
     private val imapHost: String,
     private val smtpHost: String,
     private val smtpPort: Int,
@@ -38,6 +44,9 @@ enum class MailProvider(
         key = "gmail",
         displayName = "Gmail",
         appPasswordHelpUrl = "https://myaccount.google.com/apppasswords",
+        // Google's "Turn on 2-Step Verification" article — the app-passwords page above bounces
+        // accounts that haven't enabled it yet, so the setup screen offers this as a way out.
+        twoFactorHelpUrl = "https://support.google.com/accounts/answer/185839",
         imapHost = "imap.gmail.com",
         smtpHost = "smtp.gmail.com",
         // Google documents smtp.gmail.com:587 with STARTTLS as the standard submission endpoint.

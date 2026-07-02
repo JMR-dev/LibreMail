@@ -21,12 +21,12 @@ import org.libremail.data.local.entity.MessageEntity
  *
  * These queries *define* the device-only retention floor — the pruner deletes below it
  * ([MessageDao.syncedIdsBeyondCountInFolder] / [MessageDao.syncedIdsOlderThan]) and the backfiller
- * stops above it ([MessageDao.lowestSyncedUid] / [MessageDao.countSynced] /
- * [MessageDao.oldestSyncedTimestamp]) — so the whole "backfill and prune never fight over the same
- * rows" guarantee rests on their SQL. The [org.libremail.data.sync.MailPruner] /
- * [org.libremail.data.sync.MailBackfiller] unit tests mock the DAO, so the `ORDER BY … DESC LIMIT`
- * newest-N selection, the strict age cutoff, and the windowed reconcile that spares backfilled history
- * are exercised here against a real database instead.
+ * pages and stops around it ([MessageDao.lowestSyncedUid] / [MessageDao.countSynced]) — so the whole
+ * "backfill and prune never fight over the same rows" guarantee rests on their SQL. The
+ * [org.libremail.data.sync.MailPruner] / [org.libremail.data.sync.MailBackfiller] unit tests mock
+ * the DAO, so the `ORDER BY … DESC LIMIT` newest-N selection, the strict age cutoff, and the
+ * windowed reconcile that spares backfilled history are exercised here against a real database
+ * instead.
  */
 @RunWith(AndroidJUnit4::class)
 class MessageDaoRetentionTest {
@@ -153,6 +153,9 @@ class MessageDaoRetentionTest {
     /**
      * The backfiller's floor probes reflect only an account's synced rows in the given folder, and are
      * null/zero for a folder with nothing cached (so the backfiller then starts from `Long.MAX_VALUE`).
+     * The paging boundary additionally skips `uid <= 0` placeholder rows (#95): a row migrated before
+     * the `uid` column existed (backfilled to 0) or one whose UID the server failed to resolve (-1)
+     * must not collapse MIN(uid) to a bound the backfiller treats as "folder fully paged".
      */
     @Test
     fun floorProbesReflectOnlySyncedRowsInTheFolder() = runBlocking {
@@ -160,18 +163,22 @@ class MessageDaoRetentionTest {
             listOf(
                 message("a", uid = 30, timestampMillis = 300),
                 message("d", uid = 10, timestampMillis = 100),
+                message("legacy", uid = 0, timestampMillis = 40), // pre-uid-column migration row (#95)
+                message("unresolved", uid = -1, timestampMillis = 30), // UIDFolder.getUID failure (#95)
                 message("search", uid = 1, timestampMillis = 1, inInbox = false), // excluded
                 message("archive", uid = 5, timestampMillis = 50, folder = "Archive"), // different folder
             ),
         )
 
         assertEquals(10L, dao.lowestSyncedUid("acct", "INBOX"))
-        assertEquals(2, dao.countSynced("acct", "INBOX"))
-        assertEquals(100L, dao.oldestSyncedTimestamp("acct", "INBOX"))
+        assertEquals(4, dao.countSynced("acct", "INBOX"))
 
         assertNull(dao.lowestSyncedUid("acct", "Nonexistent"))
         assertEquals(0, dao.countSynced("acct", "Nonexistent"))
-        assertNull(dao.oldestSyncedTimestamp("acct", "Nonexistent"))
+
+        // A folder holding ONLY placeholder rows has no usable boundary: null (start from the top).
+        dao.insertNew(listOf(message("only-legacy", uid = 0, folder = "Imported")))
+        assertNull(dao.lowestSyncedUid("acct", "Imported"))
     }
 
     /** Backfill / prune enumerate their targets via [syncedFolders]: distinct synced folders, per account. */
