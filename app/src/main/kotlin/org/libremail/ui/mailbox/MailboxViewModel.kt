@@ -28,6 +28,7 @@ import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
+import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
@@ -86,6 +87,28 @@ class MailboxViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Live unread counts across every account, shared by the two drawer indicators below so the
+     * underlying `COUNT` query is collected once no matter how many observers derive from it.
+     */
+    private val unreadCounts: StateFlow<List<UnreadCount>> = mailRepository.observeUnreadCounts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** #83: unread-message count keyed by folder full name for the drawer account (absent = none). */
+    val folderUnreadCounts: StateFlow<Map<String, Int>> =
+        combine(drawerAccount, unreadCounts) { account, counts ->
+            if (account == null) {
+                emptyMap()
+            } else {
+                counts.filter { it.accountId == account.id }.associate { it.folder to it.count }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** #84: ids of accounts that currently have unread mail in any folder. */
+    val accountsWithUnread: StateFlow<Set<String>> = unreadCounts
+        .map { counts -> counts.filter { it.count > 0 }.map { it.accountId }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     private val _searchActive = MutableStateFlow(false)
     val searchActive: StateFlow<Boolean> = _searchActive.asStateFlow()

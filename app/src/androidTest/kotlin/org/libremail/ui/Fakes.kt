@@ -14,6 +14,7 @@ import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
+import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import java.io.File
@@ -72,6 +73,7 @@ class FakeMailRepository(
     private val folders: List<Folder> = emptyList(),
     private val attachments: List<Attachment> = emptyList(),
     private val downloadedParts: Set<Int> = emptySet(),
+    private val unreadCounts: List<UnreadCount> = emptyList(),
 ) : MailRepository {
 
     val sentMessages = mutableListOf<OutgoingMessage>()
@@ -92,6 +94,8 @@ class FakeMailRepository(
                 accountId
         },
     )
+
+    override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(unreadCounts)
 
     override suspend fun refreshFolders(accountId: String): Result<Unit> = Result.success(Unit)
 
