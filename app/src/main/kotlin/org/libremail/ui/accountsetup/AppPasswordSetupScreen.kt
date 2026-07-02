@@ -151,23 +151,23 @@ fun AppPasswordSetupScreen(
             )
 
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = { openUrl(provider.appPasswordHelpUrl) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.app_password_open_page, provider.displayName))
-            }
             // Only Gmail has a two-factor prerequisite (see MailProvider.twoFactorHelpUrl): its
-            // app-passwords page rejects accounts without 2-Step Verification, so give those users
-            // a way to set it up instead of a dead end.
+            // app-passwords page rejects accounts without 2-Step Verification, so point users
+            // there first instead of sending them to the app-passwords page's dead end.
             provider.twoFactorHelpUrl?.let { twoFactorHelpUrl ->
-                Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { openUrl(twoFactorHelpUrl) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.app_password_2fa_help))
                 }
+                Spacer(Modifier.height(8.dp))
+            }
+            OutlinedButton(
+                onClick = { openUrl(provider.appPasswordHelpUrl) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.app_password_open_page, provider.displayName))
             }
 
             Spacer(Modifier.height(20.dp))
