@@ -80,6 +80,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import kotlinx.coroutines.launch
 import org.libremail.R
 import org.libremail.domain.model.Account
@@ -102,6 +105,8 @@ fun MailboxScreen(
     viewModel: MailboxViewModel = hiltViewModel(),
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    // The unified "All inboxes" browse list is paged (issue #124); per-account/search render [messages].
+    val pagedMessages = viewModel.pagedMessages.collectAsLazyPagingItems()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
@@ -123,6 +128,10 @@ fun MailboxScreen(
     val moveTargetFolders by viewModel.moveTargetFolders.collectAsStateWithLifecycle()
     val actionInProgress by viewModel.actionInProgress.collectAsStateWithLifecycle()
     val selectionMode = selectedIds.isNotEmpty()
+    // The unified inbox (no account filter, not searching) renders the paged list; a concrete account
+    // or an active search renders the flat [messages] list. Hoisted here so the selection bar's
+    // "Select all" can read the right source (issue #124).
+    val showPaged = selectedAccountId == null && searchQuery.isBlank()
     var showMovePicker by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -187,7 +196,13 @@ fun MailboxScreen(
                         onDelete = viewModel::requestDelete,
                         onSpam = viewModel::requestSpam,
                         onMove = { showMovePicker = true },
-                        onSelectAll = viewModel::selectAll,
+                        onSelectAll = {
+                            // "Select all" acts on what's shown: the loaded paged window for the unified
+                            // inbox, or the whole flat list for a per-account/search view.
+                            viewModel.selectAll(
+                                if (showPaged) pagedMessages.itemSnapshotList.items else messages,
+                            )
+                        },
                         onReply = { viewModel.reply(ReplyMode.REPLY) },
                         onReplyAll = viewModel::requestReplyAll,
                         onForward = { viewModel.reply(ReplyMode.FORWARD) },
@@ -278,7 +293,42 @@ fun MailboxScreen(
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                if (messages.isEmpty()) {
+                                if (showPaged) {
+                                    if (pagedMessages.itemCount == 0) {
+                                        item {
+                                            // Hold the empty state back until the first page settles so
+                                            // it doesn't flash before rows arrive (search never lands here).
+                                            if (pagedMessages.loadState.refresh !is LoadState.Loading) {
+                                                NoMessagesState(Modifier.fillParentMaxSize())
+                                            }
+                                        }
+                                    } else {
+                                        items(
+                                            count = pagedMessages.itemCount,
+                                            key = pagedMessages.itemKey { it.id },
+                                        ) { index ->
+                                            val message = pagedMessages[index] ?: return@items
+                                            val accountLabel =
+                                                if (showAccount) accountsById[message.accountId]?.email else null
+                                            MessageRow(
+                                                message = message,
+                                                accountLabel = accountLabel,
+                                                selected = message.id in selectedIds,
+                                                onClick = {
+                                                    if (selectionMode) {
+                                                        viewModel.toggleSelection(message.id, message.accountId)
+                                                    } else {
+                                                        onOpenMessage(message.id)
+                                                    }
+                                                },
+                                                onLongClick = {
+                                                    viewModel.startSelection(message.id, message.accountId)
+                                                },
+                                            )
+                                            HorizontalDivider()
+                                        }
+                                    }
+                                } else if (messages.isEmpty()) {
                                     item {
                                         if (searchActive && searchQuery.isNotBlank()) {
                                             NoResultsState(Modifier.fillParentMaxSize())
@@ -296,12 +346,12 @@ fun MailboxScreen(
                                             selected = message.id in selectedIds,
                                             onClick = {
                                                 if (selectionMode) {
-                                                    viewModel.toggleSelection(message.id)
+                                                    viewModel.toggleSelection(message.id, message.accountId)
                                                 } else {
                                                     onOpenMessage(message.id)
                                                 }
                                             },
-                                            onLongClick = { viewModel.startSelection(message.id) },
+                                            onLongClick = { viewModel.startSelection(message.id, message.accountId) },
                                         )
                                         HorizontalDivider()
                                     }

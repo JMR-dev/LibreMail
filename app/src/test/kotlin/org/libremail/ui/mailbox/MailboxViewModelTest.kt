@@ -2,6 +2,7 @@
 package org.libremail.ui.mailbox
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.paging.PagingData
 import app.cash.turbine.test
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -53,7 +54,7 @@ class MailboxViewModelTest {
     private val bob = account("imap:b", "bob@example.org")
 
     @Test
-    fun `default view shows only inbox messages across all accounts`() = runTest(testDispatcher) {
+    fun `unified browse keeps the whole inbox out of the in-memory list flow`() = runTest(testDispatcher) {
         val vm = createViewModel(
             accounts = listOf(alice, bob),
             messages = listOf(
@@ -66,7 +67,24 @@ class MailboxViewModelTest {
 
         assertEquals("INBOX", vm.selectedFolder.value)
         assertNull(vm.selectedAccountId.value)
-        assertEquals(setOf("imap:a:INBOX:1", "imap:b:INBOX:1"), vm.messages.value.map { it.id }.toSet())
+        // Unified browse is paged (issue #124): the flat list flow stays empty so the whole unified
+        // inbox is never materialized on every write. The paged rows themselves are covered by
+        // MailRepositoryImplTest's pagedUnifiedFolderMessages test and the MailboxScreen UI test.
+        assertTrue(vm.messages.value.isEmpty())
+    }
+
+    @Test
+    fun `selecting a concrete account renders the flat scoped list`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice),
+            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:a:Archive:1", "imap:a", "Archive")),
+        )
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.selectAccount("imap:a")
+
+        // A concrete account uses the SQL-scoped, already-flat list (issue #86), not the paged path.
+        assertEquals(listOf("imap:a:INBOX:1"), vm.messages.value.map { it.id })
     }
 
     @Test
@@ -200,11 +218,11 @@ class MailboxViewModelTest {
     fun `toggle adds then removes a message from the selection`() = runTest(testDispatcher) {
         val vm = createViewModel(accounts = listOf(alice), messages = emptyList())
 
-        vm.startSelection("a")
+        vm.startSelection("a", "acct")
         assertEquals(setOf("a"), vm.selectedIds.value)
-        vm.toggleSelection("b")
+        vm.toggleSelection("b", "acct")
         assertEquals(setOf("a", "b"), vm.selectedIds.value)
-        vm.toggleSelection("a")
+        vm.toggleSelection("a", "acct")
         assertEquals(setOf("b"), vm.selectedIds.value)
         vm.clearSelection()
         assertTrue(vm.selectedIds.value.isEmpty())
@@ -212,13 +230,11 @@ class MailboxViewModelTest {
 
     @Test
     fun `selectAll selects every visible message`() = runTest(testDispatcher) {
-        val vm = createViewModel(
-            accounts = listOf(alice),
-            messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:a:INBOX:2", "imap:a", "INBOX")),
-        )
-        backgroundScope.launch { vm.messages.collect {} }
+        val shown = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:a:INBOX:2", "imap:a", "INBOX"))
+        val vm = createViewModel(accounts = listOf(alice), messages = shown)
 
-        vm.selectAll()
+        // The screen passes what's shown (paged snapshot or flat list); the VM records their ids.
+        vm.selectAll(shown)
 
         assertEquals(setOf("imap:a:INBOX:1", "imap:a:INBOX:2"), vm.selectedIds.value)
     }
@@ -234,7 +250,7 @@ class MailboxViewModelTest {
         )
         backgroundScope.launch { vm.messages.collect {} }
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.requestDelete()
         val pending = vm.pendingConfirm.value
         assertTrue(pending is PendingAction.Delete && !pending.permanent)
@@ -265,7 +281,7 @@ class MailboxViewModelTest {
         backgroundScope.launch { vm.currentFolderRole.collect {} }
         vm.selectFolder("imap:a", "Spam")
 
-        vm.startSelection("imap:a:Spam:1")
+        vm.startSelection("imap:a:Spam:1", "imap:a")
         vm.requestDelete()
         val pending = vm.pendingConfirm.value
         assertTrue(pending is PendingAction.Delete && pending.permanent)
@@ -285,7 +301,7 @@ class MailboxViewModelTest {
             repo = repo,
         )
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.requestSpam()
         assertTrue(vm.pendingConfirm.value is PendingAction.Spam)
         coVerify(exactly = 0) { repo.reportSpam(any()) }
@@ -304,7 +320,7 @@ class MailboxViewModelTest {
             repo = repo,
         )
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.reply(ReplyMode.FORWARD)
 
         assertEquals(MailboxEvent.OpenCompose("draft1"), vm.events.first())
@@ -321,7 +337,7 @@ class MailboxViewModelTest {
             repo = repo,
         )
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.archiveSelected()
 
         coVerify { repo.archive(listOf("imap:a:INBOX:1")) }
@@ -338,7 +354,7 @@ class MailboxViewModelTest {
             repo = repo,
         )
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.reply(ReplyMode.REPLY)
 
         assertEquals(MailboxEvent.OpenCompose("d2"), vm.events.first())
@@ -352,7 +368,7 @@ class MailboxViewModelTest {
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
             repo = repo,
         )
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
 
         vm.requestSpam()
         vm.dismissConfirm()
@@ -371,10 +387,10 @@ class MailboxViewModelTest {
         backgroundScope.launch { vm.messages.collect {} }
         backgroundScope.launch { vm.canMove.collect {} }
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         assertEquals(true, vm.canMove.value)
 
-        vm.toggleSelection("imap:b:INBOX:1")
+        vm.toggleSelection("imap:b:INBOX:1", "imap:b")
         assertEquals(false, vm.canMove.value)
     }
 
@@ -388,7 +404,7 @@ class MailboxViewModelTest {
             repo = repo,
         )
 
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.moveSelected("Receipts")
 
         coVerify { repo.moveToFolder(listOf("imap:a:INBOX:1"), "Receipts") }
@@ -404,7 +420,7 @@ class MailboxViewModelTest {
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
             repo = repo,
         )
-        vm.startSelection("imap:a:INBOX:1")
+        vm.startSelection("imap:a:INBOX:1", "imap:a")
 
         vm.requestReplyAll()
         assertTrue(vm.pendingConfirm.value is PendingAction.ReplyAll)
@@ -492,6 +508,12 @@ class MailboxViewModelTest {
         every { repo.observeUnifiedFolderMessages(any()) } answers {
             val folder = firstArg<String>()
             MutableStateFlow(messages.filter { it.folder == folder })
+        }
+        // The unified browse list is paged (issue #124); mirror the DAO's inInbox-scoped, folder-scoped
+        // projection as a single static page.
+        every { repo.pagedUnifiedFolderMessages(any()) } answers {
+            val folder = firstArg<String>()
+            flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
         }
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())

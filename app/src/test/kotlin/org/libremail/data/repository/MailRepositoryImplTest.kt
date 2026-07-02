@@ -2,6 +2,9 @@
 package org.libremail.data.repository
 
 import android.content.Context
+import androidx.paging.PagingSource
+import androidx.paging.PagingState
+import androidx.paging.testing.asSnapshot
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -103,6 +106,20 @@ class MailRepositoryImplTest {
             assertEquals(1, awaitItem().size)
             awaitComplete()
         }
+    }
+
+    @Test
+    fun `pagedUnifiedFolderMessages maps the paged summaries to domain messages`() = runTest {
+        every { messageDao.pagingUnifiedFolderSummaries("INBOX") } returns FakeSummaryPagingSource(
+            listOf(messageSummary("1", "INBOX"), messageSummary("2", "INBOX", accountId = "acct2")),
+        )
+
+        val items = repository.pagedUnifiedFolderMessages("INBOX").asSnapshot()
+
+        assertEquals(listOf("1", "2"), items.map { it.id })
+        assertEquals("Ada", items.first().sender)
+        // The list projection never carries a body — the reader loads it on demand (see MessageSummary).
+        assertEquals("", items.first().body)
     }
 
     @Test
@@ -604,4 +621,12 @@ class MailRepositoryImplTest {
         secret = "secret",
         useXoauth2 = false,
     )
+
+    /** Serves a fixed set of summaries as a single page, standing in for Room's generated source. */
+    private class FakeSummaryPagingSource(private val rows: List<MessageSummary>) :
+        PagingSource<Int, MessageSummary>() {
+        override fun getRefreshKey(state: PagingState<Int, MessageSummary>): Int? = null
+        override suspend fun load(params: LoadParams<Int>): LoadResult<Int, MessageSummary> =
+            LoadResult.Page(data = rows, prevKey = null, nextKey = null)
+    }
 }
