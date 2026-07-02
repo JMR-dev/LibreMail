@@ -27,7 +27,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.libremail.R
@@ -37,13 +41,17 @@ import org.libremail.domain.model.FolderRole
 
 /**
  * The navigation drawer's contents: an optional account switcher and "All Inboxes" entry (only with
- * 2+ accounts), then the drawer account's folders — standard folders (Inbox, Sent, …) first.
+ * 2+ accounts), then the drawer account's folders — standard folders (Inbox, Sent, …) first. Each
+ * folder shows its unread count as a trailing badge ([folderUnreadCounts]), and accounts with unread
+ * mail ([accountsWithUnread]) render their email in bold.
  */
 @Composable
 fun FolderDrawer(
     accounts: List<Account>,
     drawerAccount: Account?,
     folders: List<Folder>,
+    folderUnreadCounts: Map<String, Int>,
+    accountsWithUnread: Set<String>,
     selectedAccountId: String?,
     selectedFolder: String,
     onSelectUnifiedInbox: () -> Unit,
@@ -63,7 +71,7 @@ fun FolderDrawer(
         )
 
         if (accounts.size >= 2 && drawerAccount != null) {
-            AccountSwitcher(accounts, drawerAccount, onSelectDrawerAccount)
+            AccountSwitcher(accounts, drawerAccount, accountsWithUnread, onSelectDrawerAccount)
             NavigationDrawerItem(
                 label = { Text(stringResource(R.string.folder_all_inboxes)) },
                 icon = { Icon(Icons.Filled.Email, contentDescription = null) },
@@ -87,9 +95,15 @@ fun FolderDrawer(
             val iconContent: (@Composable () -> Unit)? = folderIcon(folder.role)?.let { vector ->
                 { Icon(vector, contentDescription = null) }
             }
+            val unread = folderUnreadCounts[folder.fullName] ?: 0
             NavigationDrawerItem(
                 label = { Text(resolvedLabels[folder.fullName] ?: folderDisplayLabel(folder)) },
                 icon = iconContent,
+                badge = if (unread > 0) {
+                    { UnreadBadgeLabel(unread) }
+                } else {
+                    null
+                },
                 selected = isSelected,
                 onClick = {
                     if (folder.selectable && drawerAccount != null) {
@@ -103,19 +117,34 @@ fun FolderDrawer(
 }
 
 @Composable
-private fun AccountSwitcher(accounts: List<Account>, current: Account, onSelect: (String) -> Unit) {
+private fun AccountSwitcher(
+    accounts: List<Account>,
+    current: Account,
+    accountsWithUnread: Set<String>,
+    onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     TextButton(
         onClick = { expanded = true },
         modifier = Modifier.padding(horizontal = 16.dp),
     ) {
-        Text(current.email, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            current.email,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontWeight = if (current.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
+        )
         Icon(Icons.Filled.ArrowDropDown, contentDescription = stringResource(R.string.drawer_switch_account))
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         accounts.forEach { account ->
             DropdownMenuItem(
-                text = { Text(account.email) },
+                text = {
+                    Text(
+                        account.email,
+                        fontWeight = if (account.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
+                    )
+                },
                 onClick = {
                     onSelect(account.id)
                     expanded = false
@@ -123,6 +152,29 @@ private fun AccountSwitcher(accounts: List<Account>, current: Account, onSelect:
             )
         }
     }
+}
+
+/** Cap for a folder's visible unread badge; higher counts render as "99+" to keep the row compact. */
+private const val UNREAD_BADGE_CAP = 99
+
+/**
+ * A folder row's trailing unread-count badge. The visible label is capped at [UNREAD_BADGE_CAP] as
+ * "99+" so a large count can't blow out the row, while the semantics announce the exact count as
+ * "N unread messages" (overriding the terse glyph) for screen readers.
+ */
+@Composable
+private fun UnreadBadgeLabel(count: Int) {
+    val display = if (count > UNREAD_BADGE_CAP) {
+        stringResource(R.string.folder_unread_overflow)
+    } else {
+        count.toString()
+    }
+    val description = pluralStringResource(R.plurals.folder_unread_count_description, count, count)
+    Text(
+        text = display,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.clearAndSetSemantics { contentDescription = description },
+    )
 }
 
 /**

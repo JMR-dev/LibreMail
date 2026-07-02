@@ -68,6 +68,13 @@
     <string name="folder_archive">Archive</string>
     <string name="folder_spam">Spam</string>
     <string name="folder_trash">Trash</string>
+    <!-- Unread badge shown after a folder name; caps very large counts. -->
+    <string name="folder_unread_overflow">99+</string>
+    <!-- Screen-reader description for a folder's unread badge, e.g. "12 unread messages". -->
+    <plurals name="folder_unread_count_description">
+        <item quantity="one">%1$d unread message</item>
+        <item quantity="other">%1$d unread messages</item>
+    </plurals>
 
     <!-- Compose -->
     <string name="compose_from">From</string>
@@ -152,6 +159,7 @@
     <string name="app_password_what_is">An app password is a one-off password that lets an app sign in to your account without your main password or a two-factor code.</string>
     <string name="app_password_warning">Store this app password carefully — it grants full access to your email. LibreMail keeps it only on this device.</string>
     <string name="app_password_open_page">Create an app password for %1$s</string>
+    <string name="app_password_2fa_help">How to turn on 2-Step Verification</string>
     <string name="app_password_open_failed">Couldn\'t open your browser</string>
     <string name="app_password_email">Email address</string>
     <string name="app_password_field">App password</string>

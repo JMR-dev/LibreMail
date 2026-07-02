@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
+import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.MessageSummary
 
@@ -22,6 +23,19 @@ interface MessageDao {
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages ORDER BY timestampMillis DESC",
     )
     fun observeSummaries(): Flow<List<MessageSummary>>
+
+    /**
+     * Live per-(account, folder) unread counts for the drawer's folder badges and the bold styling of
+     * accounts with unread mail. Counts only folder-synced rows (`inInbox = 1`), so transient
+     * server-search hits never inflate a badge; read rows and folders with no unread mail are simply
+     * absent from the result. A pure `COUNT(*)` aggregate — no message rows are pulled into memory —
+     * whose `GROUP BY accountId, folder` is served by the existing `(accountId, folder, uid)` index.
+     */
+    @Query(
+        "SELECT accountId, folder, COUNT(*) AS unreadCount FROM messages " +
+            "WHERE inInbox = 1 AND isRead = 0 GROUP BY accountId, folder",
+    )
+    fun observeUnreadCounts(): Flow<List<FolderUnreadCount>>
 
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
@@ -104,20 +118,24 @@ interface MessageDao {
     )
     suspend fun deleteSyncedInWindowNotIn(accountId: String, folder: String, minWindowUid: Long, keepIds: List<String>)
 
-    /** Lowest cached UID among an account's synced rows in [folder] — the backfill boundary. Null if none. */
-    @Query("SELECT MIN(uid) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    /**
+     * Lowest cached *resolved* UID among an account's synced rows in [folder] — the backfill
+     * boundary. Placeholder rows with `uid <= 0` (a row migrated before the `uid` column existed, or
+     * a fetch where the server failed to resolve the UID) are excluded: letting one collapse
+     * MIN(uid) to `<= 0` would make the backfiller page below a bound `fetchOlderThan` treats as
+     * "nothing older", falsely marking the folder fully backfilled (#95, matching the
+     * `minWindowUid` guard in MailSyncer). Null when no resolved-UID row exists, in which case
+     * backfill starts over from the newest message.
+     */
+    @Query(
+        "SELECT MIN(uid) FROM messages WHERE accountId = :accountId AND folder = :folder " +
+            "AND inInbox = 1 AND uid > 0",
+    )
     suspend fun lowestSyncedUid(accountId: String, folder: String): Long?
 
     /** Number of an account's synced rows in [folder] (count-based retention floor / prune sizing). */
     @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
     suspend fun countSynced(accountId: String, folder: String): Int
-
-    /** Oldest cached timestamp among an account's synced rows in [folder] (age-based retention floor). Null if none. */
-    @Query(
-        "SELECT MIN(timestampMillis) FROM messages " +
-            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1",
-    )
-    suspend fun oldestSyncedTimestamp(accountId: String, folder: String): Long?
 
     /** Distinct folders that have at least one synced row for [accountId] (backfill/prune targets). */
     @Query("SELECT DISTINCT folder FROM messages WHERE accountId = :accountId AND inInbox = 1")

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.sync
 
-import android.content.Context
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -10,15 +9,20 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+import javax.inject.Provider
 import javax.inject.Singleton
 
 /** Schedules background mail sync, full-history backfill, and retention pruning via WorkManager. */
 @Singleton
-class SyncScheduler @Inject constructor(@ApplicationContext private val context: Context) {
-    private val workManager get() = WorkManager.getInstance(context)
+class SyncScheduler @Inject constructor(
+    // A Provider (not the WorkManager itself) so WorkManager.getInstance() is resolved lazily at
+    // schedule time — never during Hilt's Application field injection, which can run before the
+    // HiltWorkerFactory that on-demand WorkManager initialization needs is set.
+    private val workManagerProvider: Provider<WorkManager>,
+) {
+    private val workManager get() = workManagerProvider.get()
 
     private val networkConstraint = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -41,7 +45,7 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
         val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
             .setConstraints(networkConstraint)
             .build()
-        workManager.enqueueUniquePeriodicWork(PERIODIC_WORK, ExistingPeriodicWorkPolicy.KEEP, request)
+        workManager.enqueueUniquePeriodicWork(PERIODIC_WORK, PERIODIC_POLICY, request)
     }
 
     /** One-shot sync, e.g. right after an account is added. */
@@ -55,13 +59,13 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
 
     /**
      * Periodic full-history backfill (issue #12). Each run pages a bounded slice and persists its
-     * boundary, so history fills in over successive runs; KEEP preserves an already-scheduled cadence.
+     * boundary, so history fills in over successive runs.
      */
     fun schedulePeriodicBackfill() {
         val request = PeriodicWorkRequestBuilder<BackfillWorker>(30, TimeUnit.MINUTES)
             .setConstraints(backfillConstraint)
             .build()
-        workManager.enqueueUniquePeriodicWork(PERIODIC_BACKFILL, ExistingPeriodicWorkPolicy.KEEP, request)
+        workManager.enqueueUniquePeriodicWork(PERIODIC_BACKFILL, PERIODIC_POLICY, request)
     }
 
     /** Kicks an immediate backfill slice (e.g. just after an account is added) without waiting for the cadence. */
@@ -79,7 +83,7 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
         val request = PeriodicWorkRequestBuilder<PruneWorker>(12, TimeUnit.HOURS)
             .setConstraints(pruneConstraint)
             .build()
-        workManager.enqueueUniquePeriodicWork(PERIODIC_PRUNE, ExistingPeriodicWorkPolicy.KEEP, request)
+        workManager.enqueueUniquePeriodicWork(PERIODIC_PRUNE, PERIODIC_POLICY, request)
     }
 
     /** Runs pruning promptly, e.g. right after the user tightens a retention limit. */
@@ -95,5 +99,13 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
         const val ONESHOT_BACKFILL = "libremail_oneshot_backfill"
         const val PERIODIC_PRUNE = "libremail_periodic_prune"
         const val ONESHOT_PRUNE = "libremail_oneshot_prune"
+
+        // UPDATE, not KEEP (issue #96). These periodic jobs are re-enqueued at every app start, so KEEP
+        // pinned an already-installed device to the interval/constraints from the version that first
+        // scheduled it — later tuning never reached upgraders. UPDATE re-applies the current spec while
+        // preserving the running period's progress: an unchanged spec is effectively a no-op, so this
+        // does NOT reset the schedule on launch the way REPLACE (cancel + re-enqueue) would. UPDATE is
+        // available since WorkManager 2.8.
+        val PERIODIC_POLICY = ExistingPeriodicWorkPolicy.UPDATE
     }
 }

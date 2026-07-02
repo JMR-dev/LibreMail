@@ -34,6 +34,7 @@ import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
@@ -41,6 +42,7 @@ import java.util.Date
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -221,11 +223,131 @@ class MailBackfillerTest {
         coVerify(atLeast = 1) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
     }
 
-    /** Builds a backfiller wired to GreenMail with the in-memory fakes and the given account settings. */
+    /**
+     * Regression for #94: backfill pages by UID (arrival order) while the age floor cuts by the Date
+     * header. A single message with a HIGH UID but an OLD Date (mail moved/imported into the folder)
+     * used to drag the oldest cached timestamp below the cutoff and stop paging after zero pages,
+     * silently gapping every older-UID message whose Date is still within retention. The floor must
+     * instead be decided from the pages actually fetched.
+     */
+    @Test
+    fun `a high-UID old-Date message must not stop the age floor while history is unfetched`() = runTest {
+        val now = System.currentTimeMillis()
+        // UIDs 1..20: genuinely old (~8 months). UIDs 21..99: within retention, Dates ascending with
+        // UID. UID 100: a recent arrival whose Date header is 8 months old — the Date/UID inversion —
+        // which lands inside the seeded foreground window.
+        val old = (1..20).map { now - 8 * MONTH_MILLIS - it * DAY_MILLIS }
+        val recent = (1..79).map { now - (80 - it) * DAY_MILLIS }
+        val inverted = listOf(now - 8 * MONTH_MILLIS)
+        appendMessages(old + recent + inverted)
+        seedForegroundWindow()
+
+        val backfiller = backfiller(AccountSettings("acct", retentionMonths = 6))
+        var guard = 0
+        while (backfiller.runBackfill() && guard++ < 10) { /* drive to completion */ }
+
+        val cutoff = now - 6 * MONTH_MILLIS
+        assertEquals(
+            recent.size,
+            cached.count { it.timestampMillis >= cutoff },
+            "every within-retention message must be cached — no silent history gap",
+        )
+        assertEquals(true, progress["acct" to "INBOX"]?.complete, "paging still terminates at the floor")
+        assertNoDeletes()
+    }
+
+    /**
+     * The flip side of the page-based age floor (#94): a page ENTIRELY older than the cutoff ends
+     * paging — the folder is marked complete without caching that page, which is pure prune-fodder
+     * (persisting it would just make the pruner delete it again, the #12/#13 churn the sticky floor
+     * exists to prevent).
+     */
+    @Test
+    fun `an entirely-old page ends age paging without caching beyond the floor`() = runTest {
+        val now = System.currentTimeMillis()
+        // UIDs 1..50 are ~8 months old; UIDs 51..100 are within retention and fill the whole window.
+        val old = (1..50).map { now - 8 * MONTH_MILLIS - (51 - it) * DAY_MILLIS }
+        val recent = (1..50).map { now - (51 - it) * DAY_MILLIS }
+        appendMessages(old + recent)
+        seedForegroundWindow()
+
+        backfiller(AccountSettings("acct", retentionMonths = 6)).runBackfill()
+
+        assertEquals(true, progress["acct" to "INBOX"]?.complete, "one entirely-old page ends the folder")
+        assertEquals(0, totalOffered, "the beyond-the-floor page must not be cached")
+        val cutoff = now - 6 * MONTH_MILLIS
+        assertTrue(cached.none { it.timestampMillis < cutoff }, "nothing older than the cutoff is cached")
+        assertNoDeletes()
+    }
+
+    /**
+     * Regression for #95: a cached row with `uid = 0` — a row migrated before the `uid` column
+     * existed (MIGRATION_12_13 backfills a non-numeric id tail to 0) — used to collapse MIN(uid) to
+     * 0, and `fetchOlderThan` treats a bound `<= 1` as "nothing older": the folder was marked fully
+     * backfilled after caching NOTHING. The boundary must come from resolved (positive) UIDs only.
+     */
+    @Test
+    fun `a uid 0 placeholder row must not poison the backfill boundary`() = runTest {
+        appendMessages(TOTAL)
+        seedForegroundWindow()
+        // A pre-uid-column row, exactly as MIGRATION_12_13 leaves one whose id tail isn't numeric.
+        cached += cached.first().copy(id = "acct:INBOX:legacy", uid = 0L)
+
+        val backfiller = backfiller(AccountSettings("acct"))
+        var guard = 0
+        while (backfiller.runBackfill() && guard++ < 10) { /* drive to completion */ }
+
+        assertEquals(
+            TOTAL,
+            cached.mapTo(HashSet()) { it.uid }.count { it > 0L },
+            "the placeholder row must not stop backfill from paging the full history",
+        )
+        assertEquals(TOTAL - WINDOW, totalOffered, "each backfilled message fetched exactly once")
+        assertEquals(true, progress["acct" to "INBOX"]?.complete)
+        assertNoDeletes()
+    }
+
+    /**
+     * Regression for #95 (server variant): when every UID on a fetched page is unresolvable
+     * (UIDFolder.getUID returned -1), the boundary must not descend to -1 — the next fetch would come
+     * back empty and the folder would be FALSELY marked fully backfilled. The folder must instead
+     * stall: stay incomplete (retryable on a future run) without claiming immediate more-work (which
+     * would make the worker's slice-chaining loop spin on the same page).
+     */
+    @Test
+    fun `a page of unresolvable UIDs stalls the folder instead of falsely completing it`() = runTest {
+        // One cached window row makes INBOX a backfill target with boundary UID 60.
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } answers {
+            // The real client's contract: a collapsed boundary (<= 1) means "nothing older".
+            if (thirdArg<Long>() <= 1L) emptyList() else listOf(fetchedMessage(uid = "-1"))
+        }
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient).runBackfill()
+
+        assertNotEquals(true, progress["acct" to "INBOX"]?.complete, "the folder must stay retryable")
+        assertFalse(moreWork, "a stalled folder must not spin the worker's slice-chaining loop")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), match { it <= 1L }, any()) }
+    }
+
+    private fun fetchedMessage(uid: String) = FetchedMessage(
+        uid = uid,
+        sender = "Sender",
+        senderEmail = "sender@example.org",
+        subject = "Message $uid",
+        timestampMillis = System.currentTimeMillis(),
+        isRead = false,
+        isFlagged = false,
+    )
+
+    /** Builds a backfiller wired to [imapClient] (GreenMail-backed by default) with the in-memory fakes. */
     private fun backfiller(
         accountSettings: AccountSettings,
         fetchPolicy: FetchPolicy = FetchPolicy.ON_DEMAND,
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
+        imapClient: ImapClient = client,
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(accountEntity)
@@ -241,15 +363,12 @@ class MailBackfillerTest {
         }
         coEvery { messageDao.lowestSyncedUid("acct", any()) } answers {
             val folder = secondArg<String>()
-            cached.filter { it.inInbox && it.folder == folder }.minOfOrNull { it.uid }
+            // Mirrors the real query's `uid > 0` guard (#95): placeholder rows never drive the boundary.
+            cached.filter { it.inInbox && it.folder == folder && it.uid > 0L }.minOfOrNull { it.uid }
         }
         coEvery { messageDao.countSynced("acct", any()) } answers {
             val folder = secondArg<String>()
             cached.count { it.inInbox && it.folder == folder }
-        }
-        coEvery { messageDao.oldestSyncedTimestamp("acct", any()) } answers {
-            val folder = secondArg<String>()
-            cached.filter { it.inInbox && it.folder == folder }.minOfOrNull { it.timestampMillis }
         }
 
         val backfillProgressDao = mockk<BackfillProgressDao>(relaxed = true)
@@ -277,7 +396,7 @@ class MailBackfillerTest {
             accountDao = accountDao,
             messageDao = messageDao,
             backfillProgressDao = backfillProgressDao,
-            imapClient = client,
+            imapClient = imapClient,
             connectionFactory = connectionFactory,
             settingsRepository = settingsRepository,
             accountSettingsRepository = accountSettingsRepository,
