@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Auto-update PR branches
+
+# When main advances, rebase any auto-merge-armed PR that has fallen behind, so the
+# "require branches up to date" branch rule doesn't need manual branch updates. Only PRs
+# with GitHub auto-merge enabled are touched (PR_FILTER: auto_merge) — held/draft PRs are
+# left alone.
+#
+# IMPORTANT: for the branch update to RE-TRIGGER the PR's CI (so it can pass and merge),
+# this must run with a PAT, not the default GITHUB_TOKEN — pushes made by GITHUB_TOKEN do
+# not start new workflow runs (GitHub's anti-recursion rule), so the updated PR would sit
+# with stale checks. Create a fine-grained PAT scoped to this repo with
+# contents:read/write + pull-requests:read/write and add it as the AUTOUPDATE_TOKEN secret.
+# Without it this falls back to GITHUB_TOKEN, which updates the branch but will NOT re-run
+# the PR's checks.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: autoupdate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autoupdate:
+    name: Auto-update armed PRs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update behind PRs that have auto-merge enabled
+        uses: chinthakagodawita/autoupdate@0707656cd062a3b0cf8fa9b2cda1d1404d74437e # v1.7.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_FILTER: "auto_merge"
+          MERGE_CONFLICT_ACTION: "ignore"
