@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.lock
 
+import androidx.activity.compose.LocalActivity
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,14 +15,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
 import org.libremail.data.security.AppLockManager
@@ -38,35 +36,29 @@ import org.libremail.data.security.AppLockManager
 @Composable
 fun AppLockGateHost(viewModel: AppLockViewModel = hiltViewModel(), content: @Composable () -> Unit) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val context = LocalContext.current
-    val activity = context.findFragmentActivity()
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> viewModel.onForeground()
-                Lifecycle.Event.ON_STOP -> viewModel.onBackground()
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onForeground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onBackground() }
+
+    // BiometricPrompt must be hosted by a FragmentActivity; LocalActivity is the hosting Activity.
+    val activity = LocalActivity.current
+    val fragmentActivity = remember(activity) { activity as? FragmentActivity }
 
     val promptTitle = stringResource(R.string.app_lock_prompt_title)
     val promptSubtitle = stringResource(R.string.app_lock_prompt_subtitle)
-    val authenticate: () -> Unit = authenticate@{
-        val host = activity ?: run {
-            viewModel.onAuthError(null)
-            return@authenticate
+    val authenticate: () -> Unit = remember(fragmentActivity, viewModel, promptTitle, promptSubtitle) {
+        authenticate@{
+            val host = fragmentActivity ?: run {
+                viewModel.onAuthError(null)
+                return@authenticate
+            }
+            host.showAppLockPrompt(
+                title = promptTitle,
+                subtitle = promptSubtitle,
+                onSuccess = viewModel::onAuthenticated,
+                onError = { message -> viewModel.onAuthError(message) },
+            )
         }
-        host.showAppLockPrompt(
-            title = promptTitle,
-            subtitle = promptSubtitle,
-            onSuccess = viewModel::onAuthenticated,
-            onError = { message -> viewModel.onAuthError(message) },
-        )
     }
 
     // Once unlocked, keep [content] in the composition across later re-locks so its state (navigation
@@ -148,10 +140,4 @@ private fun FragmentActivity.showAppLockPrompt(
         .setAllowedAuthenticators(AppLockManager.AUTHENTICATORS)
         .build()
     prompt.authenticate(info)
-}
-
-private tailrec fun android.content.Context.findFragmentActivity(): FragmentActivity? = when (this) {
-    is FragmentActivity -> this
-    is android.content.ContextWrapper -> baseContext.findFragmentActivity()
-    else -> null
 }
