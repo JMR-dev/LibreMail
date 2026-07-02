@@ -15,6 +15,14 @@ enum class LockState { LOCKED, UNLOCKED }
  *  - Returning to the foreground within [graceMillis] of backgrounding stays unlocked; after the
  *    grace period it re-locks. Foregrounding without a preceding background (e.g. a configuration
  *    change / rotation) does not re-lock an already-unlocked session.
+ *
+ * Lifetime: provided as an application-scoped singleton (see `SecurityModule`) so the grace window
+ * survives Activity recreation. If this state lived in the Activity-scoped [org.libremail.ui.lock
+ * .AppLockViewModel]'s own field, Back on the task root — which finishes the Activity and clears its
+ * ViewModelStore on API 29/30 — would drop the [backgroundedAt] marker and re-arm a fresh LOCKED gate,
+ * so returning within the grace period would wrongly demand re-auth (unlike leaving via Home). Being
+ * process-scoped, the same instance is reused across recreation, while a genuine cold start (process
+ * death) constructs a fresh one that correctly starts [LockState.LOCKED].
  */
 class AppLockGate(private val graceMillis: Long = DEFAULT_GRACE_MILLIS) {
 
