@@ -293,3 +293,18 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         }
     }
 }
+
+/**
+ * v14 -> v15: persist the server-reported IMAP hierarchy delimiter (issue #66; preserves existing
+ * data). Adds a nullable `hierarchyDelimiter` column to `folders` recording the separator character
+ * the server reported for the folder in its LIST response (e.g. "/" for Gmail, "." for some servers),
+ * so the drawer splits a folder's parent on the authoritative delimiter instead of re-inferring it
+ * from the name. Nullable with no SQL default (the MIGRATION_10_11 `bodyHtml` pattern) so existing
+ * rows read back null and fall back to the legacy inference until the next folder refresh backfills
+ * the real delimiter (`FolderDao.replaceForAccount` re-inserts every folder on each sync).
+ */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `folders` ADD COLUMN `hierarchyDelimiter` TEXT")
+    }
+}

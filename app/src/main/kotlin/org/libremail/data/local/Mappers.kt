@@ -158,6 +158,7 @@ internal fun FolderEntity.toDomain(): Folder = Folder(
     role = runCatching { FolderRole.valueOf(role) }.getOrDefault(FolderRole.NORMAL),
     selectable = selectable,
     specialUse = specialUse,
+    hierarchyDelimiter = hierarchyDelimiter?.firstOrNull(),
 )
 
 internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEntity = FolderEntity(
@@ -168,6 +169,7 @@ internal fun FetchedFolder.toEntity(accountId: String, sortOrder: Int): FolderEn
     selectable = selectable,
     sortOrder = sortOrder,
     specialUse = FolderRole.isServerSpecial(attributes),
+    hierarchyDelimiter = hierarchyDelimiter?.toString(),
 )
 
 internal fun FolderUnreadCount.toDomain(): UnreadCount = UnreadCount(

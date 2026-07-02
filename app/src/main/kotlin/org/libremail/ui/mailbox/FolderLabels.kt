@@ -95,7 +95,7 @@ fun resolveDrawerLabels(
  * to the safety net as a self-referential "Sent [Sent]".
  */
 private fun userFolderLabel(folder: Folder, base: String, parentPattern: String): String {
-    val parent = parentOf(folder.fullName, folder.displayName)
+    val parent = parentOf(folder)
     return when {
         parent != null -> parentPattern.format(base, parent)
         folder.displayName.equals(base, ignoreCase = true) -> base
@@ -104,13 +104,26 @@ private fun userFolderLabel(folder: Folder, base: String, parentPattern: String)
 }
 
 /**
- * The immediate parent segment of [fullName] (its location), or null when the folder is top-level.
- * [displayName] is the leaf, so the character just before it in [fullName] is the server's hierarchy
- * separator and the segment before that is the parent.
+ * The immediate parent segment of [folder]'s path (its location), or null when the folder is
+ * top-level. Splits [Folder.fullName] on the server-reported [Folder.hierarchyDelimiter] so a folder
+ * name that happens to contain a separator-looking character can't be mis-parented (issue #66). For
+ * legacy rows cached before the delimiter was persisted (a null delimiter) it falls back to inferring
+ * the separator as the character immediately before the [Folder.displayName] leaf.
  */
-private fun parentOf(fullName: String, displayName: String): String? {
-    if (fullName.length <= displayName.length || !fullName.endsWith(displayName)) return null
-    val separator = fullName[fullName.length - displayName.length - 1]
-    val parentPath = fullName.substring(0, fullName.length - displayName.length - 1)
+private fun parentOf(folder: Folder): String? {
+    val separator = folder.hierarchyDelimiter
+        ?: inferSeparator(folder.fullName, folder.displayName)
+        ?: return null
+    val parentPath = folder.fullName.substringBeforeLast(separator, missingDelimiterValue = "")
     return parentPath.substringAfterLast(separator).ifEmpty { null }
+}
+
+/**
+ * Legacy fallback separator for rows without a persisted delimiter: the character just before the
+ * [displayName] leaf in [fullName], or null when [displayName] is not a suffix of [fullName] (then
+ * the folder is treated as top-level, exactly as before the delimiter was persisted).
+ */
+private fun inferSeparator(fullName: String, displayName: String): Char? {
+    if (fullName.length <= displayName.length || !fullName.endsWith(displayName)) return null
+    return fullName[fullName.length - displayName.length - 1]
 }
