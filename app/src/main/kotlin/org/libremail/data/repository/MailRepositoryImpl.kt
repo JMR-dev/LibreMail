@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
+import org.libremail.data.Snippet
 import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -84,7 +85,7 @@ class MailRepositoryImpl @Inject constructor(
             val params = connectionFactory.imapParamsFor(account)
             if (!entity.bodyFetched) {
                 val content = imapClient.fetchBodyMarkingSeen(params, entity.folder, uidOf(id))
-                messageDao.updateBody(id, content.body, content.isHtml, snippetOf(content.body))
+                messageDao.updateBody(id, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
                 attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
                 messageDao.setRead(id, true)
             } else if (!entity.isRead) {
@@ -129,7 +130,7 @@ class MailRepositoryImpl @Inject constructor(
         // Cache the body (peek, so prefetching never marks the message read) and its attachment metadata.
         if (!entity.bodyFetched) {
             val content = imapClient.fetchBodyPeek(params, entity.folder, uidOf(messageId))
-            messageDao.updateBody(messageId, content.body, content.isHtml, snippetOf(content.body))
+            messageDao.updateBody(messageId, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
             attachmentDao.replaceForMessage(messageId, content.attachments.map { it.toEntity(messageId) })
         }
         // Auto-download every attachment's bytes into the persistent per-part cache (skips ones present).
@@ -371,10 +372,6 @@ class MailRepositoryImpl @Inject constructor(
 }
 
 private const val SEARCH_LIMIT = 50
-private const val SNIPPET_LENGTH = 140
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
-
-private fun snippetOf(body: String): String =
-    body.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(SNIPPET_LENGTH)

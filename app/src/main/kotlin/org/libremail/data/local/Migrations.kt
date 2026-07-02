@@ -3,6 +3,7 @@ package org.libremail.data.local
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import org.libremail.data.Snippet
 
 /** v1 -> v2: add the encrypted-credentials table (preserves existing accounts/messages). */
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -265,5 +266,30 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
             "CREATE INDEX IF NOT EXISTS `index_messages_accountId_folder_uid` " +
                 "ON `messages` (`accountId`, `folder`, `uid`)",
         )
+    }
+}
+
+/**
+ * v13 -> v14: data-only, no schema change (preserves existing data). Re-derives the persisted
+ * `snippet` of every message with a cached body using [Snippet.of], which — unlike the derivation
+ * it replaces — respects `isHtml`: HTML rows lose leaked `<style>`/`<script>` text and literal
+ * entities, plain-text rows get back any `<...>` text that was wrongly stripped as markup. A
+ * snippet is only derived when a body is first fetched, so without this pass existing rows would
+ * keep their broken snippets forever. Snippets are computed while the cursor streams (bodies are
+ * never all held in memory) and the small id→snippet batch is applied after it closes.
+ */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val updates = mutableListOf<Pair<String, String>>()
+        db.query("SELECT `id`, `body`, `isHtml` FROM `messages` WHERE `bodyFetched` = 1").use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.getString(0)
+                val snippet = Snippet.of(body = cursor.getString(1), isHtml = cursor.getInt(2) != 0)
+                updates += id to snippet
+            }
+        }
+        updates.forEach { (id, snippet) ->
+            db.execSQL("UPDATE `messages` SET `snippet` = ? WHERE `id` = ?", arrayOf(snippet, id))
+        }
     }
 }
