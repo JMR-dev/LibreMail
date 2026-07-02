@@ -79,8 +79,7 @@ fun FolderDrawer(
         }
         // De-duplicate labels: two distinct folders that would render the same name (e.g. a
         // provider's built-in Drafts and a same-named user folder) get disambiguated.
-        val baseLabels = sorted.associate { it.fullName to folderDisplayLabel(it) }
-        val resolvedLabels = resolveDrawerLabels(sorted, baseLabels, drawerAccount?.let(::providerLabel).orEmpty())
+        val resolvedLabels = resolvedFolderLabels(sorted, accounts)
         sorted.forEach { folder ->
             val isSelected = selectedAccountId != null &&
                 selectedAccountId == drawerAccount?.id &&
@@ -124,6 +123,19 @@ private fun AccountSwitcher(accounts: List<Account>, current: Account, onSelect:
             )
         }
     }
+}
+
+/**
+ * De-duplicated display labels for [folders], keyed by [Folder.fullName] — the one resolution used
+ * by the drawer, the move-to picker, and the app-bar title, so a folder reads the same everywhere.
+ * The provider suffix derives from the account owning the listed folders (see [providerLabelFor]),
+ * not from whichever account is currently selected, so a folder list that briefly lags an account
+ * switch never borrows the incoming account's brand.
+ */
+@Composable
+fun resolvedFolderLabels(folders: List<Folder>, accounts: List<Account>): Map<String, String> {
+    val baseLabels = folders.associate { it.fullName to folderDisplayLabel(it) }
+    return resolveDrawerLabels(folders, baseLabels, providerLabelFor(folders, accounts))
 }
 
 /** The user-facing label for a folder: a friendly name for standard roles, else the server name. */

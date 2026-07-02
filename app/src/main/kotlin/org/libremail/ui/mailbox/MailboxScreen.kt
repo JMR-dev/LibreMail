@@ -197,7 +197,10 @@ fun MailboxScreen(
                                 val current = folders.firstOrNull { it.fullName == selectedFolder }
                                 Text(
                                     if (current != null) {
-                                        folderDisplayLabel(current)
+                                        // The drawer's de-duplicated label, so "Drafts - Gmail"
+                                        // doesn't collapse to an ambiguous "Drafts" once opened.
+                                        resolvedFolderLabels(folders, accounts)[current.fullName]
+                                            ?: folderDisplayLabel(current)
                                     } else {
                                         stringResource(R.string.title_mailbox)
                                     },
@@ -315,6 +318,10 @@ fun MailboxScreen(
         if (showMovePicker) {
             MoveFolderDialog(
                 folders = moveTargetFolders.filter { it.selectable && it.fullName != selectedFolder },
+                // Labels resolved against the unfiltered list, so rows keep the drawer's
+                // disambiguation even when a colliding twin (e.g. the current folder) is
+                // filtered out of the picker itself.
+                labels = resolvedFolderLabels(moveTargetFolders, accounts),
                 onSelect = { folder ->
                     showMovePicker = false
                     viewModel.moveSelected(folder.fullName)
@@ -664,7 +671,12 @@ private fun ConfirmActionDialog(pending: PendingAction, onConfirm: () -> Unit, o
 }
 
 @Composable
-private fun MoveFolderDialog(folders: List<Folder>, onSelect: (Folder) -> Unit, onDismiss: () -> Unit) {
+private fun MoveFolderDialog(
+    folders: List<Folder>,
+    labels: Map<String, String>,
+    onSelect: (Folder) -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.move_picker_title)) },
@@ -672,7 +684,7 @@ private fun MoveFolderDialog(folders: List<Folder>, onSelect: (Folder) -> Unit, 
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 folders.forEach { folder ->
                     Text(
-                        text = folderDisplayLabel(folder),
+                        text = labels[folder.fullName] ?: folderDisplayLabel(folder),
                         style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier
                             .fillMaxWidth()

@@ -54,6 +54,18 @@ class MailboxScreenTest {
         smtp = ServerConfig("smtp.example.org", 465, MailSecurity.SSL_TLS),
     )
 
+    private val gmailAccount = account.copy(
+        email = "a@gmail.com",
+        imap = ServerConfig("imap.gmail.com", 993, MailSecurity.SSL_TLS),
+    )
+
+    /** A Gmail-style tree where the built-in Drafts collides with a same-named user folder. */
+    private val duplicateDraftsFolders = listOf(
+        Folder("imap:a", "INBOX", "INBOX", FolderRole.INBOX, selectable = true),
+        Folder("imap:a", "[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, selectable = true, specialUse = true),
+        Folder("imap:a", "Drafts", "Drafts", FolderRole.DRAFTS, selectable = true),
+    )
+
     private fun message(uid: String, subject: String, bodyFetched: Boolean = false, folder: String = "INBOX") = Message(
         id = "imap:a:$folder:$uid",
         accountId = "imap:a",
@@ -71,10 +83,10 @@ class MailboxScreenTest {
         bodyFetched = bodyFetched,
     )
 
-    private fun setContent(repo: FakeMailRepository): MailboxViewModel {
+    private fun setContent(repo: FakeMailRepository, activeAccount: Account = account): MailboxViewModel {
         val viewModel = MailboxViewModel(
             repo,
-            FakeAccountRepository(accounts = listOf(account)),
+            FakeAccountRepository(accounts = listOf(activeAccount)),
             FakeMailSyncer(),
             SavedStateHandle(),
         )
@@ -220,6 +232,49 @@ class MailboxScreenTest {
 
         composeTestRule.waitUntil(5_000) { repo.movedToFolder.isNotEmpty() }
         assertEquals("Receipts", repo.movedToFolder.first().second)
+    }
+
+    @Test
+    fun movePicker_disambiguatesDuplicateNames_andMovesToTheChosenFolder() {
+        val repo = FakeMailRepository(
+            messages = listOf(message("1", "First")),
+            folders = duplicateDraftsFolders,
+        )
+        setContent(repo, activeAccount = gmailAccount)
+        waitForText("First")
+
+        composeTestRule.onNodeWithText("First").performTouchInput { longClick() }
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_more)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.action_move)).performClick()
+
+        // Issue #59: the two same-named Drafts folders are told apart in the picker, and choosing
+        // the suffixed row files into the provider's built-in folder — not the user folder.
+        composeTestRule.onNode(hasText("Drafts") and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        composeTestRule.onNode(hasText("Drafts - Gmail") and hasAnyAncestor(isDialog())).performClick()
+
+        composeTestRule.waitUntil(5_000) { repo.movedToFolder.isNotEmpty() }
+        assertEquals("[Gmail]/Drafts", repo.movedToFolder.first().second)
+    }
+
+    @Test
+    fun appBarTitle_keepsTheDisambiguatedFolderLabel() {
+        val repo = FakeMailRepository(
+            messages = listOf(message("1", "First")),
+            folders = duplicateDraftsFolders,
+        )
+        setContent(repo, activeAccount = gmailAccount)
+        waitForText("First")
+
+        composeTestRule.onNodeWithContentDescription(string(R.string.drawer_open)).performClick()
+        composeTestRule.onNodeWithText("Drafts - Gmail").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Drafts - Gmail").performClick()
+
+        // Issue #59: the app-bar title keeps the drawer's de-duplicated label instead of collapsing
+        // to an ambiguous "Drafts". Once selected, the label renders twice — the app-bar title plus
+        // the (composed but closed) drawer's entry.
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText("Drafts - Gmail").fetchSemanticsNodes().size == 2
+        }
     }
 
     @Test

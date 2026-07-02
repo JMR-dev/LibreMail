@@ -80,6 +80,32 @@ class FolderDrawerTest {
     }
 
     @Test
+    fun accountSwitchGap_staleFolderListKeepsItsOwnProviderSuffix() {
+        val gmail = account("imap:g", "user@gmail.com").copy(
+            imap = ServerConfig("imap.gmail.com", 993, MailSecurity.SSL_TLS),
+        )
+        val outlook = account("imap:o", "user@outlook.com").copy(
+            authType = AuthType.OAUTH_OUTLOOK,
+            imap = ServerConfig("outlook.office365.com", 993, MailSecurity.SSL_TLS),
+        )
+        // The transient frame from issue #61: the drawer account has already switched to Outlook,
+        // but the folder list still holds the Gmail account's folders until its query emits.
+        setContent(
+            accounts = listOf(gmail, outlook),
+            drawerAccount = outlook,
+            folders = listOf(
+                folder("imap:g", "INBOX", "INBOX", FolderRole.INBOX),
+                folder("imap:g", "[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, specialUse = true),
+                folder("imap:g", "Drafts", "Drafts", FolderRole.DRAFTS),
+            ),
+        )
+
+        // The de-dup suffix derives from the folders' own account — never the incoming account.
+        composeTestRule.onNodeWithText("Drafts - Gmail").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Drafts - Outlook").assertDoesNotExist()
+    }
+
+    @Test
     fun tappingAFolder_reportsItsAccountAndFullName() {
         var picked: Pair<String, String>? = null
         setContent(
