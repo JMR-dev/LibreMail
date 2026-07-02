@@ -53,7 +53,7 @@ class OnboardingFlowTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun string(resId: Int) = composeTestRule.activity.getString(resId)
+    private fun string(resId: Int, vararg args: Any) = composeTestRule.activity.getString(resId, *args)
 
     // Generous cap for the slow, animation-disabled CI matrix emulators; waitUntil returns as soon
     // as the text appears, so the happy path is unaffected.
@@ -206,6 +206,10 @@ class OnboardingFlowTest {
         // add" button sit below the fold of this scrolling screen, and a positional click on an
         // off-screen button is a silent no-op (which is why this passed only on API 37's taller AVD).
         waitForText(string(R.string.app_password_email))
+        // Gmail requires 2-Step Verification before app passwords, so its screen (and only its
+        // screen — see yahooSetup_hasNoTwoFactorHelpLink) links Google's setup article (issue #98).
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help))
+            .performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.app_password_email))
             .performScrollTo().performTextInput("e2e@gmail.com")
         composeTestRule.onNodeWithText(string(R.string.app_password_field))
@@ -220,5 +224,19 @@ class OnboardingFlowTest {
         // Landed on the first (and only) account's inbox.
         waitForText("E2E first message")
         composeTestRule.onNodeWithText("E2E first message").assertIsDisplayed()
+    }
+
+    @Test
+    fun yahooSetup_hasNoTwoFactorHelpLink() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText("Yahoo Mail")
+        composeTestRule.onNodeWithText("Yahoo Mail").performClick()
+
+        // Yahoo's setup screen keeps its app-password link…
+        waitForText(string(R.string.app_password_open_page, "Yahoo Mail"))
+        // …but gains no 2-Step Verification link: that prerequisite is Gmail-specific (issue #98).
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help)).assertDoesNotExist()
     }
 }

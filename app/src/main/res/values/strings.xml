@@ -152,6 +152,7 @@
     <string name="app_password_what_is">An app password is a one-off password that lets an app sign in to your account without your main password or a two-factor code.</string>
     <string name="app_password_warning">Store this app password carefully — it grants full access to your email. LibreMail keeps it only on this device.</string>
     <string name="app_password_open_page">Create an app password for %1$s</string>
+    <string name="app_password_2fa_help">How to turn on 2-Step Verification</string>
     <string name="app_password_open_failed">Couldn\'t open your browser</string>
     <string name="app_password_email">Email address</string>
     <string name="app_password_field">App password</string>
