@@ -224,13 +224,13 @@
     <string name="fetch_on_demand">Always on-demand</string>
     <string name="fetch_on_demand_summary">Sync only message headers; download a message\'s content when you open it.</string>
     <string name="settings_notifications">Notifications</string>
-    <string name="settings_new_mail">New-mail notifications</string>
+    <string name="settings_new_mail">New mail notifications</string>
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
     <string name="account_remove">Remove account</string>
 
     <!-- Backup -->
-    <string name="settings_backup">Backup</string>
+    <string name="settings_backup">Settings Backup</string>
     <string name="settings_backup_include">Include settings in Android Backup</string>
     <string name="settings_backup_include_summary">Let Android back up your LibreMail preferences (Google Auto Backup) so they restore when you set up a new device. Your mail, accounts, passwords, and encryption keys are never backed up — only app settings. Off by default; uses Google infrastructure.</string>
 
@@ -278,6 +278,7 @@
     <string name="settings_account_system_notif">Sound &amp; vibration</string>
     <string name="settings_account_system_notif_summary">Manage sound, vibration, and importance in Android settings</string>
     <string name="settings_appearance">Appearance</string>
+    <string name="settings_appearance_summary">Match device theme\nMaterial You theming (Android 12+)</string>
     <string name="settings_dynamic_color">Use wallpaper colors</string>
     <string name="settings_dynamic_color_summary">Material You dynamic theming (Android 12+)</string>
     <string name="settings_add_account">Add account</string>
@@ -319,7 +320,6 @@
     <string name="settings_contacts_open_settings">Open settings</string>
 
     <!-- Diagnostics / debug reporting -->
-    <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_report_problem">Report a problem</string>
     <string name="settings_report_problem_summary">Capture diagnostics you can review and optionally send</string>
     <string name="reports_title">Problem reports</string>
