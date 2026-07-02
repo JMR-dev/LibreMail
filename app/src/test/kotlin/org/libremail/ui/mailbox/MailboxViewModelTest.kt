@@ -30,6 +30,7 @@ import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.ServerConfig
+import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
@@ -429,10 +430,55 @@ class MailboxViewModelTest {
         assertEquals(listOf("imap:a:INBOX:1"), vm.messages.value.map { it.id })
     }
 
+    @Test
+    fun `folderUnreadCounts maps the drawer account's folders to their unread counts`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice, bob),
+            messages = emptyList(),
+            unreadCounts = listOf(
+                UnreadCount("imap:a", "INBOX", 3),
+                UnreadCount("imap:a", "[Gmail]/Spam", 1),
+                UnreadCount("imap:b", "INBOX", 9),
+            ),
+        )
+        backgroundScope.launch { vm.folderUnreadCounts.collect {} }
+
+        // The drawer defaults to the first account (alice); bob's counts are excluded.
+        assertEquals(mapOf("INBOX" to 3, "[Gmail]/Spam" to 1), vm.folderUnreadCounts.value)
+    }
+
+    @Test
+    fun `folderUnreadCounts follows the drawer-account switch`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice, bob),
+            messages = emptyList(),
+            unreadCounts = listOf(UnreadCount("imap:a", "INBOX", 3), UnreadCount("imap:b", "INBOX", 9)),
+        )
+        backgroundScope.launch { vm.folderUnreadCounts.collect {} }
+
+        vm.setDrawerAccount("imap:b")
+
+        assertEquals(mapOf("INBOX" to 9), vm.folderUnreadCounts.value)
+    }
+
+    @Test
+    fun `accountsWithUnread lists every account that has unread mail in any folder`() = runTest(testDispatcher) {
+        val vm = createViewModel(
+            accounts = listOf(alice, bob),
+            messages = emptyList(),
+            // alice has unread mail (in a non-inbox folder too); bob has none.
+            unreadCounts = listOf(UnreadCount("imap:a", "INBOX", 3), UnreadCount("imap:a", "Archive", 2)),
+        )
+        backgroundScope.launch { vm.accountsWithUnread.collect {} }
+
+        assertEquals(setOf("imap:a"), vm.accountsWithUnread.value)
+    }
+
     private fun createViewModel(
         accounts: List<Account>,
         messages: List<Message>,
         folders: Map<String, List<Folder>> = emptyMap(),
+        unreadCounts: List<UnreadCount> = emptyList(),
         syncer: MailSyncer = mockk(relaxed = true),
         repo: MailRepository = mockk(relaxed = true),
         initialAccountId: String? = null,
@@ -440,6 +486,7 @@ class MailboxViewModelTest {
         every { repo.observeMessages() } returns MutableStateFlow(messages)
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())
+        every { repo.observeUnreadCounts() } returns MutableStateFlow(unreadCounts)
         accounts.forEach { account ->
             every { repo.observeFolders(account.id) } returns MutableStateFlow(folders[account.id] ?: emptyList())
         }

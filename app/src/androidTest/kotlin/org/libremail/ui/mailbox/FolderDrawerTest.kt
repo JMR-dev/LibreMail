@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -145,10 +146,34 @@ class FolderDrawerTest {
         assertTrue(unifiedTapped)
     }
 
+    @Test
+    fun folderWithUnreadMail_showsCountBadge_andReadFolderShowsNone() {
+        setContent(
+            accounts = listOf(alice),
+            drawerAccount = alice,
+            folders = listOf(
+                folder("imap:a", "INBOX", "INBOX", FolderRole.INBOX),
+                folder("imap:a", "Archive", "Archive", FolderRole.ARCHIVE),
+            ),
+            folderUnreadCounts = mapOf("INBOX" to 3),
+        )
+
+        // The inbox badge announces its exact count for screen readers.
+        val threeUnread = composeTestRule.activity.resources
+            .getQuantityString(R.plurals.folder_unread_count_description, 3, 3)
+        composeTestRule.onNodeWithContentDescription(threeUnread).assertIsDisplayed()
+        // Archive has no unread mail, so no badge is rendered for it.
+        val oneUnread = composeTestRule.activity.resources
+            .getQuantityString(R.plurals.folder_unread_count_description, 1, 1)
+        composeTestRule.onNodeWithContentDescription(oneUnread).assertDoesNotExist()
+    }
+
     private fun setContent(
         accounts: List<Account>,
         drawerAccount: Account?,
         folders: List<Folder>,
+        folderUnreadCounts: Map<String, Int> = emptyMap(),
+        accountsWithUnread: Set<String> = emptySet(),
         selectedAccountId: String? = null,
         selectedFolder: String = "INBOX",
         onSelectUnifiedInbox: () -> Unit = {},
@@ -162,6 +187,8 @@ class FolderDrawerTest {
                         accounts = accounts,
                         drawerAccount = drawerAccount,
                         folders = folders,
+                        folderUnreadCounts = folderUnreadCounts,
+                        accountsWithUnread = accountsWithUnread,
                         selectedAccountId = selectedAccountId,
                         selectedFolder = selectedFolder,
                         onSelectUnifiedInbox = onSelectUnifiedInbox,

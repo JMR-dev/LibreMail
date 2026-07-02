@@ -54,6 +54,34 @@ class LibreMailDatabaseTest {
     )
 
     @Test
+    fun observeUnreadCountsAggregatesUnreadSyncedRowsPerAccountAndFolder() = runBlocking {
+        val messageDao = db.messageDao()
+        messageDao.insertNew(
+            listOf(
+                // acct / INBOX: two unread + one read -> counts 2.
+                message("acct:INBOX:1").copy(folder = "INBOX", isRead = false),
+                message("acct:INBOX:2").copy(folder = "INBOX", isRead = false),
+                message("acct:INBOX:3").copy(folder = "INBOX", isRead = true),
+                // acct / Archive: one unread -> counts 1.
+                message("acct:Archive:1").copy(folder = "Archive", isRead = false),
+                // An unread server-search hit (inInbox = false) must never inflate a badge.
+                message("acct:INBOX:search").copy(folder = "INBOX", isRead = false, inInbox = false),
+                // A second account's unread inbox row is counted under its own accountId.
+                message("acct2:INBOX:1").copy(accountId = "acct2", folder = "INBOX", isRead = false),
+            ),
+        )
+
+        val counts = messageDao.observeUnreadCounts().first()
+            .associate { (it.accountId to it.folder) to it.unreadCount }
+
+        assertEquals(2, counts[("acct" to "INBOX")])
+        assertEquals(1, counts[("acct" to "Archive")])
+        assertEquals(1, counts[("acct2" to "INBOX")])
+        // Fully-read folders and search-only rows produce no group at all.
+        assertEquals(3, counts.size)
+    }
+
+    @Test
     fun deletingMessageCascadesToItsAttachments() = runBlocking {
         val messageDao = db.messageDao()
         val attachmentDao = db.attachmentDao()

@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
+import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.MessageSummary
 
@@ -22,6 +23,19 @@ interface MessageDao {
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages ORDER BY timestampMillis DESC",
     )
     fun observeSummaries(): Flow<List<MessageSummary>>
+
+    /**
+     * Live per-(account, folder) unread counts for the drawer's folder badges and the bold styling of
+     * accounts with unread mail. Counts only folder-synced rows (`inInbox = 1`), so transient
+     * server-search hits never inflate a badge; read rows and folders with no unread mail are simply
+     * absent from the result. A pure `COUNT(*)` aggregate — no message rows are pulled into memory —
+     * whose `GROUP BY accountId, folder` is served by the existing `(accountId, folder, uid)` index.
+     */
+    @Query(
+        "SELECT accountId, folder, COUNT(*) AS unreadCount FROM messages " +
+            "WHERE inInbox = 1 AND isRead = 0 GROUP BY accountId, folder",
+    )
+    fun observeUnreadCounts(): Flow<List<FolderUnreadCount>>
 
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
