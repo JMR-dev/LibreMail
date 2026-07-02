@@ -35,9 +35,11 @@ import org.libremail.R
 /**
  * Final onboarding step (shown only when needed, see [OnboardingViewModel.batteryPromptNeeded]):
  * invites the user to allow unrestricted background/battery usage so push and periodic sync aren't
- * throttled by Doze. **Take me there** deep-links to the system screen (no restricted permission);
- * **Not now** skips. Either way [onFinish] proceeds to the inbox. On returning from Settings the
- * status is re-read and, if the app is now unrestricted, the screen reflects that with a "done" state.
+ * throttled by Doze. **Take me there** deep-links as directly as possible toward the per-app battery
+ * screen (see [org.libremail.push.BatteryOptimizationManager] for the best-effort fallback chain; no
+ * restricted permission is ever used); **Not now** skips. Either way [onFinish] proceeds to the inbox.
+ * On returning from Settings the status is re-read and, if the app is now unrestricted, the screen
+ * reflects that with a "done" state.
  *
  * @param viewModel the graph-scoped onboarding view model (holds live battery status + the flag).
  * @param onFinish leaves onboarding for the inbox; the caller also marks the prompt handled.
