@@ -58,6 +58,8 @@ class FakeAccountRepository(
     override suspend fun deleteAccount(id: String) {
         accountsFlow.value = accountsFlow.value.filterNot { it.id == id }
     }
+
+    override suspend fun resetBackfillProgress(accountId: String?) = Unit
 }
 
 /**

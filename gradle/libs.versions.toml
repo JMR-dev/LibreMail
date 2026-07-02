@@ -15,6 +15,10 @@ sqlcipher = "4.16.0"
 datastore = "1.2.1"
 work = "2.11.2"
 coroutines = "1.10.2"
+# Forced above androidx.savedstate's transitive 1.7.3 (shared with the androidTest classpath via
+# AGP 9 consistent resolution); Room's schema-bundle serializers need >= 1.8.0 or MigrationTestHelper
+# throws AbstractMethodError on GeneratedSerializer.typeParametersSerializers().
+kotlinxSerialization = "1.8.1"
 appauth = "0.11.1"
 angusMail = "2.0.5"
 junit = "4.13.2"
@@ -63,6 +67,8 @@ androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", vers
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+# Room MigrationTestHelper (instrumented migration tests).
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 # SQLCipher — opt-in at-rest encryption of the Room cache.
 sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
 
@@ -73,6 +79,10 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# Serialization BOM — imported as a platform (not used directly) to raise the transitive
+# kotlinx-serialization runtime to the version Room's schema bundles were compiled against.
+kotlinx-serialization-bom = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-bom", version.ref = "kotlinxSerialization" }
 
 # Email transport / OAuth — wired in later increments
 appauth = { group = "net.openid", name = "appauth", version.ref = "appauth" }

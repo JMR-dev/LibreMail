@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.repository.AccountRepository
@@ -25,6 +26,7 @@ class AccountSettingsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
     signatureRepository: SignatureRepository,
+    private val syncScheduler: SyncScheduler,
 ) : ViewModel() {
 
     private val accountId: String =
@@ -57,6 +59,23 @@ class AccountSettingsViewModel @Inject constructor(
 
     fun setNotificationsEnabled(value: Boolean) {
         viewModelScope.launch { accountSettingsRepository.setNotificationsEnabled(accountId, value) }
+    }
+
+    /** Per-account device-only retention overrides (null = inherit the global default). Prunes promptly. */
+    fun setRetentionCount(value: Int?) {
+        viewModelScope.launch {
+            accountSettingsRepository.setRetentionCount(accountId, value)
+            syncScheduler.pruneNow()
+            accountRepository.resetBackfillProgress(accountId)
+        }
+    }
+
+    fun setRetentionMonths(value: Int?) {
+        viewModelScope.launch {
+            accountSettingsRepository.setRetentionMonths(accountId, value)
+            syncScheduler.pruneNow()
+            accountRepository.resetBackfillProgress(accountId)
+        }
     }
 
     fun removeAccount(onRemoved: () -> Unit) {

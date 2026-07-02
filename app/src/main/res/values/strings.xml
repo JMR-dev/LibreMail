@@ -201,6 +201,22 @@
     <string name="settings_backup_include">Include settings in Android Backup</string>
     <string name="settings_backup_include_summary">Let Android back up your LibreMail preferences (Google Auto Backup) so they restore when you set up a new device. Your mail, accounts, passwords, and encryption keys are never backed up — only app settings. Off by default; uses Google infrastructure.</string>
 
+    <!-- Storage / retention (device-only; issue #13) -->
+    <string name="settings_retention">Storage on this device</string>
+    <string name="settings_retention_summary">These limits apply to this device only. Mail beyond them is removed from local storage but never deleted from the server, so it can always be downloaded again. By default LibreMail keeps everything.</string>
+    <string name="settings_retention_default">Default for all accounts</string>
+    <string name="retention_count_title">Keep by message count</string>
+    <string name="retention_age_title">Keep by age</string>
+    <string name="retention_use_default">Use the global default</string>
+    <string name="retention_keep_all">Keep everything</string>
+    <string name="retention_count_500">Newest 500 per folder</string>
+    <string name="retention_count_1000">Newest 1,000 per folder</string>
+    <string name="retention_count_5000">Newest 5,000 per folder</string>
+    <string name="retention_age_3m">Last 3 months</string>
+    <string name="retention_age_6m">Last 6 months</string>
+    <string name="retention_age_1y">Last year</string>
+    <string name="retention_age_2y">Last 2 years</string>
+
     <!-- Per-account settings -->
     <string name="settings_account_title">Account</string>
     <string name="settings_signature">Signature</string>

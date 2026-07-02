@@ -15,13 +15,25 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Schedules background mail sync via WorkManager. */
+/** Schedules background mail sync, full-history backfill, and retention pruning via WorkManager. */
 @Singleton
 class SyncScheduler @Inject constructor(@ApplicationContext private val context: Context) {
     private val workManager get() = WorkManager.getInstance(context)
 
     private val networkConstraint = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
+
+    // Backfill is bulk, non-urgent work: require a network AND a healthy battery so it never competes
+    // with foreground use or drains the device while paging a large mailbox.
+    private val backfillConstraint = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .setRequiresBatteryNotLow(true)
+        .build()
+
+    // Pruning is purely local (no server calls), so it needs no network — only a healthy battery.
+    private val pruneConstraint = Constraints.Builder()
+        .setRequiresBatteryNotLow(true)
         .build()
 
     /** Periodic background sync (WorkManager's 15-minute floor). */
@@ -41,8 +53,47 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
         workManager.enqueueUniqueWork(ONESHOT_WORK, ExistingWorkPolicy.REPLACE, request)
     }
 
+    /**
+     * Periodic full-history backfill (issue #12). Each run pages a bounded slice and persists its
+     * boundary, so history fills in over successive runs; KEEP preserves an already-scheduled cadence.
+     */
+    fun schedulePeriodicBackfill() {
+        val request = PeriodicWorkRequestBuilder<BackfillWorker>(30, TimeUnit.MINUTES)
+            .setConstraints(backfillConstraint)
+            .build()
+        workManager.enqueueUniquePeriodicWork(PERIODIC_BACKFILL, ExistingPeriodicWorkPolicy.KEEP, request)
+    }
+
+    /** Kicks an immediate backfill slice (e.g. just after an account is added) without waiting for the cadence. */
+    fun backfillNow() {
+        val request = OneTimeWorkRequestBuilder<BackfillWorker>()
+            .setConstraints(backfillConstraint)
+            .build()
+        // KEEP: if a backfill is already running/enqueued it already covers every account, so don't
+        // restart it; once that one finishes a later kick will start a fresh slice.
+        workManager.enqueueUniqueWork(ONESHOT_BACKFILL, ExistingWorkPolicy.KEEP, request)
+    }
+
+    /** Periodic retention pruning (issue #13); also enforces age limits as messages get older over time. */
+    fun schedulePeriodicPrune() {
+        val request = PeriodicWorkRequestBuilder<PruneWorker>(12, TimeUnit.HOURS)
+            .setConstraints(pruneConstraint)
+            .build()
+        workManager.enqueueUniquePeriodicWork(PERIODIC_PRUNE, ExistingPeriodicWorkPolicy.KEEP, request)
+    }
+
+    /** Runs pruning promptly, e.g. right after the user tightens a retention limit. */
+    fun pruneNow() {
+        val request = OneTimeWorkRequestBuilder<PruneWorker>().build()
+        workManager.enqueueUniqueWork(ONESHOT_PRUNE, ExistingWorkPolicy.REPLACE, request)
+    }
+
     private companion object {
         const val PERIODIC_WORK = "libremail_periodic_sync"
         const val ONESHOT_WORK = "libremail_oneshot_sync"
+        const val PERIODIC_BACKFILL = "libremail_periodic_backfill"
+        const val ONESHOT_BACKFILL = "libremail_oneshot_backfill"
+        const val PERIODIC_PRUNE = "libremail_periodic_prune"
+        const val ONESHOT_PRUNE = "libremail_oneshot_prune"
     }
 }

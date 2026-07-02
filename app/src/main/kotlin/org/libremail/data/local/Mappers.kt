@@ -53,6 +53,8 @@ internal fun AccountSettingsEntity.toDomain(): AccountSettings = AccountSettings
     signature = signature,
     signatureEnabled = signatureEnabled,
     notificationsEnabled = notificationsEnabled,
+    retentionCount = retentionCount,
+    retentionMonths = retentionMonths,
 )
 
 internal fun AccountSettings.toEntity(): AccountSettingsEntity = AccountSettingsEntity(
@@ -60,6 +62,8 @@ internal fun AccountSettings.toEntity(): AccountSettingsEntity = AccountSettings
     signature = signature,
     signatureEnabled = signatureEnabled,
     notificationsEnabled = notificationsEnabled,
+    retentionCount = retentionCount,
+    retentionMonths = retentionMonths,
 )
 
 internal fun Account.toImapParams(
@@ -142,6 +146,7 @@ internal fun FetchedMessage.toEntity(accountId: String, folder: String, inInbox:
         folder = folder,
         inInbox = inInbox,
         bodyFetched = false,
+        uid = uid.toLongOrNull() ?: 0L,
     )
 
 internal fun FolderEntity.toDomain(): Folder = Folder(

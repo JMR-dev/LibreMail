@@ -6,6 +6,7 @@ import androidx.room.RoomDatabase
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.dao.AttachmentDao
+import org.libremail.data.local.dao.BackfillProgressDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
@@ -15,6 +16,7 @@ import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AccountSettingsEntity
 import org.libremail.data.local.entity.AttachmentEntity
+import org.libremail.data.local.entity.BackfillProgressEntity
 import org.libremail.data.local.entity.CredentialEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
@@ -33,8 +35,9 @@ import org.libremail.data.local.entity.SignatureEntity
         DraftEntity::class,
         FolderEntity::class,
         SignatureEntity::class,
+        BackfillProgressEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 abstract class LibreMailDatabase : RoomDatabase() {
@@ -47,4 +50,5 @@ abstract class LibreMailDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
     abstract fun folderDao(): FolderDao
     abstract fun signatureDao(): SignatureDao
+    abstract fun backfillProgressDao(): BackfillProgressDao
 }
