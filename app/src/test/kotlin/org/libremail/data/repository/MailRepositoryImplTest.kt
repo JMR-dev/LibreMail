@@ -35,6 +35,7 @@ import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ReplyMode
 import org.libremail.mail.AttachmentPart
 import org.libremail.mail.DownloadedAttachment
+import org.libremail.mail.FetchedFolder
 import org.libremail.mail.ImapClient
 import org.libremail.mail.MessageContent
 import org.libremail.mail.ReplyContext
@@ -94,17 +95,50 @@ class MailRepositoryImplTest {
     }
 
     @Test
-    fun `observeFolders maps cached folders with their roles`() = runTest {
+    fun `observeFolders maps cached folders with their roles and server special-use flag`() = runTest {
         every { folderDao.observeForAccount("acct") } returns flowOf(
-            listOf(FolderEntity("acct", "[Gmail]/Sent Mail", "Sent Mail", "SENT", selectable = true, sortOrder = 1)),
+            listOf(
+                FolderEntity(
+                    accountId = "acct",
+                    fullName = "[Gmail]/Sent Mail",
+                    displayName = "Sent Mail",
+                    role = "SENT",
+                    selectable = true,
+                    sortOrder = 1,
+                    specialUse = true,
+                ),
+            ),
         )
         repository.observeFolders("acct").test {
             val folders = awaitItem()
             assertEquals(1, folders.size)
             assertEquals(FolderRole.SENT, folders.first().role)
             assertEquals("Sent Mail", folders.first().displayName)
+            // toDomain must carry the persisted special-use flag through to the domain model.
+            assertTrue(folders.first().specialUse)
             awaitComplete()
         }
+    }
+
+    @Test
+    fun `refreshFolders persists the server special-use flag derived from folder attributes`() = runTest {
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        // A provider-built \Drafts folder (RFC 6154 SPECIAL-USE) beside an attribute-less user folder.
+        coEvery { imapClient.listFolders(any()) } returns listOf(
+            FetchedFolder("[Gmail]/Drafts", "Drafts", listOf("\\Drafts"), selectable = true),
+            FetchedFolder("Receipts", "Receipts", emptyList(), selectable = true),
+        )
+        val persisted = slot<List<FolderEntity>>()
+        coEvery { folderDao.replaceForAccount(any(), capture(persisted)) } just Runs
+
+        val result = repository.refreshFolders("acct")
+
+        assertTrue(result.isSuccess)
+        // The one production link (FetchedFolder.toEntity) must persist server special-use per folder,
+        // alongside the role it derives from the same attributes.
+        assertEquals(listOf(true, false), persisted.captured.map { it.specialUse })
+        assertEquals(listOf("DRAFTS", "NORMAL"), persisted.captured.map { it.role })
     }
 
     @Test

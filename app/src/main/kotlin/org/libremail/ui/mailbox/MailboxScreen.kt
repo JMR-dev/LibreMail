@@ -106,6 +106,8 @@ fun MailboxScreen(
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
     val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
     val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val folderUnreadCounts by viewModel.folderUnreadCounts.collectAsStateWithLifecycle()
+    val accountsWithUnread by viewModel.accountsWithUnread.collectAsStateWithLifecycle()
     val drawerAccount by viewModel.drawerAccount.collectAsStateWithLifecycle()
     val hasAccounts by viewModel.hasAccounts.collectAsStateWithLifecycle()
     val draftCount by viewModel.draftCount.collectAsStateWithLifecycle()
@@ -156,6 +158,8 @@ fun MailboxScreen(
                     accounts = accounts,
                     drawerAccount = drawerAccount,
                     folders = folders,
+                    folderUnreadCounts = folderUnreadCounts,
+                    accountsWithUnread = accountsWithUnread,
                     selectedAccountId = selectedAccountId,
                     selectedFolder = selectedFolder,
                     onSelectUnifiedInbox = {
@@ -256,6 +260,7 @@ fun MailboxScreen(
                             AccountFilterRow(
                                 accounts = accounts,
                                 selectedId = selectedAccountId,
+                                accountsWithUnread = accountsWithUnread,
                                 onSelect = viewModel::selectAccount,
                             )
                         }
@@ -411,7 +416,12 @@ private fun OutboxEntry(count: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun AccountFilterRow(accounts: List<Account>, selectedId: String?, onSelect: (String?) -> Unit) {
+private fun AccountFilterRow(
+    accounts: List<Account>,
+    selectedId: String?,
+    accountsWithUnread: Set<String>,
+    onSelect: (String?) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -428,7 +438,13 @@ private fun AccountFilterRow(accounts: List<Account>, selectedId: String?, onSel
             FilterChip(
                 selected = selectedId == account.id,
                 onClick = { onSelect(account.id) },
-                label = { Text(account.email, maxLines = 1) },
+                label = {
+                    Text(
+                        account.email,
+                        maxLines = 1,
+                        fontWeight = if (account.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
+                    )
+                },
             )
         }
     }
