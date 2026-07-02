@@ -297,7 +297,7 @@ internal fun applyStyle(
     return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
 }
 
-private fun applyBlock(
+internal fun applyBlock(
     value: TextFieldValue,
     marker: BlockMarker,
     linkColor: Color,
@@ -315,7 +315,7 @@ private fun applyBlock(
     )
 }
 
-private fun applyLink(
+internal fun applyLink(
     value: TextFieldValue,
     url: String,
     linkColor: Color,
