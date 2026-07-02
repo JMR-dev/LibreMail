@@ -121,7 +121,7 @@ based on the manifest and source at audit time. **Declared anti-features: none.*
 | `NonFreeAssets` | Clear | All assets are first-party vector drawables carrying the repo's GPL SPDX headers; no bundled proprietary art, fonts, or blobs. |
 | `NSFW` | Clear | N/A. |
 | `UpstreamNonFree` | Clear | This repo is the upstream and is wholly GPL-3.0-or-later. |
-| `KnownVuln` | Clear | No known-vulnerable pinned dependency at audit time; TLS enforced for mail transport. |
+| `KnownVuln` | Clear | No dependency with a known security vulnerability is pinned at audit time (all on current stable lines). |
 | `ApplicationDebuggable` | Clear | Release builds are non-debuggable (AGP default) and R8-minified. |
 | `TetheredNet` | Clear | No tethered/proprietary backend; the app talks to the user's own mail servers. |
 | `NoSourceSince` | Clear | N/A — source is published. |
@@ -214,8 +214,9 @@ signed with the debug key (see `signingConfigs` in `app/build.gradle.kts`) — f
 for local testing and irrelevant to F-Droid, which builds from source and signs
 with its own key. APK contents were inspected: single `classes.dex`, resources,
 and the three native libraries listed in §1.1 — no bundled binaries of unknown
-origin. `./gradlew :app:assembleDebug` and the unit-test/lint/static-analysis gates
-run on every PR in CI, also without secrets.
+origin. `./gradlew :app:assembleDebug`, the unit tests, static analysis
+(ktlint/detekt), and the emulator E2E suites run on every PR in CI, likewise
+without any secrets configured.
 
 ## 4. Publishing checklist (for the maintainer)
 
