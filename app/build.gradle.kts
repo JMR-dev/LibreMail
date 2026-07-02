@@ -109,6 +109,9 @@ android {
         includeInBundle = false
     }
 
+    // Ship the exported Room schemas as androidTest assets so MigrationTestHelper can load them.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     packaging {
         resources {
             // Angus Mail / Jakarta Activation (added later) ship duplicate META-INF entries.
@@ -150,7 +153,7 @@ android {
     }
 }
 
-// Export Room schemas so migrations can be validated by instrumented MigrationTestHelper tests.
+// Export Room schemas so the instrumented MigrationTest can replay and validate each migration.
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
