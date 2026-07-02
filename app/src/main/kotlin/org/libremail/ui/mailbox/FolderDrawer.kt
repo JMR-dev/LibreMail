@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.mailbox
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -126,32 +127,34 @@ private fun AccountSwitcher(
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    TextButton(
-        onClick = { expanded = true },
-        modifier = Modifier.padding(horizontal = 16.dp),
-    ) {
-        Text(
-            current.email,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = if (current.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
-        )
-        Icon(Icons.Filled.ArrowDropDown, contentDescription = stringResource(R.string.drawer_switch_account))
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        accounts.forEach { account ->
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        account.email,
-                        fontWeight = if (account.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
-                    )
-                },
-                onClick = {
-                    onSelect(account.id)
-                    expanded = false
-                },
+    Box {
+        TextButton(
+            onClick = { expanded = true },
+            modifier = Modifier.padding(horizontal = 16.dp),
+        ) {
+            Text(
+                current.email,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = if (current.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
             )
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = stringResource(R.string.drawer_switch_account))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            accounts.forEach { account ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            account.email,
+                            fontWeight = if (account.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect(account.id)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
