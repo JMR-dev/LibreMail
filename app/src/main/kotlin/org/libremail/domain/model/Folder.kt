@@ -34,6 +34,25 @@ enum class FolderRole {
 
     companion object {
         /**
+         * Single source of truth mapping a lowercase IMAP SPECIAL-USE attribute to the role it implies:
+         * RFC 6154's six attributes, plus Gmail's `\All` and RFC 8457's `\Important`. A `null` role
+         * marks an attribute that flags a folder as server-provisioned (not user-created) without
+         * implying one of the friendly [FolderRole]s. [roleOf] returns the first role-bearing entry the
+         * folder advertises; [isServerSpecial] treats every key as special-use. Insertion order sets
+         * [roleOf]'s precedence when a folder advertises more than one role-bearing attribute.
+         */
+        private val ATTRIBUTE_ROLES: Map<String, FolderRole?> = linkedMapOf(
+            "\\sent" to SENT,
+            "\\drafts" to DRAFTS,
+            "\\junk" to SPAM,
+            "\\trash" to TRASH,
+            "\\archive" to ARCHIVE,
+            "\\all" to null,
+            "\\flagged" to null,
+            "\\important" to null,
+        )
+
+        /**
          * Classifies a folder from its name and IMAP SPECIAL-USE attributes (RFC 6154). Prefers the
          * server-advertised attribute; falls back to a case-insensitive name match because many
          * servers (and the GreenMail test server) don't advertise SPECIAL-USE.
@@ -41,27 +60,14 @@ enum class FolderRole {
         fun roleOf(fullName: String, displayName: String, attributes: List<String>): FolderRole {
             if (fullName.equals("INBOX", ignoreCase = true)) return INBOX
             val attrs = attributes.map { it.lowercase() }
-            val byAttribute = when {
-                "\\sent" in attrs -> SENT
-                "\\drafts" in attrs -> DRAFTS
-                "\\junk" in attrs -> SPAM
-                "\\trash" in attrs -> TRASH
-                "\\archive" in attrs -> ARCHIVE
-                else -> null
+            val byAttribute = ATTRIBUTE_ROLES.entries.firstNotNullOfOrNull { (attribute, role) ->
+                role?.takeIf { attribute in attrs }
             }
             return byAttribute ?: roleFromDisplayName(displayName)
         }
 
-        /**
-         * The RFC 6154 SPECIAL-USE attributes (plus Gmail's `\All`) that mark a folder as one the
-         * server provisions itself, as opposed to a user-created folder.
-         */
-        private val SPECIAL_USE_ATTRIBUTES =
-            setOf("\\all", "\\archive", "\\drafts", "\\flagged", "\\junk", "\\sent", "\\trash")
-
         /** True when the server advertises any SPECIAL-USE attribute for the folder (RFC 6154). */
-        fun isServerSpecial(attributes: List<String>): Boolean =
-            attributes.any { it.lowercase() in SPECIAL_USE_ATTRIBUTES }
+        fun isServerSpecial(attributes: List<String>): Boolean = attributes.any { it.lowercase() in ATTRIBUTE_ROLES }
 
         /** Best-effort role from a folder's display name, for servers without SPECIAL-USE flags. */
         private fun roleFromDisplayName(displayName: String): FolderRole = when (displayName.lowercase().trim()) {

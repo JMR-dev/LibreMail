@@ -73,9 +73,12 @@ class AppLockViewModel @Inject constructor(
     private val databaseKeyCipher: DatabaseKeyCipher,
     private val session: PassphraseSession,
     private val syncScheduler: SyncScheduler,
+    // Application-scoped (see SecurityModule): the gate is injected rather than owned by this
+    // Activity-scoped ViewModel so the inactivity grace window survives Activity recreation — Back on
+    // the task root finishes the Activity and clears its ViewModelStore on API 29/30, which would
+    // otherwise drop the grace marker and force a full re-auth on return within the grace period.
+    private val gate: AppLockGate,
 ) : ViewModel() {
-
-    private val gate = AppLockGate()
 
     private val _uiState = MutableStateFlow<AppLockUiState>(AppLockUiState.Checking)
     val uiState: StateFlow<AppLockUiState> = _uiState.asStateFlow()
@@ -134,7 +137,17 @@ class AppLockViewModel @Inject constructor(
 
                 LockAction.REQUIRE_AUTH -> {
                     val state = gate.onForeground(foregroundAt, appLockEnabled = true)
-                    if (state == LockState.UNLOCKED) _uiState.value = AppLockUiState.Unlocked else emitLocked()
+                    if (state == LockState.UNLOCKED) {
+                        _uiState.value = AppLockUiState.Unlocked
+                    } else {
+                        // Re-lock on grace expiry (timeout). The SQLCipher passphrase is intentionally
+                        // NOT evicted here: PassphraseSession is the only separately-held copy, but
+                        // clearing it flips EncryptedCacheGuard to "locked" and would stall background
+                        // sync/push while locked, and the already-open Room handle keeps the key
+                        // resident regardless. Full eviction needs the DB close/reopen owned by #93 /
+                        // #111 — see PassphraseSession's KDoc.
+                        emitLocked()
+                    }
                 }
             }
         }

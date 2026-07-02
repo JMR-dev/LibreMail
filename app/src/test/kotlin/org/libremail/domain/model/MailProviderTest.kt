@@ -82,6 +82,21 @@ class MailProviderTest {
     }
 
     @Test
+    fun `only gmail links two-factor setup help, over https`() {
+        // Gmail's app-passwords page rejects accounts without 2-Step Verification, so its setup
+        // screen must offer the setup article as a way out (issue #98).
+        val gmailUrl = assertNotNull(
+            MailProvider.GMAIL.twoFactorHelpUrl,
+            "gmail must expose a 2-Step Verification help URL",
+        )
+        assertTrue(gmailUrl.startsWith("https://"), "gmail 2FA help URL must be https")
+
+        // Yahoo and iCloud gate nothing on two-factor, so they must not grow the extra link.
+        assertNull(MailProvider.YAHOO.twoFactorHelpUrl)
+        assertNull(MailProvider.ICLOUD.twoFactorHelpUrl)
+    }
+
+    @Test
     fun `createAccount trims the email and derives a stable id and display name`() {
         val account = MailProvider.GMAIL.createAccount("  User@Gmail.com  ")
 

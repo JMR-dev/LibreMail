@@ -118,20 +118,24 @@ interface MessageDao {
     )
     suspend fun deleteSyncedInWindowNotIn(accountId: String, folder: String, minWindowUid: Long, keepIds: List<String>)
 
-    /** Lowest cached UID among an account's synced rows in [folder] — the backfill boundary. Null if none. */
-    @Query("SELECT MIN(uid) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
+    /**
+     * Lowest cached *resolved* UID among an account's synced rows in [folder] — the backfill
+     * boundary. Placeholder rows with `uid <= 0` (a row migrated before the `uid` column existed, or
+     * a fetch where the server failed to resolve the UID) are excluded: letting one collapse
+     * MIN(uid) to `<= 0` would make the backfiller page below a bound `fetchOlderThan` treats as
+     * "nothing older", falsely marking the folder fully backfilled (#95, matching the
+     * `minWindowUid` guard in MailSyncer). Null when no resolved-UID row exists, in which case
+     * backfill starts over from the newest message.
+     */
+    @Query(
+        "SELECT MIN(uid) FROM messages WHERE accountId = :accountId AND folder = :folder " +
+            "AND inInbox = 1 AND uid > 0",
+    )
     suspend fun lowestSyncedUid(accountId: String, folder: String): Long?
 
     /** Number of an account's synced rows in [folder] (count-based retention floor / prune sizing). */
     @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
     suspend fun countSynced(accountId: String, folder: String): Int
-
-    /** Oldest cached timestamp among an account's synced rows in [folder] (age-based retention floor). Null if none. */
-    @Query(
-        "SELECT MIN(timestampMillis) FROM messages " +
-            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1",
-    )
-    suspend fun oldestSyncedTimestamp(accountId: String, folder: String): Long?
 
     /** Distinct folders that have at least one synced row for [accountId] (backfill/prune targets). */
     @Query("SELECT DISTINCT folder FROM messages WHERE accountId = :accountId AND inInbox = 1")

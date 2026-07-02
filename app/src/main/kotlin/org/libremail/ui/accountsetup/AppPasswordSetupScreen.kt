@@ -78,6 +78,12 @@ fun AppPasswordSetupScreen(
     val scope = rememberCoroutineScope()
     // Resolved up front so the failure handler (a non-composable lambda) can use it.
     val openFailedMessage = stringResource(R.string.app_password_open_failed)
+    // Shared by every outbound link on this screen: openUri throws if no browser/handler is
+    // installed, so surface that as an inline snackbar instead of crashing.
+    val openUrl: (String) -> Unit = { url ->
+        runCatching { uriHandler.openUri(url) }
+            .onFailure { scope.launch { snackbarHostState.showSnackbar(openFailedMessage) } }
+    }
 
     LaunchedEffect(form.status, form.addedAccountId) {
         if (form.status == SetupStatus.DONE) {
@@ -146,14 +152,22 @@ fun AppPasswordSetupScreen(
 
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
-                onClick = {
-                    // openUri throws if no browser/handler is installed; surface it instead of crashing.
-                    runCatching { uriHandler.openUri(provider.appPasswordHelpUrl) }
-                        .onFailure { scope.launch { snackbarHostState.showSnackbar(openFailedMessage) } }
-                },
+                onClick = { openUrl(provider.appPasswordHelpUrl) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.app_password_open_page, provider.displayName))
+            }
+            // Only Gmail has a two-factor prerequisite (see MailProvider.twoFactorHelpUrl): its
+            // app-passwords page rejects accounts without 2-Step Verification, so give those users
+            // a way to set it up instead of a dead end.
+            provider.twoFactorHelpUrl?.let { twoFactorHelpUrl ->
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { openUrl(twoFactorHelpUrl) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.app_password_2fa_help))
+                }
             }
 
             Spacer(Modifier.height(20.dp))
