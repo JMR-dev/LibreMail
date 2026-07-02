@@ -208,8 +208,10 @@ class OnboardingFlowTest {
         // add" button sit below the fold of this scrolling screen, and a positional click on an
         // off-screen button is a silent no-op (which is why this passed only on API 37's taller AVD).
         waitForText(string(R.string.app_password_email))
-        // Gmail requires 2-Step Verification before app passwords, so its screen (and only its
-        // screen — see yahooSetup_hasNoTwoFactorHelpLink) links Google's setup article (issue #98).
+        // Gmail requires 2-Step Verification before app passwords, so its screen links Google's
+        // setup article (issue #98). iCloud gets the same kind of link, in Apple's own terminology
+        // (see icloudSetup_hasTwoFactorHelpLink); Yahoo does not (see
+        // yahooSetup_hasNoTwoFactorHelpLink).
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help))
             .performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.app_password_email))
@@ -238,7 +240,27 @@ class OnboardingFlowTest {
 
         // Yahoo's setup screen keeps its app-password link…
         waitForText(string(R.string.app_password_open_page, "Yahoo Mail"))
-        // …but gains no 2-Step Verification link: that prerequisite is Gmail-specific (issue #98).
+        // …but gains no two-factor help link: unlike Gmail and iCloud, Yahoo gates nothing on it
+        // (issue #98, #153).
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help)).assertDoesNotExist()
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help_icloud)).assertDoesNotExist()
+    }
+
+    @Test
+    fun icloudSetup_hasTwoFactorHelpLink() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText("iCloud Mail")
+        composeTestRule.onNodeWithText("iCloud Mail").performClick()
+
+        // Apple also won't issue an app-specific password until two-factor authentication is on,
+        // so iCloud's screen links Apple's own setup article too — using Apple's terminology for
+        // the button ("Two-Factor Authentication"), not Google's "2-Step Verification" (issue #153).
+        waitForText(string(R.string.app_password_2fa_help_icloud))
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help_icloud))
+            .performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.app_password_open_page, "iCloud Mail"))
+            .assertIsDisplayed()
     }
 }
