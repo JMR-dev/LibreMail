@@ -2,12 +2,14 @@
 package org.libremail.ui.mailbox
 
 import androidx.lifecycle.SavedStateHandle
+import app.cash.turbine.test
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -155,6 +157,43 @@ class MailboxViewModelTest {
 
         assertTrue(vm.folders.value.any { it.fullName == "Work" }, "drawer should now show bob's folders")
         assertTrue(vm.folders.value.none { it.fullName == "Archive" }, "alice's folders should no longer show")
+    }
+
+    // Issue #61: switching the drawer account emits the new account immediately, while the folder
+    // list keeps the old account's folders until the new account's query emits. The UI must derive
+    // provider labels from the rendered folders' own accountId (providerLabelFor) so those gap
+    // frames never show the old folders with the new account's brand.
+    @Test
+    fun `folder list lags a drawer-account switch until the new folders arrive`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        every { repo.observeMessages() } returns MutableStateFlow(emptyList<Message>())
+        every { repo.observeDrafts() } returns flowOf(emptyList())
+        every { repo.observeOutbox() } returns flowOf(emptyList())
+        every { repo.observeFolders("imap:a") } returns
+            MutableStateFlow(listOf(folder("imap:a", "INBOX", FolderRole.INBOX)))
+        // Bob's folder query stays in flight (no emission yet) to reproduce the switch gap.
+        val bobFolders = MutableSharedFlow<List<Folder>>()
+        every { repo.observeFolders("imap:b") } returns bobFolders
+        val accountRepository = mockk<AccountRepository>(relaxed = true)
+        every { accountRepository.observeAccounts() } returns MutableStateFlow(listOf(alice, bob))
+        val vm = MailboxViewModel(repo, accountRepository, mockk(relaxed = true), SavedStateHandle())
+
+        vm.folders.test {
+            var current = awaitItem() // the StateFlow's initial empty value, or alice's list
+            while (current.isEmpty()) current = awaitItem()
+            assertEquals(listOf("imap:a"), current.map { it.accountId }.distinct())
+
+            vm.setDrawerAccount("imap:b")
+
+            // The drawer account has already switched, but the rendered folder list has not —
+            // exactly the transient frames issue #61 is about.
+            assertEquals("imap:b", vm.drawerAccount.value?.id)
+            assertEquals(listOf("imap:a"), vm.folders.value.map { it.accountId }.distinct())
+            expectNoEvents()
+
+            bobFolders.emit(listOf(folder("imap:b", "Work", FolderRole.NORMAL)))
+            assertEquals(listOf("imap:b"), awaitItem().map { it.accountId }.distinct())
+        }
     }
 
     @Test
