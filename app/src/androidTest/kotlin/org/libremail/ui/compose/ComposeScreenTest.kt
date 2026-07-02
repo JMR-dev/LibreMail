@@ -26,7 +26,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.contacts.ContactsRepository
-import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.local.AccountDatabase
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
@@ -56,7 +56,7 @@ class ComposeScreenTest {
         smtp = ServerConfig("smtp.example.com", 465, MailSecurity.SSL_TLS),
     )
 
-    private var db: LibreMailDatabase? = null
+    private var db: AccountDatabase? = null
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
@@ -79,7 +79,7 @@ class ComposeScreenTest {
     // Build the view model once and capture it, so recomposition doesn't recreate it.
     private fun setContent(mailRepository: FakeMailRepository = FakeMailRepository(), onBack: () -> Unit = {}) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
-        val database = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build().also { db = it }
+        val database = Room.inMemoryDatabaseBuilder(context, AccountDatabase::class.java).build().also { db = it }
         val viewModel = ComposeViewModel(
             savedStateHandle = SavedStateHandle(),
             mailRepository = mailRepository,

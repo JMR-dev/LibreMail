@@ -40,7 +40,7 @@ object DatabaseEncryption {
      * tables but not that pragma, and a reset version would make Room attempt a bogus migration.
      */
     private fun migrate(dbFile: File, sourcePassphrase: String, targetPassphrase: String) {
-        ensureLibraryLoaded()
+        ensureNativeLibraryLoaded()
         val dir = dbFile.parentFile ?: error("database file has no parent directory")
         val tmp = File(dir, dbFile.name + ".migrate").apply { delete() }
 
@@ -98,7 +98,13 @@ object DatabaseEncryption {
     }
 
     @Volatile private var libraryLoaded = false
-    private fun ensureLibraryLoaded() {
+
+    /**
+     * Load SQLCipher's native library once. Public so other startup helpers that open a database via
+     * [net.zetetic.database.sqlcipher.SQLiteDatabase] before Room does (e.g. [AccountDataMigrator])
+     * can guarantee it is loaded first.
+     */
+    fun ensureNativeLibraryLoaded() {
         if (libraryLoaded) return
         synchronized(this) {
             if (!libraryLoaded) {
