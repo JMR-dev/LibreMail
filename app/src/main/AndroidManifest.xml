@@ -91,6 +91,19 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Separate-process trampoline for the app-lock key-invalidation recovery restart. Runs in
+             its own ":restart" process (android:process) so it survives the main process being killed
+             and can reliably relaunch the app from the outside — a same-process "startActivity then
+             exit(0)" restart races ActivityManager and can be dropped (the ProcessPhoenix pattern).
+             Not exported; only ProcessRestarter starts it. Translucent + excluded from recents so it
+             never flashes UI or lingers in the switcher before it finishes and exits its own process. -->
+        <activity
+            android:name=".restart.RestartActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:process=":restart"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Shares downloaded attachments with viewer apps via a content:// URI. -->
         <provider
             android:name="androidx.core.content.FileProvider"
