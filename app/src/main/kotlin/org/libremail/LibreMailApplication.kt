@@ -68,6 +68,10 @@ class LibreMailApplication :
         // touching DataStore on the crashing thread.
         appScope.launch { runCatching { diagnosticsCollector.warmSettingsCache() } }
         syncScheduler.schedulePeriodicSync()
+        // Full-history backfill (#12) and device-only retention pruning (#13) run as their own bounded,
+        // resumable background jobs so they never block foreground sync / pull-to-refresh.
+        syncScheduler.schedulePeriodicBackfill()
+        syncScheduler.schedulePeriodicPrune()
         // Run the IMAP IDLE push service only while it has something to do: the push setting is on
         // AND at least one account exists. This starts it when the first account is added and stops
         // it when the last is removed, reactively.

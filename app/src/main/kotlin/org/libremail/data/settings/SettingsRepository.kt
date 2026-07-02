@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -45,6 +46,12 @@ data class AppSettings(
     val appLock: Boolean = false,
     val includeInBackup: Boolean = false,
     val fetchPolicy: FetchPolicy = FetchPolicy.ALWAYS,
+    /**
+     * Global device-only retention defaults (issue #13), applied to accounts that don't override them.
+     * `0` means "keep everything" (the default), matching the fetch-all history behaviour of #12.
+     */
+    val retentionCount: Int = 0,
+    val retentionMonths: Int = 0,
 )
 
 private object Keys {
@@ -57,6 +64,8 @@ private object Keys {
     val APP_LOCK = booleanPreferencesKey("app_lock")
     val INCLUDE_IN_BACKUP = booleanPreferencesKey("include_in_backup")
     val FETCH_POLICY = stringPreferencesKey("fetch_policy")
+    val RETENTION_COUNT = intPreferencesKey("retention_count")
+    val RETENTION_MONTHS = intPreferencesKey("retention_months")
     val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
 }
 
@@ -75,6 +84,8 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
     includeInBackup = this[Keys.INCLUDE_IN_BACKUP] ?: false,
     fetchPolicy = this[Keys.FETCH_POLICY]?.let { runCatching { FetchPolicy.valueOf(it) }.getOrNull() }
         ?: FetchPolicy.ALWAYS,
+    retentionCount = this[Keys.RETENTION_COUNT] ?: 0,
+    retentionMonths = this[Keys.RETENTION_MONTHS] ?: 0,
 )
 
 @Singleton
@@ -119,6 +130,16 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
 
     suspend fun setFetchPolicy(value: FetchPolicy) {
         context.settingsDataStore.edit { it[Keys.FETCH_POLICY] = value.name }
+    }
+
+    /** Global default retention by message count (newest N per folder); 0 = keep everything. */
+    suspend fun setRetentionCount(value: Int) {
+        context.settingsDataStore.edit { it[Keys.RETENTION_COUNT] = value.coerceAtLeast(0) }
+    }
+
+    /** Global default retention by age in months; 0 = keep everything. */
+    suspend fun setRetentionMonths(value: Int) {
+        context.settingsDataStore.edit { it[Keys.RETENTION_MONTHS] = value.coerceAtLeast(0) }
     }
 
     private suspend fun put(key: Preferences.Key<Boolean>, value: Boolean) {

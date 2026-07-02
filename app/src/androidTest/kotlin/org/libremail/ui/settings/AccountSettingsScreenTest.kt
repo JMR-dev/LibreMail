@@ -19,6 +19,7 @@ import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
@@ -67,6 +68,7 @@ class AccountSettingsScreenTest {
             accountRepository = FakeAccountRepository(accounts = listOf(account)),
             accountSettingsRepository = repository,
             signatureRepository = SignatureRepository(db.signatureDao()),
+            syncScheduler = SyncScheduler(context),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {

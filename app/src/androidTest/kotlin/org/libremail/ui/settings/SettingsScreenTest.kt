@@ -21,6 +21,7 @@ import org.libremail.data.security.KeystoreCrypto
 import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.sync.SyncScheduler
 import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.theme.LibreMailTheme
@@ -53,6 +54,7 @@ class SettingsScreenTest {
             appLockManager,
             keyStore,
             BatteryOptimizationManager(context),
+            SyncScheduler(context),
         )
 
         composeTestRule.setContent {

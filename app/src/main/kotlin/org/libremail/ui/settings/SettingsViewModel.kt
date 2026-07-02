@@ -18,6 +18,7 @@ import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.push.BatteryOptimizationManager
@@ -30,6 +31,7 @@ class SettingsViewModel @Inject constructor(
     private val appLockManager: AppLockManager,
     private val databaseKeyStore: DatabaseKeyStore,
     private val batteryOptimizationManager: BatteryOptimizationManager,
+    private val syncScheduler: SyncScheduler,
 ) : ViewModel() {
 
     val accounts: StateFlow<List<Account>> = accountRepository.observeAccounts()
@@ -99,6 +101,19 @@ class SettingsViewModel @Inject constructor(
 
     fun clearAppLockMessage() {
         _appLockMessage.value = null
+    }
+
+    /** Global retention defaults; kick a prune so a newly-tightened limit takes effect promptly (#13). */
+    fun setRetentionCount(value: Int) = update {
+        settingsRepository.setRetentionCount(value)
+        syncScheduler.pruneNow()
+        accountRepository.resetBackfillProgress(null)
+    }
+
+    fun setRetentionMonths(value: Int) = update {
+        settingsRepository.setRetentionMonths(value)
+        syncScheduler.pruneNow()
+        accountRepository.resetBackfillProgress(null)
     }
 
     private inline fun update(crossinline action: suspend () -> Unit) {

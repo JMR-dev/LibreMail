@@ -19,4 +19,11 @@ interface AccountRepository {
     suspend fun addOutlookAccount(email: String, accessToken: String, authStateJson: String): Result<List<String>>
 
     suspend fun deleteAccount(id: String)
+
+    /**
+     * Discards full-history backfill progress so it re-evaluates against the current retention floor
+     * after a retention change: tightening re-hits the (tighter) floor cheaply, loosening resumes
+     * paging older history. [accountId] null clears every account (a global-default change).
+     */
+    suspend fun resetBackfillProgress(accountId: String?)
 }
