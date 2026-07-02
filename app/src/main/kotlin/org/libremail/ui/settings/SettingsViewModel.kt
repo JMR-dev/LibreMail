@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.R
+import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.security.AppLockManager
 import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.AppSettings
@@ -31,6 +32,7 @@ class SettingsViewModel @Inject constructor(
     private val appLockManager: AppLockManager,
     private val databaseKeyStore: DatabaseKeyStore,
     private val batteryOptimizationManager: BatteryOptimizationManager,
+    private val contactsPermissionManager: ContactsPermissionManager,
     private val syncScheduler: SyncScheduler,
 ) : ViewModel() {
 
@@ -39,6 +41,14 @@ class SettingsViewModel @Inject constructor(
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
+
+    /**
+     * Whether the `READ_CONTACTS` system dialog has ever been shown, so the contacts entry (#129) can
+     * tell "never asked" (an in-app request still works) from "permanently denied" (Settings only).
+     * See [ContactPermissionDecision][org.libremail.contacts.ContactPermissionDecision].
+     */
+    val contactsPermissionRequested: StateFlow<Boolean> = settingsRepository.contactsPermissionRequested
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _advancedExpanded = MutableStateFlow(false)
     val advancedExpanded: StateFlow<Boolean> = _advancedExpanded.asStateFlow()
@@ -61,6 +71,15 @@ class SettingsViewModel @Inject constructor(
 
     /** Intent to the system screen where the user flips this app to "Unrestricted". */
     fun batterySettingsIntent(): Intent = batteryOptimizationManager.settingsIntent()
+
+    /** Whether `READ_CONTACTS` is currently granted (drives the contacts-autocomplete row's state). */
+    fun hasContactsPermission(): Boolean = contactsPermissionManager.hasPermission()
+
+    /** Intent to this app's system details screen, to enable contacts when it's permanently denied. */
+    fun contactsSettingsIntent(): Intent = contactsPermissionManager.settingsIntent()
+
+    /** Persist that the contacts dialog is being shown, so a later denial reads as "blocked", not "off". */
+    fun markContactsPermissionRequested() = update { settingsRepository.setContactsPermissionRequested(true) }
 
     fun setDynamicColor(value: Boolean) = update { settingsRepository.setDynamicColor(value) }
     fun setNewMailNotifications(value: Boolean) = update { settingsRepository.setNewMailNotifications(value) }
