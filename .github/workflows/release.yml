@@ -1,34 +1,82 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Release pipeline (issue #19): tag → fast CI gate → build + sign → GitHub release,
+# Google Play, Galaxy Store (stub), S3 archive. Full docs: docs/release.md.
+#
+# Every publish/archive stage is gated on its CI secrets and SKIPS with a clear log
+# message when they are absent, so the workflow runs end-to-end today (before the
+# store accounts from #16/#17/#18 exist). No secret ever lives in the repo.
+#
+# Secrets (all optional; configure in Settings → Secrets and variables → Actions):
+#   Signing   RELEASE_KEYSTORE_BASE64, RELEASE_KEYSTORE_PASSWORD,
+#             RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
+#             → absent: artifacts are built with the debug-key fallback and named
+#               *-unsigned (installable for testing, NOT publishable).
+#   Play      PLAY_SERVICE_ACCOUNT_JSON (also requires signing secrets)
+#   Galaxy    GALAXY_SERVICE_ACCOUNT_ID, GALAXY_PRIVATE_KEY, GALAXY_CONTENT_ID
+#             (reserved — automated submission is stubbed; see docs/release.md#galaxy-store)
+#   Archive   ARCHIVE_S3_BUCKET, ARCHIVE_S3_ACCESS_KEY_ID, ARCHIVE_S3_SECRET_ACCESS_KEY,
+#             ARCHIVE_S3_ENDPOINT (optional, for non-AWS), ARCHIVE_S3_REGION (optional)
+#
+# F-Droid needs no job here: it builds signed packages itself from the pushed tag and
+# the repo's fastlane metadata (issue #18).
 name: Release
 
 on:
+  # The normal release path: push an annotated tag like v0.2.0.
+  push:
+    tags: ["v*"]
+  # Manual path: rehearse the pipeline (dry run) or re-run publication for an existing tag.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create (e.g. v0.1.0)"
-        required: true
+        description: "Existing tag to (re-)release, e.g. v0.2.0. Leave empty to rehearse against the current branch head (build only)."
+        required: false
         type: string
-      prerelease:
-        description: "Mark this GitHub release as a pre-release"
+      dry_run:
+        description: "Dry run: build, sign and checksum only — skip GitHub release, store publication and archiving."
         required: false
         type: boolean
         default: true
+      play_track:
+        description: "Google Play track to publish to."
+        required: false
+        type: choice
+        options: [internal, alpha, beta, production]
+        default: internal
+      play_rollout_fraction:
+        description: "Staged-rollout user fraction for the production track (0 < f < 1, e.g. 0.10), or 1.0 for a full rollout. Ignored on other tracks."
+        required: false
+        type: string
+        default: "0.10"
 
-# Needed to create the tag, the GitHub release, and upload its assets.
+# Never cancel a half-finished publication; queue instead.
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 env:
+  # Keep in sync with .github/workflows/ci.yml.
   ANDROID_PLATFORM: "platforms;android-37.0"
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
 
 jobs:
-  release:
-    name: Build APK and publish release
+  # Mirrors ci.yml's fast jobs (assembleDebug / testDebugUnitTest / static analysis, plus
+  # lintDebug) as the release prerequisite required by issue #19. ci.yml only runs on pull
+  # requests, so a tag push gets no other gate. The emulator E2E matrix is deliberately NOT
+  # duplicated here — it already gated every PR that reached the tagged commit.
+  fast-gate:
+    name: Fast CI gate
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
@@ -45,33 +93,448 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
-      # No release keystore is configured in CI, so the build falls back to the debug
-      # signing key (installable for testing, not for store publication).
-      - name: Assemble release APK
-        run: ./gradlew assembleRelease --stacktrace
+      - name: Assemble, unit-test, lint, static analysis
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:ktlintCheck :app:detekt --stacktrace
 
-      - name: Stage release artifacts (APK + source archives)
+  build:
+    name: Build and sign release artifacts
+    needs: [fast-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      signed: ${{ steps.plan.outputs.signed }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      have_play: ${{ steps.plan.outputs.have_play }}
+      have_galaxy: ${{ steps.plan.outputs.have_galaxy }}
+      have_s3: ${{ steps.plan.outputs.have_s3 }}
+    steps:
+      - name: Check out source (full history for the changelog)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      # `if:` cannot read the secrets context, so hoist secret *presence* into env here and
+      # expose the resulting gates as job outputs that downstream jobs test in their `if:`.
+      - name: Plan release (tag, signing, publish gates)
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          HAVE_SIGNING: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_KEYSTORE_PASSWORD != '' && secrets.RELEASE_KEY_ALIAS != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
+          PARTIAL_SIGNING: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' || secrets.RELEASE_KEYSTORE_PASSWORD != '' || secrets.RELEASE_KEY_ALIAS != '' || secrets.RELEASE_KEY_PASSWORD != '' }}
+          HAVE_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+          HAVE_GALAXY: ${{ secrets.GALAXY_SERVICE_ACCOUNT_ID != '' && secrets.GALAXY_PRIVATE_KEY != '' && secrets.GALAXY_CONTENT_ID != '' }}
+          HAVE_S3: ${{ secrets.ARCHIVE_S3_BUCKET != '' && secrets.ARCHIVE_S3_ACCESS_KEY_ID != '' && secrets.ARCHIVE_S3_SECRET_ACCESS_KEY != '' }}
         run: |
           set -euo pipefail
-          tag='${{ inputs.tag }}'
-          mkdir -p dist
-          apk="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
-          cp "$apk" "dist/LibreMail-${tag}.apk"
-          # Source archives contain only git-tracked files at the released commit.
-          git archive --format=zip --prefix="LibreMail-${tag}/" -o "dist/LibreMail-${tag}-src.zip" HEAD
-          git archive --format=tar --prefix="LibreMail-${tag}/" HEAD | gzip > "dist/LibreMail-${tag}-src.tar.gz"
-          ls -l dist
 
-      - name: Create GitHub release
+          tag=""
+          if [ "$EVENT_NAME" = "push" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="$INPUT_TAG"
+          fi
+
+          publish=false
+          if [ -n "$tag" ] && [ "$INPUT_DRY_RUN" != "true" ]; then
+            publish=true
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -z "$tag" ]; then
+            echo "::notice::No tag input — rehearsal build only (no GitHub release, store publication or archiving)."
+          elif [ "$publish" != "true" ]; then
+            echo "::notice::Dry run — building and checksumming only; publication and archiving are skipped."
+          fi
+
+          version="${tag:-dev-$(git rev-parse --short HEAD)}"
+
+          prerelease=false
+          if [ "$HAVE_SIGNING" != "true" ]; then
+            prerelease=true
+            echo "::notice::Release signing secrets not configured — artifacts fall back to the debug key and are named *-unsigned (NOT store-publishable). See docs/release.md#release-signing."
+            if [ "$PARTIAL_SIGNING" = "true" ]; then
+              echo "::warning::Only some of the four RELEASE_* signing secrets are set; all four are required. Building unsigned."
+            fi
+          fi
+          case "$tag" in *-*) prerelease=true ;; esac
+
+          if [ "$HAVE_PLAY" != "true" ]; then
+            echo "::notice::Google Play publication will be skipped: secret PLAY_SERVICE_ACCOUNT_JSON is not configured. See docs/release.md#google-play."
+          elif [ "$HAVE_SIGNING" != "true" ]; then
+            echo "::warning::Google Play publication will be skipped: Play credentials are configured but the artifacts are unsigned (missing RELEASE_* signing secrets)."
+          fi
+          if [ "$HAVE_GALAXY" != "true" ]; then
+            echo "::notice::Galaxy Store credentials not configured — the Galaxy job only prints the manual publication path. See docs/release.md#galaxy-store."
+          fi
+          if [ "$HAVE_S3" != "true" ]; then
+            echo "::notice::S3 archiving will be skipped: ARCHIVE_S3_* secrets are not configured. See docs/release.md#binary-archive-s3."
+          fi
+
+          {
+            echo "release_tag=$tag"
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "signed=$HAVE_SIGNING"
+            echo "prerelease=$prerelease"
+            echo "have_play=$HAVE_PLAY"
+            echo "have_galaxy=$HAVE_GALAXY"
+            echo "have_s3=$HAVE_S3"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Warn when the tag and versionName disagree
+        if: steps.plan.outputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version_name="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          expected="${RELEASE_TAG#v}"
+          if [ "$version_name" != "$expected" ]; then
+            echo "::warning::Tag $RELEASE_TAG does not match versionName '$version_name' in app/build.gradle.kts — did you forget to bump versionCode/versionName before tagging? (docs/release.md#cutting-a-release)"
+          fi
+
+      # Reconstructs the git-ignored secrets.properties that app/build.gradle.kts already
+      # reads for release signing, and materialises the keystore from the base64 secret.
+      # Both live only on the ephemeral runner; nothing is written back to the repo.
+      - name: Configure release signing from CI secrets
+        if: steps.plan.outputs.signed == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$keystore"
+          {
+            printf 'RELEASE_STORE_FILE=%s\n' "$keystore"
+            printf 'RELEASE_STORE_PASSWORD=%s\n' "$RELEASE_KEYSTORE_PASSWORD"
+            printf 'RELEASE_KEY_ALIAS=%s\n' "$RELEASE_KEY_ALIAS"
+            printf 'RELEASE_KEY_PASSWORD=%s\n' "$RELEASE_KEY_PASSWORD"
+          } > secrets.properties
+          echo "Release keystore configured from CI secrets."
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: Install SDK platform and build-tools
+        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Build release AAB and APK
+        run: ./gradlew :app:bundleRelease :app:assembleRelease --stacktrace
+
+      - name: Generate changelog from Conventional-Commit history
+        env:
+          RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          SIGNED: ${{ steps.plan.outputs.signed }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/whatsnew
+
+          # Nearest tag strictly before HEAD (HEAD itself is the release tag on tag builds).
+          prev="$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)"
+          range="HEAD"
+          [ -n "$prev" ] && range="$prev..HEAD"
+          echo "Changelog range: $range"
+
+          log() { git log --no-merges --pretty='- %s (%h)' "$range"; }
+
+          changelog="dist/CHANGELOG.md"
+          printf '## LibreMail %s\n\n' "$VERSION" > "$changelog"
+          if [ "$SIGNED" != "true" ]; then
+            printf '> **Warning:** built without a release keystore — the attached binaries are debug-key signed placeholders and are **not** suitable for installation from app stores.\n\n' >> "$changelog"
+          fi
+
+          section() { # $1 = grep -E pattern over "- subject (hash)" lines, $2 = heading
+            local body
+            body="$(log | grep -E "$1" || true)"
+            if [ -n "$body" ]; then
+              printf '### %s\n\n%s\n\n' "$2" "$body" >> "$changelog"
+            fi
+          }
+          section '^- [a-z]+(\([^)]*\))?!:' 'Breaking changes'
+          section '^- feat[(!:]' 'Features'
+          section '^- fix[(!:]' 'Bug fixes'
+          section '^- perf[(!:]' 'Performance'
+          section '^- (docs|chore|ci|build|refactor|test|style)[(!:]' 'Maintenance'
+          # Anything that is not a Conventional Commit:
+          other="$(log | grep -Ev '^- (feat|fix|perf|docs|chore|ci|build|refactor|test|style)[(!:]' || true)"
+          if [ -n "$other" ]; then
+            printf '### Other changes\n\n%s\n\n' "$other" >> "$changelog"
+          fi
+          if ! log | grep -q .; then
+            printf '_No changes since %s._\n\n' "${prev:-the initial commit}" >> "$changelog"
+          fi
+          if [ -n "$prev" ] && [ -n "$RELEASE_TAG" ]; then
+            printf '**Full changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$prev" "$RELEASE_TAG" >> "$changelog"
+          fi
+
+          # Google Play "what's new" (500-char limit): user-facing entries only.
+          notes="$(log | grep -E '^- (feat|fix)[(!:]' | head -20 || true)"
+          [ -z "$notes" ] && notes="- Maintenance release"
+          printf 'LibreMail %s\n\n%s\n' "$VERSION" "$notes" | head -c 490 > dist/whatsnew/whatsnew-en-US
+
+          echo "----- CHANGELOG.md -----"
+          cat "$changelog"
+
+      - name: Stage artifacts and compute SHA-256 checksums
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          SIGNED: ${{ steps.plan.outputs.signed }}
+        run: |
+          set -euo pipefail
+          suffix=""
+          [ "$SIGNED" != "true" ] && suffix="-unsigned"
+
+          apk="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          cp "$apk" "dist/LibreMail-${VERSION}${suffix}.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "dist/LibreMail-${VERSION}${suffix}.aab"
+          # R8 mapping for de-obfuscating crash reports (isMinifyEnabled = true).
+          cp app/build/outputs/mapping/release/mapping.txt "dist/LibreMail-${VERSION}-mapping.txt"
+
+          # Source archives with only git-tracked files at the released commit (GPL §6
+          # convenience: source travels alongside every distributed binary).
+          git archive --format=zip --prefix="LibreMail-${VERSION}/" -o "dist/LibreMail-${VERSION}-src.zip" HEAD
+          git archive --format=tar --prefix="LibreMail-${VERSION}/" HEAD | gzip > "dist/LibreMail-${VERSION}-src.tar.gz"
+
+          (cd dist && sha256sum LibreMail-* > SHA256SUMS.txt)
+          ls -l dist
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub release
+    needs: [build]
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Create or update the release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          tag_name: ${{ inputs.tag }}
-          name: ${{ inputs.tag }}
-          target_commitish: ${{ github.sha }}
-          prerelease: ${{ inputs.prerelease }}
+          tag_name: ${{ needs.build.outputs.release_tag }}
+          name: ${{ needs.build.outputs.release_tag }}
+          body_path: dist/CHANGELOG.md
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/LibreMail-${{ inputs.tag }}.apk
-            dist/LibreMail-${{ inputs.tag }}-src.zip
-            dist/LibreMail-${{ inputs.tag }}-src.tar.gz
+            dist/LibreMail-*
+            dist/SHA256SUMS.txt
+
+  google-play:
+    name: Publish to Google Play
+    needs: [build]
+    # Requires publishable (release-signed) artifacts AND Play credentials; the build job's
+    # plan step logs a notice/warning explaining any skip.
+    if: needs.build.outputs.publish == 'true' && needs.build.outputs.signed == 'true' && needs.build.outputs.have_play == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Determine track and staged-rollout mode
+        id: mode
+        env:
+          TRACK: ${{ inputs.play_track || 'internal' }}
+          FRACTION: ${{ inputs.play_rollout_fraction || '0.10' }}
+        run: |
+          set -euo pipefail
+          status="completed"
+          fraction=""
+          if [ "$TRACK" = "production" ]; then
+            case "$FRACTION" in
+              0 | 0.0 | 0.00)
+                echo "::error::play_rollout_fraction must be greater than 0 (got '$FRACTION')."
+                exit 1
+                ;;
+              1 | 1.0 | 1.00)
+                status="completed" # full rollout
+                ;;
+              0.[0-9]*)
+                status="inProgress" # staged rollout
+                fraction="$FRACTION"
+                ;;
+              *)
+                echo "::error::play_rollout_fraction must be a fraction like 0.10 (0 < f < 1) or 1.0 for a full rollout (got '$FRACTION')."
+                exit 1
+                ;;
+            esac
+          fi
+          echo "Publishing to track '$TRACK' with status '$status'${fraction:+ (user fraction $fraction)}."
+          {
+            echo "track=$TRACK"
+            echo "status=$status"
+            echo "fraction=$fraction"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Google Play
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.libremail.app
+          releaseFiles: dist/LibreMail-*.aab
+          track: ${{ steps.mode.outputs.track }}
+          status: ${{ steps.mode.outputs.status }}
+          userFraction: ${{ steps.mode.outputs.fraction }}
+          whatsNewDirectory: dist/whatsnew
+          mappingFile: dist/LibreMail-${{ needs.build.outputs.version }}-mapping.txt
+
+  # Samsung provides no maintained GitHub Action, and its Content Publish API is mid-
+  # migration (contentUpdate's binaryList parameter stops being accepted in July 2026), so
+  # automated submission is deliberately stubbed until #17 lands store credentials and the
+  # API settles. This job documents the state and the manual path; docs/release.md#galaxy-store
+  # has the full instructions. The GALAXY_* secret names are reserved for the future wiring.
+  galaxy-store:
+    name: Publish to Galaxy Store (manual for now)
+    needs: [build]
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain the Galaxy Store publication path
+        env:
+          HAVE_GALAXY: ${{ needs.build.outputs.have_galaxy }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_GALAXY" = "true" ]; then
+            echo "::notice::GALAXY_* secrets are configured, but automated Galaxy Store submission is intentionally disabled: Samsung ships no maintained GitHub Action and its Content Publish API is mid-migration (binaryList removal, July 2026). Publish manually for now — see docs/release.md#galaxy-store."
+          else
+            echo "::notice::Galaxy Store credentials (GALAXY_SERVICE_ACCOUNT_ID / GALAXY_PRIVATE_KEY / GALAXY_CONTENT_ID) are not configured — publish manually. See docs/release.md#galaxy-store."
+          fi
+          cat <<EOF
+          Manual Galaxy Store publication for $RELEASE_TAG:
+            1. Download LibreMail-$RELEASE_TAG.apk (and SHA256SUMS.txt) from the GitHub release.
+            2. Verify the checksum: sha256sum -c SHA256SUMS.txt
+            3. Sign in to Samsung Seller Portal (https://seller.samsungapps.com), open the
+               LibreMail app entry, upload the APK as a new binary, update the release notes
+               from CHANGELOG.md and submit for review.
+          EOF
+
+  s3-archive:
+    name: Archive binaries to S3
+    needs: [build]
+    if: needs.build.outputs.publish == 'true' && needs.build.outputs.have_s3 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+
+      # Uses the AWS CLI preinstalled on ubuntu runners; --endpoint-url makes it work with
+      # any S3-compatible provider (MinIO, Backblaze B2, Cloudflare R2, …). Keys are
+      # versioned per release under releases/<tag>/, with SHA256SUMS.txt stored alongside.
+      - name: Upload artifacts and checksums
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARCHIVE_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARCHIVE_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.ARCHIVE_S3_REGION || 'us-east-1' }}
+          S3_BUCKET: ${{ secrets.ARCHIVE_S3_BUCKET }}
+          S3_ENDPOINT: ${{ secrets.ARCHIVE_S3_ENDPOINT }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          endpoint_args=()
+          [ -n "$S3_ENDPOINT" ] && endpoint_args+=(--endpoint-url "$S3_ENDPOINT")
+          dest="s3://${S3_BUCKET}/releases/${RELEASE_TAG}/"
+          aws s3 cp dist/ "$dest" --recursive --exclude "whatsnew/*" "${endpoint_args[@]}"
+          echo "Archived release artifacts to $dest:"
+          aws s3 ls "$dest" "${endpoint_args[@]}"
+
+  # Single aggregating result (mirrors ci.yml's ci-passed): fails if any stage failed, and
+  # writes a per-stage summary — including why gated stages were skipped — to the run page.
+  release-summary:
+    name: Release summary
+    needs: [fast-gate, build, github-release, google-play, galaxy-store, s3-archive]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write summary
+        env:
+          R_GATE: ${{ needs.fast-gate.result }}
+          R_BUILD: ${{ needs.build.result }}
+          R_RELEASE: ${{ needs.github-release.result }}
+          R_PLAY: ${{ needs.google-play.result }}
+          R_GALAXY: ${{ needs.galaxy-store.result }}
+          R_S3: ${{ needs.s3-archive.result }}
+          O_TAG: ${{ needs.build.outputs.release_tag }}
+          O_PUBLISH: ${{ needs.build.outputs.publish }}
+          O_SIGNED: ${{ needs.build.outputs.signed }}
+          O_PLAY: ${{ needs.build.outputs.have_play }}
+          O_S3: ${{ needs.build.outputs.have_s3 }}
+        run: |
+          set -euo pipefail
+          note_release=""
+          if [ "$O_PUBLISH" != "true" ]; then note_release="dry run / rehearsal — nothing published"; fi
+          note_play=""
+          if [ "$O_PLAY" != "true" ]; then
+            note_play="needs PLAY_SERVICE_ACCOUNT_JSON"
+          elif [ "$O_SIGNED" != "true" ]; then
+            note_play="unsigned build — needs RELEASE_* signing secrets"
+          fi
+          note_s3=""
+          if [ "$O_S3" != "true" ]; then note_s3="needs ARCHIVE_S3_* secrets"; fi
+          {
+            echo "## Release pipeline — ${O_TAG:-rehearsal (no tag)}"
+            echo
+            echo "| Stage | Result | Notes |"
+            echo "| --- | --- | --- |"
+            echo "| Fast CI gate | $R_GATE | |"
+            echo "| Build + sign | $R_BUILD | signed: ${O_SIGNED:-n/a} |"
+            echo "| GitHub release | $R_RELEASE | $note_release |"
+            echo "| Google Play | $R_PLAY | $note_play |"
+            echo "| Galaxy Store | $R_GALAXY | manual for now — docs/release.md#galaxy-store |"
+            echo "| S3 archive | $R_S3 | $note_s3 |"
+            echo
+            echo "Secret setup: docs/release.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any stage failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "A release stage failed or was cancelled:"
+          echo "  fast-gate:      ${{ needs.fast-gate.result }}"
+          echo "  build:          ${{ needs.build.result }}"
+          echo "  github-release: ${{ needs.github-release.result }}"
+          echo "  google-play:    ${{ needs.google-play.result }}"
+          echo "  galaxy-store:   ${{ needs.galaxy-store.result }}"
+          echo "  s3-archive:     ${{ needs.s3-archive.result }}"
+          exit 1
