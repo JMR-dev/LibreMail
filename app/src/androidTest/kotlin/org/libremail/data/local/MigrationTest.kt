@@ -169,6 +169,37 @@ class MigrationTest {
         db.close()
     }
 
+    /** v16 -> v17 (issue #133): `attachments.contentId` appears defaulting to NULL; cached rows survive. */
+    @Test
+    fun migrate16To17_addsNullContentIdToAttachments() {
+        helper.createDatabase(TEST_DB, 16).apply {
+            // v16 dropped the account tables, so a message (no FK to accounts) plus its attachment is
+            // all that's needed to exercise the attachments table rebuild.
+            execSQL(
+                "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+                    "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched, uid) VALUES " +
+                    "('acct:INBOX:1', 'acct', 'Ada', 'ada@example.org', 'Hi', '', '', 0, 1000, 0, 0, " +
+                    "'INBOX', 1, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO attachments (messageId, partIndex, filename, mimeType, sizeBytes) " +
+                    "VALUES ('acct:INBOX:1', 0, 'report.pdf', 'application/pdf', 2048)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 17, true, MIGRATION_16_17)
+
+        db.query("SELECT filename, contentId FROM attachments WHERE messageId = 'acct:INBOX:1'").use { c ->
+            assertTrue("the pre-upgrade attachment row must survive", c.moveToFirst())
+            assertEquals("report.pdf", c.getString(0))
+            assertTrue("existing attachments read a null contentId (treated as ordinary downloads)", c.isNull(1))
+            assertFalse("only the one pre-upgrade attachment row must survive", c.moveToNext())
+        }
+        assertEquals("the cached message must be untouched by 16->17", 1, db.count("messages"))
+        db.close()
+    }
+
     /** The newest schema JSON exported to app/schemas (shipped to the test APK as assets). */
     private fun latestExportedSchemaVersion(): Int {
         val schemaFolder = checkNotNull(LibreMailDatabase::class.java.canonicalName)

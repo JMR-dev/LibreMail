@@ -97,6 +97,25 @@ class LibreMailDatabaseTest {
     }
 
     @Test
+    fun observeForMessageHidesInlineImagesWhileGetForMessageKeepsThem() = runBlocking {
+        val messageDao = db.messageDao()
+        val attachmentDao = db.attachmentDao()
+        messageDao.insertNew(listOf(message("acct:1")))
+        attachmentDao.insert(
+            listOf(
+                AttachmentEntity("acct:1", 0, "logo.png", "image/png", 4, contentId = "logo1"),
+                AttachmentEntity("acct:1", 1, "invoice.pdf", "application/pdf", 10, contentId = null),
+            ),
+        )
+
+        // The displayed list excludes inline cid: images (issue #133) ...
+        val displayed = attachmentDao.observeForMessage("acct:1").first()
+        assertEquals(listOf("invoice.pdf"), displayed.map { it.filename })
+        // ... while the full read keeps them so their bytes can back a cid: request.
+        assertEquals(2, attachmentDao.getForMessage("acct:1").size)
+    }
+
+    @Test
     fun searchRowsAreNotInboxAndAreCleared() = runBlocking {
         val messageDao = db.messageDao()
         messageDao.insertNew(listOf(message("acct:1").copy(inInbox = true)))

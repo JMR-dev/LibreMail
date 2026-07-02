@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
@@ -56,6 +57,13 @@ interface MailRepository {
 
     /** Cached attachment metadata for a message, populated when the message is opened. */
     fun observeAttachments(messageId: String): Flow<List<Attachment>>
+
+    /**
+     * The message's inline images (HTML `<img src="cid:...">` parts), each with the bytes the reader's
+     * WebView serves for its `cid:` request. Downloads and caches any not yet on disk; returns empty
+     * for a plain-text message or one with no inline parts.
+     */
+    suspend fun inlineImages(messageId: String): List<InlineImage>
 
     /** Downloads an attachment's bytes to a local cache file and returns it. */
     suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File>
