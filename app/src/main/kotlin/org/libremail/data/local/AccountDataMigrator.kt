@@ -158,10 +158,15 @@ class AccountDataMigrator @Inject constructor(
                     if (present.isEmpty()) return // fresh cache or already dropped: nothing to move
                     TABLES.forEach { db.rawExecSQL(CREATE_TABLE_SQL.getValue(it)) }
                     db.rawExecSQL(SIGNATURES_INDEX_SQL)
-                    // Parent first so an enforced foreign key (Room enables them; this raw connection
-                    // does not) would still be satisfied. INSERT OR IGNORE makes each copy idempotent.
+                    // Copy by explicit shared column names, never SELECT *: the on-disk cache may predate
+                    // columns the current schema added (e.g. account_settings gained retentionCount /
+                    // retentionMonths at v13), and a bare SELECT * would then supply fewer values than the
+                    // destination has columns and fail the whole migration. Listing the columns the source
+                    // actually has lets the destination's newer columns take their defaults (NULL). Parent
+                    // first so an enforced foreign key would still be satisfied; INSERT OR IGNORE is idempotent.
                     TABLES.filter { it in present }.forEach { table ->
-                        db.rawExecSQL("INSERT OR IGNORE INTO `$table` SELECT * FROM cache.`$table`")
+                        val cols = sharedColumns(db, table)
+                        db.rawExecSQL("INSERT OR IGNORE INTO `$table` ($cols) SELECT $cols FROM cache.`$table`")
                     }
                     Log.d(TAG, "moved account tables into the account database: $present")
                 } finally {
@@ -188,6 +193,29 @@ class AccountDataMigrator @Inject constructor(
                 while (cursor.moveToNext()) present += cursor.getString(0)
             }
             return present
+        }
+
+        /**
+         * Column names present in BOTH the freshly-created destination `$table` (always the current
+         * schema) and the source `cache.$table` (possibly an older on-disk schema), backtick-quoted and
+         * comma-joined for an INSERT/SELECT column list. Destination-only columns are omitted so they
+         * take their defaults instead of overflowing the value list.
+         */
+        private fun sharedColumns(db: SQLiteDatabase, table: String): String {
+            val source = tableColumns(db, "cache", table)
+            return tableColumns(db, "main", table)
+                .filter { it in source }
+                .joinToString(", ") { "`$it`" }
+        }
+
+        /** The column names of `$schema.$table`, in declared order, via `PRAGMA table_info`. */
+        private fun tableColumns(db: SQLiteDatabase, schema: String, table: String): List<String> {
+            val columns = mutableListOf<String>()
+            db.rawQuery("PRAGMA $schema.table_info(`$table`)", null).use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            }
+            return columns
         }
     }
 }

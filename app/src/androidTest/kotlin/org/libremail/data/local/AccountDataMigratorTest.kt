@@ -188,6 +188,40 @@ class AccountDataMigratorTest {
     }
 
     @Test
+    fun copiesFromACacheOlderThanTheCurrentSchema() = runBlocking<Unit> {
+        // A cache last written at v12 — before account_settings gained retentionCount/retentionMonths
+        // (v13). The copy must not choke on the columns the destination has but the source lacks
+        // (a device upgrade from an old install crashed the migrator here).
+        helper.createDatabase(cacheName, 12).apply {
+            execSQL(
+                "INSERT INTO accounts (id, email, displayName, authType, imap_host, imap_port, imap_security, " +
+                    "smtp_host, smtp_port, smtp_security) VALUES ('acct', 'ada@example.org', 'Ada', " +
+                    "'PASSWORD_IMAP', 'imap.example.org', 993, 'SSL_TLS', 'smtp.example.org', 465, 'SSL_TLS')",
+            )
+            execSQL("INSERT INTO credentials (accountId, encryptedSecret) VALUES ('acct', 'sealed-secret')")
+            execSQL(
+                "INSERT INTO account_settings (accountId, signature, signatureEnabled, notificationsEnabled) " +
+                    "VALUES ('acct', 'Sig', 0, 1)",
+            )
+            close()
+        }
+
+        AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
+
+        openAccountsDb().apply {
+            assertEquals("ada@example.org", accountDao().getById("acct")?.email)
+            assertEquals("sealed-secret", credentialDao().getById("acct")?.encryptedSecret)
+            val settings = accountSettingsDao().get("acct")
+            assertEquals(false, settings?.signatureEnabled)
+            assertEquals(true, settings?.notificationsEnabled)
+            // Columns the v12 source lacked come across as the destination's defaults (null).
+            assertNull("retentionCount absent from a v12 cache must default to null", settings?.retentionCount)
+            assertNull(settings?.retentionMonths)
+            close()
+        }
+    }
+
+    @Test
     fun migratorDdlMatchesExportedAccountDatabaseSchema() {
         val schema = JSONObject(
             InstrumentationRegistry.getInstrumentation().context.assets
