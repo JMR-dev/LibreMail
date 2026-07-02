@@ -18,6 +18,7 @@ import org.libremail.data.local.MIGRATION_10_11
 import org.libremail.data.local.MIGRATION_11_12
 import org.libremail.data.local.MIGRATION_12_13
 import org.libremail.data.local.MIGRATION_13_14
+import org.libremail.data.local.MIGRATION_14_15
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
@@ -67,6 +68,7 @@ object DatabaseModule {
                 MIGRATION_11_12,
                 MIGRATION_12_13,
                 MIGRATION_13_14,
+                MIGRATION_14_15,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
         // accounts/credentials/mail tables would lose stored secrets. A missing migration should

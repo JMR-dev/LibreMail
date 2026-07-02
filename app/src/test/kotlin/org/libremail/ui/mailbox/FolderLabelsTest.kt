@@ -20,7 +20,16 @@ class FolderLabelsTest {
         role: FolderRole = FolderRole.NORMAL,
         specialUse: Boolean = false,
         accountId: String = "acct",
-    ) = Folder(accountId, fullName, displayName, role, selectable = true, specialUse = specialUse)
+        hierarchyDelimiter: Char? = null,
+    ) = Folder(
+        accountId,
+        fullName,
+        displayName,
+        role,
+        selectable = true,
+        specialUse = specialUse,
+        hierarchyDelimiter = hierarchyDelimiter,
+    )
 
     private fun account(
         email: String,
@@ -112,6 +121,48 @@ class FolderLabelsTest {
         val labels = resolve(folders, "example.org")
         assertEquals("Reports", labels["Reports"])
         assertEquals("Reports (Work)", labels["Work/Reports"])
+    }
+
+    // Issue #66: parentOf splits on the server-reported delimiter that folder sync persists, rather
+    // than re-inferring it from the name. Here the server reported '.' and a decoded leaf that is NOT
+    // a substring-suffix of the raw path, so the persisted delimiter is the only thing that can locate
+    // the parent — the old endsWith-based inference would give up and return null.
+    @Test
+    fun `a persisted delimiter parents folders whose leaf is not a raw suffix of the path`() {
+        val folders = listOf(
+            folder("Team.Weekly", displayName = "Weekly Report", hierarchyDelimiter = '.'),
+            folder("Ops.Weekly", displayName = "Weekly Report", hierarchyDelimiter = '.'),
+        )
+        val labels = resolve(folders, "example.org")
+        assertEquals("Weekly Report (Team)", labels["Team.Weekly"])
+        assertEquals("Weekly Report (Ops)", labels["Ops.Weekly"])
+    }
+
+    // The contrast for the test above: with no persisted delimiter (a legacy row) the same two folders
+    // can't be parented by inference and collapse to the full-path safety net — proving the persisted
+    // delimiter, not name inference, is what disambiguates them.
+    @Test
+    fun `without a persisted delimiter the same folders fall back to the full-path safety net`() {
+        val folders = listOf(
+            folder("Team.Weekly", displayName = "Weekly Report", hierarchyDelimiter = null),
+            folder("Ops.Weekly", displayName = "Weekly Report", hierarchyDelimiter = null),
+        )
+        val labels = resolve(folders, "example.org")
+        assertEquals("Weekly Report [Team.Weekly]", labels["Team.Weekly"])
+        assertEquals("Weekly Report [Ops.Weekly]", labels["Ops.Weekly"])
+    }
+
+    // A null delimiter (rows written before the column existed) must keep working until the next
+    // folder refresh backfills it: parentOf falls back to inferring the separator from the name.
+    @Test
+    fun `a null delimiter infers the separator for legacy rows`() {
+        val folders = listOf(
+            folder("Work/Reports", hierarchyDelimiter = null),
+            folder("Personal/Reports", hierarchyDelimiter = null),
+        )
+        val labels = resolve(folders, "example.org")
+        assertEquals("Reports (Work)", labels["Work/Reports"])
+        assertEquals("Reports (Personal)", labels["Personal/Reports"])
     }
 
     @Test

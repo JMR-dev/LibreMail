@@ -6,6 +6,7 @@ import org.libremail.domain.model.FolderRole
 import org.libremail.mail.FetchedFolder
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -76,5 +77,32 @@ class FolderMapperTest {
     fun `toDomain carries the special-use flag back out for both values`() {
         assertTrue(entityFor(listOf("\\Drafts")).toDomain().specialUse)
         assertFalse(entityFor(emptyList(), displayName = "Receipts").toDomain().specialUse)
+    }
+
+    // Issue #66: the server-reported hierarchy delimiter is persisted (as a one-character string) and
+    // read back as the Char parentOf splits on, instead of being discarded after the LIST response.
+    @Test
+    fun `the server hierarchy delimiter round-trips through the entity`() {
+        val entity = FetchedFolder(
+            fullName = "Parent.Child",
+            displayName = "Child",
+            attributes = emptyList(),
+            selectable = true,
+            hierarchyDelimiter = '.',
+        ).toEntity(accountId = "acct", sortOrder = 0)
+        assertEquals(".", entity.hierarchyDelimiter)
+        assertEquals('.', entity.toDomain().hierarchyDelimiter)
+    }
+
+    @Test
+    fun `an unknown hierarchy delimiter is persisted and read back as null`() {
+        val entity = FetchedFolder(
+            fullName = "INBOX",
+            displayName = "INBOX",
+            attributes = emptyList(),
+            selectable = true,
+        ).toEntity(accountId = "acct", sortOrder = 0)
+        assertNull(entity.hierarchyDelimiter)
+        assertNull(entity.toDomain().hierarchyDelimiter)
     }
 }

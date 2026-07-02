@@ -16,6 +16,12 @@ data class Folder(
      * a provider's built-in folder from a same-named user folder when de-duplicating labels.
      */
     val specialUse: Boolean = false,
+    /**
+     * The server-reported IMAP hierarchy separator for this folder (e.g. '/' or '.'). Null when the
+     * server reported none or the folder was cached before the delimiter was persisted; label logic
+     * then infers the separator from the folder name (issue #66).
+     */
+    val hierarchyDelimiter: Char? = null,
 )
 
 /**

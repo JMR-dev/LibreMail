@@ -73,6 +73,35 @@ class MigrationTest {
         db.close()
     }
 
+    /** v14 -> v15 (issue #66): `folders.hierarchyDelimiter` appears defaulting to NULL; data survives. */
+    @Test
+    fun migrate14To15_addsNullHierarchyDelimiterToFolders() {
+        helper.createDatabase(TEST_DB, 14).apply {
+            insertAccount()
+            execSQL(
+                "INSERT INTO folders (accountId, fullName, displayName, role, selectable, sortOrder, specialUse) " +
+                    "VALUES ('acct', 'INBOX', 'INBOX', 'INBOX', 1, 0, 0), " +
+                    "('acct', 'Work.Reports', 'Reports', 'NORMAL', 1, 1, 0)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, MIGRATION_14_15)
+
+        db.query("SELECT fullName, hierarchyDelimiter FROM folders ORDER BY sortOrder").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("INBOX", c.getString(0))
+            assertTrue("existing folders read a null delimiter until the next refresh", c.isNull(1))
+            assertTrue(c.moveToNext())
+            assertEquals("Work.Reports", c.getString(0))
+            assertTrue(c.isNull(1))
+            assertFalse("both pre-upgrade folder rows must survive, and nothing else", c.moveToNext())
+        }
+        // The folders' account is untouched.
+        assertEquals(1, db.count("accounts"))
+        db.close()
+    }
+
     /**
      * A gap in the chain (or a migration whose target schema was never committed) crashes upgrading
      * users, so fail fast with a readable message before replaying anything.
@@ -227,6 +256,12 @@ class MigrationTest {
         query("SELECT specialUse FROM folders WHERE fullName = 'INBOX'").use { c ->
             assertTrue("folder cached at v8 must survive to the newest version", c.moveToFirst())
             assertEquals(0, c.getInt(0))
+        }
+        // 14->15 adds a nullable hierarchyDelimiter; the folder cached at v8 predates it, so it reads
+        // null and the drawer infers the separator from the name until the next folder refresh.
+        query("SELECT hierarchyDelimiter FROM folders WHERE fullName = 'INBOX'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue("a folder cached before v15 must read a null delimiter", c.isNull(0))
         }
     }
 

@@ -20,4 +20,12 @@ data class FolderEntity(
      * when the drawer de-duplicates display labels.
      */
     @ColumnInfo(defaultValue = "0") val specialUse: Boolean = false,
+    /**
+     * The hierarchy separator the server reported for this folder in its LIST response (e.g. "/" for
+     * Gmail, "." for some servers), stored as a one-character string. Null for folders cached before
+     * this column existed (legacy rows) or on a flat namespace; the drawer's parent-label logic then
+     * infers the separator from the folder name (issue #66). Nullable with no SQL default (the same
+     * pattern as the drafts `bodyHtml` column), so the next folder refresh backfills the real value.
+     */
+    val hierarchyDelimiter: String? = null,
 )

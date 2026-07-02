@@ -44,6 +44,13 @@ data class FetchedFolder(
     val attributes: List<String>,
     /** False for \Noselect containers (e.g. Gmail's "[Gmail]" parent) that can't be opened. */
     val selectable: Boolean,
+    /**
+     * The hierarchy separator the server reported for this folder in its LIST response (e.g. '/' for
+     * Gmail, '.' for some servers). Null when the server reported none (a flat namespace) or it could
+     * not be read. Persisted so a folder's parent is split on the authoritative delimiter rather than
+     * one re-inferred from the name (issue #66).
+     */
+    val hierarchyDelimiter: Char? = null,
 )
 
 /** A message header fetched from the server (no body — that arrives with the reader). */
@@ -90,12 +97,17 @@ class ImapClient @Inject constructor() {
                 } else {
                     emptyList()
                 }
-                val separator = runCatching { folder.separator }.getOrDefault('/')
+                val reportedSeparator = runCatching { folder.separator }.getOrNull()
+                // Fall back to '/' only for splitting off the display name; the persisted delimiter
+                // stays null when the server reported none, so parentOf can tell "unknown" (infer)
+                // from a real separator.
+                val separator = reportedSeparator ?: '/'
                 FetchedFolder(
                     fullName = folder.fullName,
                     displayName = folder.fullName.substringAfterLast(separator),
                     attributes = attributes,
                     selectable = attributes.none { it.equals("\\Noselect", ignoreCase = true) },
+                    hierarchyDelimiter = reportedSeparator?.takeUnless { it == Char.MIN_VALUE },
                 )
             }
             // Some servers don't return INBOX from a wildcard LIST; guarantee it's always present.
