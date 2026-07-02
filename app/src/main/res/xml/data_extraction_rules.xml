@@ -11,8 +11,11 @@
     - datastore/libremail_dbkey.preferences_pb: the Keystore-sealed SQLCipher passphrase for the
       encrypted cache. The wrapping Keystore key is non-exportable and device-bound, so the
       ciphertext is useless anywhere else.
-    - libremail.db (+ -wal/-shm/-journal): encrypted IMAP/OAuth credentials and the cached mail.
-      The cache re-downloads on the next sync; accounts are re-added on a new device.
+    - libremail.db (+ -wal/-shm/-journal): the cached mail; re-downloads on the next sync.
+    - libremail-accounts.db (+ -wal/-shm/-journal): accounts, encrypted IMAP/OAuth credentials,
+      per-account settings and signatures (issue #111 moved these out of libremail.db). The
+      credentials are sealed with a device-bound key, so they would only ever restore as
+      undecryptable ciphertext; accounts are re-added on a new device.
   (Lint's FullBackupContent rule forbids <exclude> paths outside an <include>, so the exclusions are
   expressed by simply not listing those paths rather than as explicit <exclude> entries.)
 -->
