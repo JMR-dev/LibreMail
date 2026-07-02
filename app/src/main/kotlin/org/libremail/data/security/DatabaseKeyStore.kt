@@ -18,6 +18,9 @@ import javax.inject.Singleton
 
 private val Context.dbKeyDataStore: DataStore<Preferences> by preferencesDataStore(name = "libremail_dbkey")
 
+/** Which Keystore seal currently protects the cache passphrase (or [NONE] before first use). */
+enum class SealState { NONE, MASTER, AUTH }
+
 /**
  * Supplies the SQLCipher passphrase for the opt-in encrypted cache. A random 256-bit key is
  * generated once and persisted only as ciphertext — sealed by a non-exportable Android Keystore key
@@ -42,16 +45,43 @@ class DatabaseKeyStore @Inject constructor(
     private val generationLock = Mutex()
 
     /**
+     * Resolve the passphrase needed to open (or convert) the on-disk cache, keyed off which seal
+     * actually EXISTS — not off the app-lock setting, which lives in a separate DataStore and can be
+     * out of sync with the seals. This is the single source of truth `DatabaseModule` uses:
+     *  - [SealState.AUTH]: the value lives only in [PassphraseSession] after the user authenticates;
+     *    wait for it. Never re-derive or regenerate an auth-sealed passphrase.
+     *  - [SealState.MASTER]: unwrap it with the non-auth master key (no authentication needed).
+     *  - [SealState.NONE]: first use. When app-lock is off, generate + master-seal a fresh key; when
+     *    app-lock is on the arming flow ([sealWithAuth]) mints and unlocks it right after auth, so wait.
+     */
+    suspend fun resolvePassphrase(appLockEnabled: Boolean): String = when (sealState()) {
+        SealState.AUTH -> session.current() ?: session.await()
+        SealState.MASTER -> masterSealed() ?: error("master-sealed passphrase failed to decrypt")
+        SealState.NONE -> if (appLockEnabled) session.current() ?: session.await() else passphrase()
+    }
+
+    /** Which seal currently protects the passphrase (or [SealState.NONE] before first use). */
+    suspend fun sealState(): SealState = when {
+        read(SEALED_AUTH) != null -> SealState.AUTH
+        read(SEALED_MASTER) != null -> SealState.MASTER
+        else -> SealState.NONE
+    }
+
+    /**
      * App-lock OFF path: returns the passphrase sealed by the master key, generating and sealing it
-     * on first use. This is the original auto-unwrap behavior and must only be used when app-lock is
-     * disabled (when it is enabled the master-sealed copy is intentionally removed).
+     * on first use. Refuses to mint a fresh key while an auth seal exists — doing so would strand the
+     * real (auth-sealed) key and leave the DB encrypted under a passphrase we could never reproduce.
      */
     suspend fun passphrase(): String {
         masterSealed()?.let { return it }
         return generationLock.withLock {
             // Re-check inside the lock so a concurrent first-caller doesn't generate a second key
             // (which would leave a DB encrypted under a key we then overwrite and can't reproduce).
-            masterSealed() ?: generateAndSealMaster()
+            masterSealed()?.let { return@withLock it }
+            check(read(SEALED_AUTH) == null) {
+                "refusing to generate a master passphrase while an auth-sealed passphrase exists"
+            }
+            generateAndSealMaster()
         }
     }
 
@@ -97,6 +127,9 @@ class DatabaseKeyStore @Inject constructor(
             it[SEALED_MASTER] = crypto.encrypt(plain)
             it.remove(SEALED_AUTH)
         }
+        // The auth-bound key is now unused. Delete it so a later invalidation of this orphaned key
+        // can't trigger a spurious cache wipe, and its stale probe can't crash the foreground pass.
+        authCipher.deleteKey()
         session.lock()
     }
 
@@ -117,7 +150,7 @@ class DatabaseKeyStore @Inject constructor(
 
     /**
      * Persist that the encrypted cache must be wiped on the next cold start. The actual file deletion
-     * happens in `DatabaseModule.provideDatabase` (via [consumeClearPending]) BEFORE Room opens the
+     * happens in `DatabaseModule.provideDatabase` (guarded by [isClearPending]) BEFORE Room opens the
      * database, so there is never an open connection whose backing file is deleted underneath it —
      * the corruption-safe way to "clear + re-sync" after a screen-lock change invalidates the key.
      */
@@ -125,11 +158,16 @@ class DatabaseKeyStore @Inject constructor(
         context.dbKeyDataStore.edit { it[CLEAR_PENDING] = true }
     }
 
-    /** Read-and-clear the clear-pending flag. Returns true if the cache should be wiped now. */
-    suspend fun consumeClearPending(): Boolean {
-        val pending = context.dbKeyDataStore.data.first()[CLEAR_PENDING] == true
-        if (pending) context.dbKeyDataStore.edit { it.remove(CLEAR_PENDING) }
-        return pending
+    /**
+     * True if the cache should be wiped at this cold start. Does NOT clear the flag: the caller must
+     * perform the wipe (+ [resetSealedPassphrase]) FIRST and then call [clearClearPending], so a crash
+     * mid-wipe simply repeats the idempotent wipe next start instead of stranding an unreadable file.
+     */
+    suspend fun isClearPending(): Boolean = context.dbKeyDataStore.data.first()[CLEAR_PENDING] == true
+
+    /** Clear the wipe flag. Call ONLY after the wipe + [resetSealedPassphrase] have completed. */
+    suspend fun clearClearPending() {
+        context.dbKeyDataStore.edit { it.remove(CLEAR_PENDING) }
     }
 
     private suspend fun masterSealed(): String? = read(SEALED_MASTER)?.let { crypto.decrypt(it) }

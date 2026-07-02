@@ -35,7 +35,6 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.security.DatabaseKeyStore
-import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.SettingsRepository
 import javax.inject.Singleton
 
@@ -48,7 +47,6 @@ object DatabaseModule {
     fun provideDatabase(
         @ApplicationContext context: Context,
         keyStore: DatabaseKeyStore,
-        passphraseSession: PassphraseSession,
         settingsRepository: SettingsRepository,
     ): LibreMailDatabase {
         val builder = Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
@@ -73,37 +71,39 @@ object DatabaseModule {
         // before the database is opened — so it never races an open connection; toggling the setting
         // therefore takes effect on the next app start. The passphrase is sealed by the Keystore.
         //
-        // When app-lock is ON the sealing key is auth-bound, so the passphrase can only be resolved
-        // AFTER the user authenticates at the lock screen. We read it from PassphraseSession, which
-        // blocks (this runs on a background DI thread, never the UI thread) until the unlock flow in
-        // AppLockViewModel unwraps it. This is what makes the encrypted cache "only readable after
-        // authentication". With app-lock OFF the master-sealed passphrase auto-unwraps as before.
+        // The passphrase source is resolved from which seal actually exists
+        // ([DatabaseKeyStore.resolvePassphrase]), NOT from the app-lock setting (a separate DataStore
+        // that can disagree). When app-lock is ON the sealing key is auth-bound, so resolvePassphrase
+        // waits on PassphraseSession until the user authenticates. This provider must therefore never
+        // be constructed on the main thread while the cache is locked — LibreMailApplication injects
+        // AccountRepository lazily and the sync/push workers fail fast when locked, and the gate
+        // composes no DB-backed screen until Unlocked.
         val dbFile = context.getDatabasePath(DB_NAME)
 
         // A screen-lock change (biometric re-enrollment / lock removal) can invalidate the auth-bound
         // key so the encrypted cache is no longer decryptable. AppLockViewModel records that and
         // restarts the app; we wipe the cache HERE — at cold start, before Room opens — so the file is
-        // never deleted from under an open connection. A re-sync then repopulates it. No corruption.
-        if (runBlocking { keyStore.consumeClearPending() }) {
+        // never deleted from under an open connection. Crash-safe order: wipe + reset the seals, and
+        // only THEN clear the flag, so a kill mid-wipe just repeats the idempotent wipe next start.
+        if (runBlocking { keyStore.isClearPending() }) {
             DatabaseFiles.clear(context)
-            runBlocking { keyStore.resetSealedPassphrase() }
+            runBlocking {
+                keyStore.resetSealedPassphrase()
+                keyStore.clearClearPending()
+            }
         }
 
         val settings = runBlocking { settingsRepository.settings.first() }
         val appLock = settings.appLock
         if (settings.encryptCache) {
-            val passphrase = runBlocking {
-                if (appLock) passphraseSession.await() else keyStore.passphrase()
-            }
+            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
             DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
             builder.openHelperFactory(
                 SupportOpenHelperFactory(passphrase.toByteArray(Charsets.US_ASCII), null, false),
             )
         } else if (DatabaseEncryption.isEncrypted(dbFile)) {
             // Encryption was turned back off — decrypt so the default (unkeyed) open succeeds.
-            val passphrase = runBlocking {
-                if (appLock) passphraseSession.await() else keyStore.passphrase()
-            }
+            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
             DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
         }
         return builder.build()

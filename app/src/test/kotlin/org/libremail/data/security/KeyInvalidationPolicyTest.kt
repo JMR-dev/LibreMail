@@ -51,4 +51,30 @@ class KeyInvalidationPolicyTest {
         // Both true: the device being insecure dominates (can't authenticate at all).
         assertEquals(LockAction.CLEAR_AND_DISABLE, decide(secure = false, invalidated = true, encrypt = true))
     }
+
+    @Test
+    fun `full decision table is pinned`() {
+        // App-lock off: always proceed, regardless of the other three inputs (all 8 combinations).
+        for (e in listOf(false, true)) {
+            for (s in listOf(false, true)) {
+                for (i in listOf(false, true)) {
+                    assertEquals(
+                        LockAction.PROCEED,
+                        decide(appLock = false, encrypt = e, secure = s, invalidated = i),
+                    )
+                }
+            }
+        }
+        // App-lock on, device no longer secure: clear+disable iff there is an encrypted cache to lose.
+        assertEquals(LockAction.CLEAR_AND_DISABLE, decide(secure = false, encrypt = true, invalidated = false))
+        assertEquals(LockAction.CLEAR_AND_DISABLE, decide(secure = false, encrypt = true, invalidated = true))
+        assertEquals(LockAction.DISABLE_APP_LOCK, decide(secure = false, encrypt = false, invalidated = false))
+        assertEquals(LockAction.DISABLE_APP_LOCK, decide(secure = false, encrypt = false, invalidated = true))
+        // App-lock on, secure, key invalidated: clear+re-auth iff encrypted, else just re-auth.
+        assertEquals(LockAction.CLEAR_AND_REQUIRE_AUTH, decide(secure = true, encrypt = true, invalidated = true))
+        assertEquals(LockAction.REQUIRE_AUTH, decide(secure = true, encrypt = false, invalidated = true))
+        // App-lock on, secure, key valid: the common case — require auth (previously unpinned rows).
+        assertEquals(LockAction.REQUIRE_AUTH, decide(secure = true, encrypt = true, invalidated = false))
+        assertEquals(LockAction.REQUIRE_AUTH, decide(secure = true, encrypt = false, invalidated = false))
+    }
 }

@@ -5,6 +5,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
 import android.util.Log
 import java.security.KeyStore
@@ -73,9 +74,10 @@ class DatabaseKeyCipher @Inject constructor() {
     }
 
     /**
-     * True when the key exists but has been permanently invalidated (a new biometric was enrolled or
-     * the device lock was removed). Detected by attempting to initialize a cipher, which fails fast
-     * without needing an auth window.
+     * True only when the key exists AND has been permanently invalidated (a new biometric was enrolled
+     * or the device lock was removed). A merely-lapsed auth window ([UserNotAuthenticatedException]) is
+     * NOT invalidation and returns false, so a routine foreground pass — which calls this before any
+     * authentication — never mistakes an unauthenticated key for one that must trigger a cache wipe.
      */
     fun isInvalidated(): Boolean {
         val key = existingKey() ?: return false
@@ -85,6 +87,15 @@ class DatabaseKeyCipher @Inject constructor() {
         } catch (e: KeyPermanentlyInvalidatedException) {
             Log.d(TAG, "auth-bound database key invalidated", e)
             true
+        } catch (e: UserNotAuthenticatedException) {
+            // Valid key, just outside its time-bound auth window — not invalidated.
+            Log.d(TAG, "auth-bound key outside its auth window; not invalidated", e)
+            false
+        } catch (e: Exception) {
+            // Never let a validity probe crash the foreground pass; a real decrypt later surfaces any
+            // genuine problem. Treat an unknown probe failure as "not invalidated" (don't wipe).
+            Log.d(TAG, "auth-bound key validity probe failed; treating as valid", e)
+            false
         }
     }
 

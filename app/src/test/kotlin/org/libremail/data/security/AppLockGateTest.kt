@@ -78,4 +78,26 @@ class AppLockGateTest {
         gate.lock()
         assertEquals(LockState.UNLOCKED, gate.onForeground(now = 100, appLockEnabled = false))
     }
+
+    @Test
+    fun `a background recorded after a foreground pass began does not unlock on that stale pass`() {
+        // Regression (lock-bypass race): a stale foreground pass whose timestamp was captured before a
+        // later background must NOT treat that background as a within-grace return and stay unlocked.
+        val gate = AppLockGate(grace)
+        gate.onForeground(now = 0, appLockEnabled = true)
+        gate.onAuthenticated() // UNLOCKED
+        val staleForegroundAt = 1_000L
+        gate.onBackground(now = 2_000L) // background happens AFTER the stale pass began
+        assertEquals(LockState.LOCKED, gate.onForeground(now = staleForegroundAt, appLockEnabled = true))
+    }
+
+    @Test
+    fun `the genuine return after a stale pass still requires authentication`() {
+        val gate = AppLockGate(grace)
+        gate.onForeground(now = 0, appLockEnabled = true)
+        gate.onAuthenticated()
+        gate.onBackground(now = 2_000L)
+        gate.onForeground(now = 1_000L, appLockEnabled = true) // stale -> LOCKED, marker retained
+        assertEquals(LockState.LOCKED, gate.onForeground(now = 3_000L, appLockEnabled = true))
+    }
 }

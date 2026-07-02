@@ -2,6 +2,7 @@
 package org.libremail.ui.lock
 
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -9,7 +10,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
@@ -64,18 +69,52 @@ fun AppLockGateHost(viewModel: AppLockViewModel = hiltViewModel(), content: @Com
         )
     }
 
-    when (val state = uiState) {
-        AppLockUiState.Checking ->
-            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {}
+    // Once unlocked, keep [content] in the composition across later re-locks so its state (navigation
+    // position, in-progress compose drafts, scroll) survives — the lock screen is drawn OVER it rather
+    // than replacing it. Content is never composed before the first unlock, so no DB-backed screen
+    // opens while the cache is still locked; a fresh process starts locked, so [remember] (not
+    // rememberSaveable) is intentional — content stays uncomposed until this session authenticates.
+    var hasEverUnlocked by remember { mutableStateOf(uiState is AppLockUiState.Unlocked) }
+    LaunchedEffect(uiState) { if (uiState is AppLockUiState.Unlocked) hasEverUnlocked = true }
 
-        AppLockUiState.Unlocked -> content()
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (hasEverUnlocked) content()
 
-        is AppLockUiState.Locked -> {
-            LockScreen(error = state.error, onUnlock = authenticate)
-            // Auto-present the prompt the first time the lock screen appears; the button covers retries.
-            LaunchedEffect(Unit) { authenticate() }
+        when (val state = uiState) {
+            AppLockUiState.Unlocked -> Unit
+
+            AppLockUiState.Checking -> LockCover()
+
+            is AppLockUiState.Locked -> {
+                LockCover { LockScreen(error = state.error, onUnlock = authenticate) }
+                // Auto-present the prompt when the lock screen (re)appears from an unlocked/checking
+                // state; the button covers manual retries. Keyed to entering the Locked branch, so a
+                // retry (which stays in this branch) shows its error without re-triggering the prompt.
+                LaunchedEffect(Unit) { authenticate() }
+            }
         }
     }
+}
+
+/**
+ * Opaque, input-blocking overlay drawn on top of [content] while the app is locked or still
+ * resolving, so nothing underneath is visible or interactable. Screenshot / recents protection is the
+ * window's FLAG_SECURE (set by MainActivity while app-lock is on), which the composition can't do.
+ */
+@Composable
+private fun LockCover(content: @Composable () -> Unit = {}) {
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
+        color = MaterialTheme.colorScheme.background,
+    ) { content() }
 }
 
 /**

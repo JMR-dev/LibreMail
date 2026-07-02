@@ -24,18 +24,25 @@ class AppLockGate(private val graceMillis: Long = DEFAULT_GRACE_MILLIS) {
     private var backgroundedAt: Long? = null
 
     /**
-     * Recompute the lock state when the app comes to the foreground. [now] is a monotonic-ish epoch
-     * in milliseconds. Returns the resulting state.
+     * Recompute the lock state when the app comes to the foreground. [now] is a monotonic-ish epoch in
+     * milliseconds, captured synchronously when the foreground event fires (so a background recorded
+     * during an async foreground pass can't be mistaken for a within-grace return). Returns the state.
      */
     fun onForeground(now: Long, appLockEnabled: Boolean): LockState {
+        val bgAt = backgroundedAt
         state = when {
             !appLockEnabled -> LockState.UNLOCKED
             state == LockState.LOCKED -> LockState.LOCKED
-            backgroundedAt == null -> LockState.UNLOCKED
-            withinGrace(now) -> LockState.UNLOCKED
+            bgAt == null -> LockState.UNLOCKED
+            // A background recorded AFTER this pass began (now < bgAt): the app has since gone back to
+            // the background, so re-lock and KEEP the marker for the genuine return to evaluate.
+            now < bgAt -> LockState.LOCKED
+            now - bgAt <= graceMillis -> LockState.UNLOCKED
             else -> LockState.LOCKED
         }
-        backgroundedAt = null
+        // Consume the marker only for a genuine (non-stale) foreground, so a concurrent background is
+        // never silently erased — that erasure is what would let the next foreground skip re-locking.
+        if (bgAt == null || now >= bgAt) backgroundedAt = null
         return state
     }
 
@@ -53,11 +60,6 @@ class AppLockGate(private val graceMillis: Long = DEFAULT_GRACE_MILLIS) {
     /** Force the gate back to locked (e.g. after cache invalidation). */
     fun lock() {
         state = LockState.LOCKED
-    }
-
-    private fun withinGrace(now: Long): Boolean {
-        val since = backgroundedAt ?: return false
-        return now - since in 0..graceMillis
     }
 
     companion object {

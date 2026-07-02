@@ -246,6 +246,7 @@
     <string name="app_lock_prompt_subtitle">Confirm your screen lock to decrypt your mail.</string>
     <string name="app_lock_needs_device_lock">Set up a device screen lock in Android settings before enabling this.</string>
     <string name="app_lock_disable_failed">Couldn\'t turn off the screen lock right now. Please try again.</string>
+    <string name="app_lock_unlock_failed">Couldn\'t unlock. Please try again.</string>
 
     <string name="settings_adv_battery">Background battery usage</string>
     <string name="settings_adv_battery_unrestricted">Unrestricted — instant background mail is allowed.</string>

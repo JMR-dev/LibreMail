@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -84,10 +83,11 @@ class SettingsViewModel @Inject constructor(
             }
             settingsRepository.setAppLock(true)
         } else {
-            if (settingsRepository.settings.first().encryptCache) {
-                // Move the passphrase back under the master key BEFORE dropping the gate, or the next
-                // launch derives a fresh (wrong) key and can't open the encrypted cache. If it fails,
-                // keep app-lock on rather than risk that mismatch.
+            // Reseal under the master key whenever an auth seal actually exists — gate on the seal, not
+            // the encryptCache setting (a separate store that can already be off while the on-disk DB is
+            // still auth-sealed). Do it BEFORE dropping the gate, or the next launch can't open the
+            // cache. If it fails, keep app-lock on rather than strand the passphrase.
+            if (databaseKeyStore.hasAuthSealedPassphrase()) {
                 if (runCatching { databaseKeyStore.sealWithMaster() }.isFailure) {
                     _appLockMessage.value = R.string.app_lock_disable_failed
                     return@update

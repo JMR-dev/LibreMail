@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,7 +19,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.ui.LibreMailApp
 import org.libremail.ui.compose.ComposePrefill
@@ -51,6 +56,18 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Block screenshots and the recents-switcher snapshot while app-lock is on — the Compose gate
+        // can't stop the system's task snapshot (captured around background). Gated on the setting
+        // because FLAG_SECURE also blocks the user's own screenshots.
+        lifecycleScope.launch {
+            settingsRepository.settings.map { it.appLock }.distinctUntilChanged().collect { secure ->
+                if (secure) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
+        }
         // Only on a fresh launch — on a config-change recreation the NavHost restores the compose
         // destination itself, so re-parsing the (unchanged) intent would open a duplicate.
         if (savedInstanceState == null) {

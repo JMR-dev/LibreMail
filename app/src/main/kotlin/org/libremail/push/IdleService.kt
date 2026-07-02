@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
+import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.libremail.R
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.toDomain
+import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.MailSyncer
 import org.libremail.domain.model.Account
@@ -40,13 +42,18 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class IdleService : Service() {
 
-    @Inject lateinit var accountDao: AccountDao
+    // Lazy: AccountDao / MailConnectionFactory (via CredentialStore) / MailSyncer all resolve the Room
+    // DB, which blocks while the encrypted cache is locked. Resolve them only after the cache-lock
+    // check in onStartCommand, so a start into a still-locked process defers instead of ANR-ing.
+    @Inject lateinit var accountDao: Lazy<AccountDao>
 
-    @Inject lateinit var connectionFactory: MailConnectionFactory
+    @Inject lateinit var connectionFactory: Lazy<MailConnectionFactory>
 
     @Inject lateinit var imapClient: ImapClient
 
-    @Inject lateinit var mailSyncer: MailSyncer
+    @Inject lateinit var mailSyncer: Lazy<MailSyncer>
+
+    @Inject lateinit var cacheGuard: EncryptedCacheGuard
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var watching = false
@@ -58,7 +65,16 @@ class IdleService : Service() {
         startAsForeground()
         if (!watching) {
             watching = true
-            scope.launch { reconcileWatchers() }
+            scope.launch {
+                // Can't open the encrypted DB without the user present. Defer (stop) and let the app
+                // restart push after the next unlock, rather than block the service and ANR.
+                if (cacheGuard.isCacheLocked()) {
+                    Log.i(TAG, "encrypted cache locked; deferring IDLE push until the app is unlocked")
+                    stopSelf()
+                    return@launch
+                }
+                reconcileWatchers()
+            }
         }
         return START_STICKY
     }
@@ -70,7 +86,7 @@ class IdleService : Service() {
      * accounts exist, so reaching zero here is just a transient state.
      */
     private suspend fun reconcileWatchers() {
-        accountDao.observeAll().collect { entities ->
+        accountDao.get().observeAll().collect { entities ->
             val accounts = entities.map { it.toDomain() }
             val currentIds = accounts.mapTo(mutableSetOf()) { it.id }
             (watchers.keys - currentIds).forEach { id -> watchers.remove(id)?.cancel() }
@@ -94,10 +110,10 @@ class IdleService : Service() {
         var backoffMs = INITIAL_BACKOFF_MS
         while (scope.isActive) {
             try {
-                val params = connectionFactory.imapParamsFor(account)
+                val params = connectionFactory.get().imapParamsFor(account)
                 withTimeoutOrNull(IDLE_RENEWAL_MS) {
                     // Sync just this account on its own push — not every account.
-                    imapClient.idle(params) { mailSyncer.syncAccount(account.id) }
+                    imapClient.idle(params) { mailSyncer.get().syncAccount(account.id) }
                 }
                 backoffMs = INITIAL_BACKOFF_MS
             } catch (e: CancellationException) {
