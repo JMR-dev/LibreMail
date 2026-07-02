@@ -2,6 +2,7 @@
 package org.libremail.ui.settings
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -15,6 +16,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
+import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.security.AppLockManager
 import org.libremail.data.security.DatabaseKeyCipher
 import org.libremail.data.security.DatabaseKeyStore
@@ -57,6 +59,7 @@ class SettingsScreenTest {
             insecureDevice,
             keyStore,
             BatteryOptimizationManager(context),
+            ContactsPermissionManager(context),
             SyncScheduler(Provider { WorkManager.getInstance(context) }),
         )
     }
@@ -86,6 +89,16 @@ class SettingsScreenTest {
         composeTestRule.waitUntil(5_000) {
             runBlocking { settingsRepository.fetchPolicy() } == FetchPolicy.ON_DEMAND
         }
+    }
+
+    @Test
+    fun contactsAutocompleteRow_isShown() {
+        // The contacts entry (#129) is wired into the real screen; it reflects the live permission
+        // state, so we assert only that the row is present (state-specific rendering is covered by
+        // ContactAutocompleteRowTest).
+        setContent(settingsViewModel(SettingsRepository(context)))
+        composeTestRule.onNodeWithText(string(R.string.settings_contacts_autocomplete))
+            .performScrollTo().assertIsDisplayed()
     }
 
     @Test

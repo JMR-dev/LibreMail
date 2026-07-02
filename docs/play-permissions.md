@@ -39,16 +39,22 @@ Nothing else. Notably **absent** (worth stating in any review exchange):
 - **Data handling:** query and results are entirely **on-device** (results live in memory for
   the suggestion dropdown). Nothing from the contacts provider is stored, logged, or
   transmitted; an address reaches the network only if the user puts it on an email they send.
-- **Request flow:** first composition of the compose screen (`ui/compose/ComposeScreen.kt:101`);
-  denial is handled gracefully — `ContactsRepository.search` returns empty and composing works
-  normally (manual address entry).
+- **Request flow:** a dedicated, skippable **onboarding step** (`ui/onboarding/ContactsAccessScreen.kt`,
+  route `ONBOARDING_CONTACTS`) requests it **once**, showing an in-context rationale up front —
+  contacts are used only for on-device autocomplete and never uploaded (#127, #128). The compose
+  screen no longer prompts; it only reads the current grant. If declined, recipient autocomplete can
+  be enabled later from **Settings → Contacts → Recipient autocomplete** (`ui/settings/SettingsScreen.kt`),
+  which re-requests in-app when possible or deep-links to the app's system settings when the
+  permission is permanently denied (#129). Denial is handled gracefully throughout —
+  `ContactsRepository.search` returns empty and composing works normally (manual address entry).
 - **Play-Console justification text (if asked in review):**
   > LibreMail is an email client. READ_CONTACTS powers recipient autocomplete on the compose
   > screen only: the app queries the on-device contacts provider for names/email addresses
   > matching what the user typed and shows up to 8 suggestions. Contact data is processed
   > entirely on the device — it is never uploaded, stored outside the suggestion list, or shared.
-  > The permission is requested in context (first open of the compose screen) and the feature
-  > degrades gracefully if denied.
+  > The permission is requested once, in context, from a skippable onboarding step that explains
+  > the on-device autocomplete use before asking (and can be enabled later from Settings); the
+  > feature degrades gracefully if denied.
 
 ## `POST_NOTIFICATIONS`
 
