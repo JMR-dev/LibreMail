@@ -67,6 +67,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collect
 import org.libremail.R
@@ -81,10 +83,6 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> viewModel.onContactsPermission(granted) }
-
     val attachmentPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -98,16 +96,15 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
         )
     }
 
-    LaunchedEffect(Unit) {
-        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            viewModel.onContactsPermission(
-                true,
-            )
-        } else {
-            permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
-        }
+    // Reflect the current READ_CONTACTS grant without ever prompting: the request now lives in the
+    // onboarding contacts step (#127) and the Settings entry (#129), so compose only reads state.
+    // Re-checked on resume so enabling autocomplete later (e.g. from Settings) takes effect the next
+    // time compose is shown. Denial degrades gracefully — searchContacts() guards on this flag.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.onContactsPermission(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
     }
     LaunchedEffect(Unit) { viewModel.finished.collect { onBack() } }
     BackHandler { viewModel.onExit() }

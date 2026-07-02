@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.backup
 
+import org.libremail.data.local.DatabaseFiles
 import org.libremail.data.settings.AppSettings
 
 /**
@@ -24,13 +25,16 @@ object BackupPolicy {
         "datastore/libremail_dbkey.preferences_pb",
     )
 
-    /** `databases`-dir-relative names that must never leave the device (encrypted credentials + mail cache). */
-    val EXCLUDED_DATABASE_PATHS: List<String> = listOf(
-        "libremail.db",
-        "libremail.db-wal",
-        "libremail.db-shm",
-        "libremail.db-journal",
-    )
+    /**
+     * `databases`-dir-relative names that must never leave the device: the encrypted mail cache
+     * ([DatabaseFiles.NAME]) AND the accounts + encrypted-credentials database
+     * ([DatabaseFiles.ACCOUNTS_NAME]), each with its SQLite sidecars. Derived from [DatabaseFiles]
+     * rather than hand-listed, so a newly added database can never silently fall out of the
+     * never-back-up set (issue #103).
+     */
+    val EXCLUDED_DATABASE_PATHS: List<String> =
+        DatabaseFiles.fileNames(DatabaseFiles.NAME) +
+            DatabaseFiles.fileNames(DatabaseFiles.ACCOUNTS_NAME)
 
     /**
      * Whether Android Backup may run for this app. Opt-in and OFF by default: nothing is backed up

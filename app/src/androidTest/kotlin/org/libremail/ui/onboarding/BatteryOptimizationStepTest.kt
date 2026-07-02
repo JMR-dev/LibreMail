@@ -30,6 +30,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
+import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.push.BatteryOptimizationManager
 import org.libremail.ui.navigation.Routes
@@ -70,7 +71,11 @@ class BatteryOptimizationStepTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         settingsRepository = SettingsRepository(context)
         runBlocking { settingsRepository.setBatteryPromptHandled(handled) }
-        onboarding = OnboardingViewModel(BatteryOptimizationManager(context), settingsRepository)
+        onboarding = OnboardingViewModel(
+            BatteryOptimizationManager(context),
+            ContactsPermissionManager(context),
+            settingsRepository,
+        )
         onboarding.onAccountAdded(FIRST_ACCOUNT_ID)
 
         composeTestRule.setContent {

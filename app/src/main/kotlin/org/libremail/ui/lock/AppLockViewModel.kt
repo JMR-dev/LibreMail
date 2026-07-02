@@ -2,16 +2,18 @@
 package org.libremail.ui.lock
 
 import android.content.Context
-import android.content.Intent
 import android.os.SystemClock
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.Operation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,10 @@ import org.libremail.data.security.LockState
 import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
+import org.libremail.restart.ProcessRestarter
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.inject.Inject
 
 /** UI state of the app-lock gate that wraps the whole app. */
@@ -73,6 +79,10 @@ class AppLockViewModel @Inject constructor(
     private val databaseKeyCipher: DatabaseKeyCipher,
     private val session: PassphraseSession,
     private val syncScheduler: SyncScheduler,
+    // Issues the key-invalidation recovery relaunch from a separate ":restart" process that survives
+    // this process being killed, so the relaunch can't be dropped by ActivityManager scheduling it
+    // into the dying process (the same-process "startActivity then exit(0)" race).
+    private val processRestarter: ProcessRestarter,
     // Application-scoped (see SecurityModule): the gate is injected rather than owned by this
     // Activity-scoped ViewModel so the inactivity grace window survives Activity recreation — Back on
     // the task root finishes the Activity and clears its ViewModelStore on API 29/30, which would
@@ -82,6 +92,12 @@ class AppLockViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<AppLockUiState>(AppLockUiState.Checking)
     val uiState: StateFlow<AppLockUiState> = _uiState.asStateFlow()
+
+    // The dispatcher for blocking Keystore/DataStore/WorkManager work pushed off the main thread.
+    // Injectable so the recovery flow (clearCacheAndRestart) runs on the test scheduler and its
+    // ordering — enqueue durably persisted BEFORE the restart — is deterministically verifiable.
+    @VisibleForTesting
+    internal var defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 
     // Cached so onBackground / onForeground can cover the content synchronously (before the async
     // settings read) whenever app-lock is on — so no stale mailbox frame renders on resume.
@@ -125,7 +141,7 @@ class AppLockViewModel @Inject constructor(
             // App-lock is on: cover any showing content while we resolve, so no stale mailbox frame
             // renders before the (async) decision lands.
             if (_uiState.value == AppLockUiState.Unlocked) _uiState.value = AppLockUiState.Checking
-            val action = withContext(Dispatchers.Default) {
+            val action = withContext(defaultDispatcher) {
                 KeyInvalidationPolicy.decide(
                     appLockEnabled = true,
                     encryptCacheEnabled = settings.encryptCache,
@@ -173,7 +189,7 @@ class AppLockViewModel @Inject constructor(
     /** Called by the host after a successful `BiometricPrompt`. */
     fun onAuthenticated() {
         viewModelScope.launch {
-            when (withContext(Dispatchers.Default) { unlockOrArm() }) {
+            when (withContext(defaultDispatcher) { unlockOrArm() }) {
                 UnlockResult.OK -> {
                     gate.onAuthenticated()
                     publish()
@@ -258,25 +274,52 @@ class AppLockViewModel @Inject constructor(
     }
 
     private suspend fun clearCacheAndRestart(disableAppLock: Boolean) {
-        withContext(Dispatchers.Default) {
+        withContext(defaultDispatcher) {
             // Record the wipe intent BEFORE flipping app-lock off, so a crash between the two writes
             // leaves the wipe still pending (recoverable) rather than a disabled gate over a stale key.
+            // Both are DataStore edits that only return once durably committed, so they survive the
+            // restart below without further ceremony.
             databaseKeyStore.setClearPending()
             if (disableAppLock) settingsRepository.setAppLock(false)
-            syncScheduler.syncNow() // persisted by WorkManager; survives the restart
+            // Enqueue the post-wipe re-sync and BLOCK until WorkManager has durably persisted its
+            // WorkSpec before we hand off to the restart. syncNow() only *schedules* the insert on
+            // WorkManager's serial task executor; killing the process (via restartProcess) can race
+            // that async insert and drop the re-sync, leaving an empty mailbox after the wipe until the
+            // next periodic sync. Awaiting the enqueue Operation makes "survives the restart" real.
+            awaitSyncEnqueue(syncScheduler.syncNow())
         }
         restartProcess()
     }
 
     /**
+     * Block until WorkManager confirms the re-sync WorkSpec is durably persisted, bounded by
+     * [SYNC_ENQUEUE_TIMEOUT_SECONDS] so a stuck insert can never wedge recovery. A timeout/failure is
+     * logged and we restart anyway: the periodic sync will still eventually refill the wiped cache, so
+     * a best-effort wait is strictly better than the previous fire-and-forget enqueue. Runs on
+     * [defaultDispatcher] (never the main thread) because [Operation.result]'s get blocks.
+     */
+    private fun awaitSyncEnqueue(operation: Operation) {
+        try {
+            operation.result.get(SYNC_ENQUEUE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            Log.w(TAG, "re-sync enqueue not confirmed within timeout; restarting anyway", e)
+        } catch (e: ExecutionException) {
+            Log.w(TAG, "re-sync enqueue failed; restarting anyway", e)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Log.w(TAG, "interrupted awaiting re-sync enqueue; restarting anyway", e)
+        }
+    }
+
+    /**
      * Relaunch the app in a fresh process so [org.libremail.di.DatabaseModule] wipes the cache before
-     * Room reopens it. DEVICE-ONLY: process restart cannot be exercised in JVM unit tests.
+     * Room reopens it. Delegates to [ProcessRestarter], which issues the relaunch from a separate
+     * process that survives this one being killed — a same-process "startActivity then exit(0)" is
+     * unreliable because ActivityManager may schedule the relaunch into the dying process and drop it.
+     * DEVICE-ONLY end to end: the multi-process kill/relaunch cannot be exercised in JVM unit tests.
      */
     private fun restartProcess() {
-        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        if (intent != null) context.startActivity(intent)
-        Runtime.getRuntime().exit(0)
+        processRestarter.restart()
     }
 
     // Monotonic clock so a wall-clock change can't extend the inactivity grace window.
@@ -284,5 +327,10 @@ class AppLockViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "LibreMailAppLock"
+
+        // Upper bound on waiting for WorkManager to persist the re-sync WorkSpec. The insert is
+        // normally sub-second; this only caps a pathological stall so recovery can't hang before the
+        // restart. On timeout we restart anyway (the periodic sync still refills the cache later).
+        const val SYNC_ENQUEUE_TIMEOUT_SECONDS = 5L
     }
 }

@@ -72,6 +72,8 @@ private object Keys {
     val RETENTION_COUNT = intPreferencesKey("retention_count")
     val RETENTION_MONTHS = intPreferencesKey("retention_months")
     val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
+    val CONTACTS_PROMPT_HANDLED = booleanPreferencesKey("contacts_prompt_handled")
+    val CONTACTS_PERMISSION_REQUESTED = booleanPreferencesKey("contacts_permission_requested")
 }
 
 /**
@@ -117,6 +119,29 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         context.settingsDataStore.data.map { it[Keys.BATTERY_PROMPT_HANDLED] ?: false }.first()
 
     suspend fun setBatteryPromptHandled(value: Boolean) = put(Keys.BATTERY_PROMPT_HANDLED, value)
+
+    /**
+     * One-time onboarding flag: whether the user has already seen/acted on the "contacts access"
+     * opt-in step, so onboarding offers it at most once (see #127). Like [isBatteryPromptHandled] this
+     * is internal onboarding state, not a user-facing preference — the Settings contacts entry (#129)
+     * is the way to enable autocomplete later.
+     */
+    suspend fun isContactsPromptHandled(): Boolean =
+        context.settingsDataStore.data.map { it[Keys.CONTACTS_PROMPT_HANDLED] ?: false }.first()
+
+    suspend fun setContactsPromptHandled(value: Boolean) = put(Keys.CONTACTS_PROMPT_HANDLED, value)
+
+    /**
+     * Whether the `READ_CONTACTS` system dialog has ever actually been shown (from the onboarding step
+     * or the Settings entry). It is the only reliable signal — combined with the Activity's
+     * `shouldShowRequestPermissionRationale` — that separates "never asked yet" from "permanently
+     * denied", so the Settings entry (#129) can offer an in-app request versus a deep-link to system
+     * settings. See [ContactPermissionDecision][org.libremail.contacts.ContactPermissionDecision].
+     */
+    val contactsPermissionRequested: Flow<Boolean> =
+        context.settingsDataStore.data.map { it[Keys.CONTACTS_PERMISSION_REQUESTED] ?: false }
+
+    suspend fun setContactsPermissionRequested(value: Boolean) = put(Keys.CONTACTS_PERMISSION_REQUESTED, value)
 
     suspend fun setDynamicColor(value: Boolean) = put(Keys.DYNAMIC_COLOR, value)
     suspend fun setNewMailNotifications(value: Boolean) = put(Keys.NEW_MAIL_NOTIFICATIONS, value)

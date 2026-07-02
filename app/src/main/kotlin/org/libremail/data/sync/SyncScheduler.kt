@@ -6,6 +6,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Operation
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -48,13 +49,18 @@ class SyncScheduler @Inject constructor(
         workManager.enqueueUniquePeriodicWork(PERIODIC_WORK, PERIODIC_POLICY, request)
     }
 
-    /** One-shot sync, e.g. right after an account is added. */
-    fun syncNow() {
+    /**
+     * One-shot sync, e.g. right after an account is added. Returns the enqueue [Operation] so callers
+     * that must guarantee the WorkSpec is durably persisted before killing the process (the app-lock
+     * recovery restart) can await it — WorkManager persists the WorkSpec asynchronously on its serial
+     * task executor, so a fire-and-forget enqueue can be lost to a racing process death.
+     */
+    fun syncNow(): Operation {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(networkConstraint)
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
-        workManager.enqueueUniqueWork(ONESHOT_WORK, ExistingWorkPolicy.REPLACE, request)
+        return workManager.enqueueUniqueWork(ONESHOT_WORK, ExistingWorkPolicy.REPLACE, request)
     }
 
     /**
