@@ -21,6 +21,7 @@ import org.libremail.reporting.AppLog
 import org.libremail.reporting.CrashReporter
 import org.libremail.reporting.DiagnosticsCollector
 import org.libremail.reporting.RingLogBuffer
+import org.libremail.restart.ProcessRestarter
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -60,6 +61,12 @@ class LibreMailApplication :
 
     override fun onCreate() {
         super.onCreate()
+        // Android also instantiates this Application in the separate ":restart" trampoline process
+        // (see ProcessRestarter / RestartActivity), which exists only to relaunch the app from outside
+        // a dying main process and is torn down within milliseconds. It must NOT run any of the app's
+        // normal startup work — crash reporting, WorkManager scheduling, IDLE push all belong to the
+        // main process. The main process (no ":restart" suffix) is unaffected, so normal launch is too.
+        if (isRestartTrampolineProcess()) return
         // Wire up debug reporting first so crashes during the rest of startup are still captured.
         AppLog.install(ringLogBuffer)
         crashReporter.install()
@@ -97,6 +104,10 @@ class LibreMailApplication :
     fun ensurePushStarted() {
         if (pushShouldBeActive) idlePushManager.start()
     }
+
+    /** True when this Application instance is the one Android spun up in the ":restart" aux process. */
+    private fun isRestartTrampolineProcess(): Boolean =
+        Application.getProcessName() == packageName + ProcessRestarter.PROCESS_SUFFIX
 
     private companion object {
         const val TAG = "LibreMail"

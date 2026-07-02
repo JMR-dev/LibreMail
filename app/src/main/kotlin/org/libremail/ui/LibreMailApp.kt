@@ -37,6 +37,7 @@ import org.libremail.ui.mailbox.MailboxScreen
 import org.libremail.ui.navigation.Routes
 import org.libremail.ui.onboarding.AddAnotherAccountScreen
 import org.libremail.ui.onboarding.BatteryOptimizationScreen
+import org.libremail.ui.onboarding.ContactsAccessScreen
 import org.libremail.ui.onboarding.OnboardingViewModel
 import org.libremail.ui.onboarding.OnboardingWelcomeScreen
 import org.libremail.ui.outbox.OutboxScreen
@@ -327,12 +328,15 @@ private fun NavGraphBuilder.onboardingGraph(navController: NavHostController) {
 }
 
 /**
- * The tail of onboarding: the "add another?" prompt and the optional battery opt-in step. Split out of
- * [onboardingGraph] so each stays a readable length; both share the graph-scoped [OnboardingViewModel].
+ * The tail of onboarding: the "add another?" prompt and the optional contacts + battery opt-in steps.
+ * Split out of [onboardingGraph] so each stays a readable length; all share the graph-scoped
+ * [OnboardingViewModel]. The optional steps chain — contacts (#127) then battery (#49) — each shown
+ * only when needed; any that isn't is skipped, and a still-undecided (null) decision fails open.
  */
 private fun NavGraphBuilder.onboardingFinishDestinations(navController: NavHostController) {
     composable(Routes.ONBOARDING_ADD_ANOTHER) { entry ->
         val onboarding = onboardingViewModel(navController, entry)
+        val contactsPromptNeeded by onboarding.contactsPromptNeeded.collectAsStateWithLifecycle()
         val batteryPromptNeeded by onboarding.batteryPromptNeeded.collectAsStateWithLifecycle()
         AddAnotherAccountScreen(
             onAddAnother = {
@@ -341,14 +345,18 @@ private fun NavGraphBuilder.onboardingFinishDestinations(navController: NavHostC
                     popUpTo(Routes.ONBOARDING_PICKER) { inclusive = true }
                 }
             },
+            onFinish = { navController.advanceOnboarding(onboarding, contactsPromptNeeded, batteryPromptNeeded) },
+        )
+    }
+    composable(Routes.ONBOARDING_CONTACTS) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        val batteryPromptNeeded by onboarding.batteryPromptNeeded.collectAsStateWithLifecycle()
+        ContactsAccessScreen(
+            viewModel = onboarding,
             onFinish = {
-                // Offer the battery opt-in as a final step when it's needed; otherwise go straight to
-                // the inbox. A still-undecided (null) decision fails open to finishing.
-                if (batteryPromptNeeded == true) {
-                    navController.navigate(Routes.ONBOARDING_BATTERY)
-                } else {
-                    navController.finishOnboarding(onboarding.firstAddedAccountId)
-                }
+                onboarding.markContactsPromptHandled()
+                // Contacts is skipped here (it was the step just shown); only battery may remain.
+                navController.advanceOnboarding(onboarding, contactsPromptNeeded = false, batteryPromptNeeded)
             },
         )
     }
@@ -361,6 +369,23 @@ private fun NavGraphBuilder.onboardingFinishDestinations(navController: NavHostC
                 navController.finishOnboarding(onboarding.firstAddedAccountId)
             },
         )
+    }
+}
+
+/**
+ * Advances through the optional onboarding tail: the next still-needed opt-in step (contacts, then
+ * battery), or the inbox once none remain. Each `*PromptNeeded` is the graph-scoped decision; `null`
+ * (undecided) is treated as "not needed" so a slow read never blocks the end of onboarding.
+ */
+private fun NavHostController.advanceOnboarding(
+    onboarding: OnboardingViewModel,
+    contactsPromptNeeded: Boolean?,
+    batteryPromptNeeded: Boolean?,
+) {
+    when {
+        contactsPromptNeeded == true -> navigate(Routes.ONBOARDING_CONTACTS)
+        batteryPromptNeeded == true -> navigate(Routes.ONBOARDING_BATTERY)
+        else -> finishOnboarding(onboarding.firstAddedAccountId)
     }
 }
 

@@ -3,17 +3,18 @@ package org.libremail.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
-import org.libremail.data.local.AccountDataMigrator
-import org.libremail.data.local.DatabaseEncryption
+import org.libremail.data.local.CacheOpenMode
 import org.libremail.data.local.DatabaseFiles
+import org.libremail.data.local.DatabaseProvisioner
+import org.libremail.data.local.DeferredOpenHelperFactory
 import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.MIGRATION_10_11
 import org.libremail.data.local.MIGRATION_11_12
@@ -37,8 +38,6 @@ import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
-import org.libremail.data.security.DatabaseKeyStore
-import org.libremail.data.settings.SettingsRepository
 import javax.inject.Singleton
 
 @Module
@@ -47,13 +46,8 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(
-        @ApplicationContext context: Context,
-        keyStore: DatabaseKeyStore,
-        settingsRepository: SettingsRepository,
-        accountDataMigrator: AccountDataMigrator,
-    ): LibreMailDatabase {
-        val builder = Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
+    fun provideDatabase(@ApplicationContext context: Context, provisioner: DatabaseProvisioner): LibreMailDatabase =
+        Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
             .addMigrations(
                 MIGRATION_1_2,
                 MIGRATION_2_3,
@@ -72,59 +66,29 @@ object DatabaseModule {
                 MIGRATION_15_16,
                 MIGRATION_16_17,
             )
-        // No destructive fallback: the migration chain is complete, and silently dropping the
-        // mail/message tables would lose cached data. A missing migration should fail loudly in
-        // testing instead.
+            // No destructive fallback: the migration chain is complete, and silently dropping the
+            // mail/message tables would lose cached data. A missing migration should fail loudly in
+            // testing instead.
+            //
+            // All blocking startup work — the issue-#111 AccountDataMigrator, the encrypted-cache
+            // conversion, and the Keystore passphrase resolution — is deferred OFF this injection path
+            // (issue #93). The factory below runs DatabaseProvisioner.prepareCache() lazily, when Room
+            // first OPENS the cache on its background query executor, never on the (possibly main)
+            // thread that injects this singleton. prepareCache() still performs that sequence before the
+            // file opens and in the same order, so the migrate-before-open guarantee and the encryption
+            // gate are unchanged — only where/when they run moved.
+            .openHelperFactory(
+                DeferredOpenHelperFactory { configuration ->
+                    val realFactory = when (val mode = runBlocking { provisioner.prepareCache() }) {
+                        is CacheOpenMode.Encrypted ->
+                            SupportOpenHelperFactory(mode.passphrase.toByteArray(Charsets.US_ASCII), null, false)
 
-        // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
-        // before the database is opened — so it never races an open connection; toggling the setting
-        // therefore takes effect on the next app start. The passphrase is sealed by the Keystore.
-        //
-        // The passphrase source is resolved from which seal actually exists
-        // ([DatabaseKeyStore.resolvePassphrase]), NOT from the app-lock setting (a separate DataStore
-        // that can disagree). When app-lock is ON the sealing key is auth-bound, so resolvePassphrase
-        // waits on PassphraseSession until the user authenticates. This provider must therefore never
-        // be constructed on the main thread while the cache is locked — LibreMailApplication injects
-        // AccountRepository lazily and the sync/push workers fail fast when locked, and the gate
-        // composes no DB-backed screen until Unlocked.
-        val dbFile = context.getDatabasePath(DB_NAME)
-
-        // A screen-lock change (biometric re-enrollment / lock removal) can invalidate the auth-bound
-        // key so the encrypted cache is no longer decryptable. AppLockViewModel records that and
-        // restarts the app; we wipe the cache HERE — at cold start, before Room opens — so the file is
-        // never deleted from under an open connection. Crash-safe order: wipe + reset the seals, and
-        // only THEN clear the flag, so a kill mid-wipe just repeats the idempotent wipe next start.
-        // Only libremail.db is wiped: accounts/credentials live in AccountDatabase (a separate file),
-        // so the user stays signed in across the wipe (issue #111).
-        if (runBlocking { keyStore.isClearPending() }) {
-            DatabaseFiles.clear(context)
-            runBlocking {
-                keyStore.resetSealedPassphrase()
-                keyStore.clearClearPending()
-            }
-        }
-
-        // One-time move of accounts/credentials/settings/signatures into the non-auth AccountDatabase
-        // (issue #111). MUST run before builder.build() below: opening the cache applies MIGRATION_15_16,
-        // which drops the moved tables. It runs AFTER the wipe above so an unrecoverable-key cache is
-        // gone first (nothing left to move) and we never block waiting on a passphrase we can't get.
-        runBlocking { accountDataMigrator.migrateIfNeeded() }
-
-        val settings = runBlocking { settingsRepository.settings.first() }
-        val appLock = settings.appLock
-        if (settings.encryptCache) {
-            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
-            DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
-            builder.openHelperFactory(
-                SupportOpenHelperFactory(passphrase.toByteArray(Charsets.US_ASCII), null, false),
+                        CacheOpenMode.Plaintext -> FrameworkSQLiteOpenHelperFactory()
+                    }
+                    realFactory.create(configuration)
+                },
             )
-        } else if (DatabaseEncryption.isEncrypted(dbFile)) {
-            // Encryption was turned back off — decrypt so the default (unkeyed) open succeeds.
-            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
-            DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
-        }
-        return builder.build()
-    }
+            .build()
 
     @Provides
     fun provideMessageDao(database: LibreMailDatabase): MessageDao = database.messageDao()

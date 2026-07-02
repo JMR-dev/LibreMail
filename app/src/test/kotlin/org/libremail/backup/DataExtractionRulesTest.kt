@@ -2,6 +2,7 @@
 package org.libremail.backup
 
 import org.junit.Test
+import org.libremail.data.local.DatabaseFiles
 import org.w3c.dom.Element
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -72,5 +73,14 @@ class DataExtractionRulesTest {
     @Test
     fun `full backup content (API 29-30) mirrors the same exclusions`() {
         assertSafe(parseSection(resource("backup_rules.xml"), "full-backup-content"))
+    }
+
+    @Test
+    fun `both the cache and accounts databases are guarded against the backup allowlist`() {
+        // The exclusion SoT is derived from DatabaseFiles, so both databases flow into secretPaths
+        // and are asserted-absent from every include section by assertSafe above. Pin that here so
+        // the accounts + credentials DB added in #111 can't quietly drop out of the guarded set.
+        assertTrue(secretPaths.contains("database:${DatabaseFiles.NAME}"))
+        assertTrue(secretPaths.contains("database:${DatabaseFiles.ACCOUNTS_NAME}"))
     }
 }
