@@ -2,6 +2,7 @@
 package org.libremail.data.security
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -43,6 +44,16 @@ class DatabaseKeyStore @Inject constructor(
     private val session: PassphraseSession,
 ) {
     private val generationLock = Mutex()
+
+    /**
+     * The DataStore that persists the sealed passphrases (its own `libremail_dbkey` file, never the
+     * Room DB it protects). Exposed as a [VisibleForTesting] seam — mirroring AppLockViewModel's
+     * injectable dispatcher — so the dual-seal exchange invariants are exercisable in JVM unit tests
+     * against an in-memory store, decoupled from the device-only Keystore that produces the sealed
+     * blobs. Production always uses the real per-app [dbKeyDataStore].
+     */
+    @VisibleForTesting
+    internal var dataStore: DataStore<Preferences> = context.dbKeyDataStore
 
     /**
      * Resolve the passphrase needed to open (or convert) the on-disk cache, keyed off which seal
@@ -108,7 +119,7 @@ class DatabaseKeyStore @Inject constructor(
     suspend fun sealWithAuth(): Unit = generationLock.withLock {
         val plain = masterSealed() ?: session.current() ?: generateHex()
         val sealed = authCipher.encrypt(plain)
-        context.dbKeyDataStore.edit {
+        dataStore.edit {
             it[SEALED_AUTH] = sealed
             it.remove(SEALED_MASTER)
         }
@@ -123,7 +134,7 @@ class DatabaseKeyStore @Inject constructor(
      */
     suspend fun sealWithMaster(): Unit = generationLock.withLock {
         val plain = session.current() ?: read(SEALED_AUTH)?.let { authCipher.decrypt(it) } ?: return@withLock
-        context.dbKeyDataStore.edit {
+        dataStore.edit {
             it[SEALED_MASTER] = crypto.encrypt(plain)
             it.remove(SEALED_AUTH)
         }
@@ -140,7 +151,7 @@ class DatabaseKeyStore @Inject constructor(
      * encrypted database file in the same operation, otherwise it becomes permanently unreadable.
      */
     suspend fun resetSealedPassphrase(): Unit = generationLock.withLock {
-        context.dbKeyDataStore.edit {
+        dataStore.edit {
             it.remove(SEALED_AUTH)
             it.remove(SEALED_MASTER)
         }
@@ -155,7 +166,7 @@ class DatabaseKeyStore @Inject constructor(
      * the corruption-safe way to "clear + re-sync" after a screen-lock change invalidates the key.
      */
     suspend fun setClearPending() {
-        context.dbKeyDataStore.edit { it[CLEAR_PENDING] = true }
+        dataStore.edit { it[CLEAR_PENDING] = true }
     }
 
     /**
@@ -163,20 +174,20 @@ class DatabaseKeyStore @Inject constructor(
      * perform the wipe (+ [resetSealedPassphrase]) FIRST and then call [clearClearPending], so a crash
      * mid-wipe simply repeats the idempotent wipe next start instead of stranding an unreadable file.
      */
-    suspend fun isClearPending(): Boolean = context.dbKeyDataStore.data.first()[CLEAR_PENDING] == true
+    suspend fun isClearPending(): Boolean = dataStore.data.first()[CLEAR_PENDING] == true
 
     /** Clear the wipe flag. Call ONLY after the wipe + [resetSealedPassphrase] have completed. */
     suspend fun clearClearPending() {
-        context.dbKeyDataStore.edit { it.remove(CLEAR_PENDING) }
+        dataStore.edit { it.remove(CLEAR_PENDING) }
     }
 
     private suspend fun masterSealed(): String? = read(SEALED_MASTER)?.let { crypto.decrypt(it) }
 
-    private suspend fun read(key: Preferences.Key<String>): String? = context.dbKeyDataStore.data.first()[key]
+    private suspend fun read(key: Preferences.Key<String>): String? = dataStore.data.first()[key]
 
     private suspend fun generateAndSealMaster(): String {
         val hex = generateHex()
-        context.dbKeyDataStore.edit { it[SEALED_MASTER] = crypto.encrypt(hex) }
+        dataStore.edit { it[SEALED_MASTER] = crypto.encrypt(hex) }
         return hex
     }
 
