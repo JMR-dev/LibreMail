@@ -8,6 +8,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -106,6 +107,95 @@ class MailboxViewModelTest {
         assertEquals("imap:a", vm.selectedAccountId.value)
         assertEquals(listOf("imap:a:Archive:1"), vm.messages.value.map { it.id })
         coVerify { syncer.syncFolder("imap:a", "Archive") }
+    }
+
+    // Issue #149: opening a per-account folder with no cached messages yet must show a spinner
+    // (via isSyncingFolder) rather than "No messages to display" until the background sync settles.
+    @Test
+    fun `isSyncingFolder is true while the initial folder sync is in flight, then clears`() = runTest(testDispatcher) {
+        val syncer = mockk<MailSyncer>()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { syncer.syncFolder("imap:a", "Archive") } coAnswers {
+            gate.await()
+            Result.success(0)
+        }
+        val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.isSyncingFolder.test {
+            assertEquals(false, awaitItem())
+
+            vm.selectFolder("imap:a", "Archive")
+            assertEquals(true, awaitItem())
+
+            gate.complete(Unit)
+            assertEquals(false, awaitItem())
+        }
+    }
+
+    // A failed sync must still clear the flag (try/finally), so a folder that errors out doesn't
+    // spin forever. Syncer.syncFolder reports failure via Result.failure (see refresh()'s
+    // onFailure handling below), not a thrown exception, so the stub mirrors that contract.
+    @Test
+    fun `isSyncingFolder clears even when the sync fails`() = runTest(testDispatcher) {
+        val syncer = mockk<MailSyncer>()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { syncer.syncFolder("imap:a", "Archive") } coAnswers {
+            gate.await()
+            Result.failure(IllegalStateException("boom"))
+        }
+        val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.isSyncingFolder.test {
+            assertEquals(false, awaitItem())
+
+            vm.selectFolder("imap:a", "Archive")
+            assertEquals(true, awaitItem())
+
+            gate.complete(Unit)
+            assertEquals(false, awaitItem())
+        }
+    }
+
+    // Issue #149: switching folders before the previous folder's sync resolves must not let that
+    // stale completion clear the spinner for the folder actually selected now.
+    @Test
+    fun `rapidly switching folders keeps the spinner for the folder actually selected`() = runTest(testDispatcher) {
+        val syncer = mockk<MailSyncer>()
+        val archiveGate = CompletableDeferred<Unit>()
+        val sentGate = CompletableDeferred<Unit>()
+        coEvery { syncer.syncFolder("imap:a", "Archive") } coAnswers {
+            archiveGate.await()
+            Result.success(0)
+        }
+        coEvery { syncer.syncFolder("imap:a", "Sent") } coAnswers {
+            sentGate.await()
+            Result.success(0)
+        }
+        val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
+        backgroundScope.launch { vm.messages.collect {} }
+
+        vm.isSyncingFolder.test {
+            assertEquals(false, awaitItem())
+
+            vm.selectFolder("imap:a", "Archive")
+            assertEquals(true, awaitItem())
+
+            // Switch away before Archive's sync resolves; still syncing (now Sent's own fetch).
+            vm.selectFolder("imap:a", "Sent")
+            expectNoEvents()
+            assertEquals(true, vm.isSyncingFolder.value)
+
+            // Archive's now-stale sync finishing must not clear the flag out from under Sent.
+            archiveGate.complete(Unit)
+            expectNoEvents()
+            assertEquals(true, vm.isSyncingFolder.value)
+
+            // Only Sent's own completion (the folder actually selected now) clears it.
+            sentGate.complete(Unit)
+            assertEquals(false, awaitItem())
+        }
     }
 
     @Test

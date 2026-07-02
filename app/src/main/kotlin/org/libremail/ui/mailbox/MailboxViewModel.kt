@@ -186,6 +186,22 @@ class MailboxViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    /**
+     * True while [selectFolder]'s background sync for the currently selected folder is in flight,
+     * so the screen can hold the empty state back until the initial fetch either populates the
+     * cache or confirms the folder really is empty (issue #149).
+     */
+    private val _isSyncingFolder = MutableStateFlow(false)
+    val isSyncingFolder: StateFlow<Boolean> = _isSyncingFolder.asStateFlow()
+
+    /**
+     * (accountId, folder) of the most recent [selectFolder] call. Used only so a completing sync
+     * can tell whether it's stale — superseded by a newer folder selection — before clearing
+     * [_isSyncingFolder], so rapid folder switching can't let a stale sync hide the spinner for
+     * whichever folder is actually selected now.
+     */
+    private var latestFolderSelection: Pair<String, String>? = null
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -365,7 +381,18 @@ class MailboxViewModel @Inject constructor(
         _selectedAccountId.value = accountId
         explicitDrawerAccountId.value = accountId
         _selectedFolder.value = folderFullName
-        viewModelScope.launch { mailSyncer.syncFolder(accountId, folderFullName) }
+        val key = accountId to folderFullName
+        latestFolderSelection = key
+        _isSyncingFolder.value = true
+        viewModelScope.launch {
+            try {
+                mailSyncer.syncFolder(accountId, folderFullName)
+            } finally {
+                // Only clear if this is still the most recent selection — a stale sync superseded
+                // by another selectFolder() must not clobber the newer one's in-flight spinner.
+                if (latestFolderSelection == key) _isSyncingFolder.value = false
+            }
+        }
     }
 
     /** Returns to the unified inbox across all accounts. */

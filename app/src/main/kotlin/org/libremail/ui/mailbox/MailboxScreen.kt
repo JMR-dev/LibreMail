@@ -120,6 +120,7 @@ fun MailboxScreen(
     val searchActive by viewModel.searchActive.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val isSyncingFolder by viewModel.isSyncingFolder.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val pendingConfirm by viewModel.pendingConfirm.collectAsStateWithLifecycle()
@@ -330,8 +331,16 @@ fun MailboxScreen(
                                     }
                                 } else if (messages.isEmpty()) {
                                     item {
+                                        // Hold the empty state back while the folder's initial background
+                                        // sync is still in flight, so opening an uncached folder doesn't
+                                        // flash "No messages to display" before the fetch has a chance to
+                                        // populate anything (issue #149).
                                         if (searchActive && searchQuery.isNotBlank()) {
                                             NoResultsState(Modifier.fillParentMaxSize())
+                                        } else if (isSyncingFolder) {
+                                            Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator()
+                                            }
                                         } else {
                                             NoMessagesState(Modifier.fillParentMaxSize())
                                         }
