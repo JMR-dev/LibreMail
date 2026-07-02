@@ -337,7 +337,10 @@
     <string name="report_copy">Copy</string>
     <string name="report_save">Save to file</string>
     <string name="report_submitting">Submitting…</string>
-    <string name="report_submitted">Report sent. Thank you!</string>
+    <!-- Shown in a confirmation dialog (not just inline) so it can't be missed if the report row
+         is deleted by ReportUploadWorker moments after the submit succeeds (#161). -->
+    <string name="report_submitted">Thank you for submitting a problem report! It\'s people like you that help make LibreMail better! Please note that submission of a problem does not guarantee a response or a fix, as this is a volunteer led project.</string>
+    <string name="report_submitted_dismiss">OK</string>
     <string name="report_submit_failed">Couldn\'t send — it will be retried.</string>
     <string name="report_submit_unavailable">Online submission isn\'t available in this build. Use Copy or Save to share the report.</string>
     <string name="report_copied">Copied to clipboard</string>

@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -33,8 +34,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +60,9 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    // Latches once the post-submit confirmation dialog is acknowledged, so it can't reappear
+    // during this screen's exit transition (state.submit stays SUCCEEDED after that point).
+    var reportSubmittedAcknowledged by remember { mutableStateOf(false) }
 
     val savedMessage = stringResource(R.string.report_saved)
     val copiedMessage = stringResource(R.string.report_copied)
@@ -79,9 +85,16 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
         }
     }
 
-    // Once the report has been submitted (deleted by the worker) or discarded, leave the screen.
-    LaunchedEffect(state.loaded, state.exists) {
-        if (state.loaded && !state.exists) onDone()
+    // Leave once the report is gone — but a successful submit deletes the row from
+    // ReportUploadWorker as soon as the upload finishes, which can race ahead of `state.submit`
+    // itself reporting SUCCEEDED. So while a submit is in flight or has just succeeded, this
+    // effect defers to ReportSubmittedDialog below: its acknowledgement calls onDone() instead,
+    // guaranteeing the confirmation is seen. Plain discard (or a submit that never enqueued
+    // anything, e.g. FAILED/UNAVAILABLE) is unaffected and still auto-navigates immediately.
+    LaunchedEffect(state.loaded, state.exists, state.submit) {
+        val awaitingSubmitOutcome =
+            state.submit == SubmitUiState.SUBMITTING || state.submit == SubmitUiState.SUCCEEDED
+        if (state.loaded && !state.exists && !awaitingSubmitOutcome) onDone()
     }
 
     Scaffold(
@@ -164,6 +177,17 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
             }
         }
     }
+
+    // Gates leaving the screen on the success path (see the LaunchedEffect above) so the message
+    // is guaranteed to be seen, not just present for an instant before an auto-navigate.
+    if (state.submit == SubmitUiState.SUCCEEDED && !reportSubmittedAcknowledged) {
+        ReportSubmittedDialog(
+            onAcknowledge = {
+                reportSubmittedAcknowledged = true
+                onDone()
+            },
+        )
+    }
 }
 
 @Composable
@@ -212,19 +236,38 @@ private fun PayloadBox(payload: String) {
 
 @Composable
 private fun SubmitStatusText(state: SubmitUiState) {
-    if (state == SubmitUiState.IDLE) return
+    // SUCCEEDED is surfaced via ReportSubmittedDialog instead: a modal is what guarantees the
+    // message survives the screen's auto-navigate-on-delete race (see ReportReviewScreen above).
     val text = when (state) {
         SubmitUiState.SUBMITTING -> stringResource(R.string.report_submitting)
-        SubmitUiState.SUCCEEDED -> stringResource(R.string.report_submitted)
         SubmitUiState.FAILED -> stringResource(R.string.report_submit_failed)
         SubmitUiState.UNAVAILABLE -> stringResource(R.string.report_submit_unavailable)
-        SubmitUiState.IDLE -> ""
+        SubmitUiState.IDLE, SubmitUiState.SUCCEEDED -> return
     }
-    val color = when (state) {
-        SubmitUiState.SUCCEEDED -> MaterialTheme.colorScheme.primary
-        SubmitUiState.FAILED, SubmitUiState.UNAVAILABLE -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val color = if (state == SubmitUiState.FAILED || state == SubmitUiState.UNAVAILABLE) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
     }
     Spacer(Modifier.height(8.dp))
     Text(text, color = color, style = MaterialTheme.typography.bodyMedium)
+}
+
+/**
+ * Confirmation shown after a successful submission (#161). It — not the deleted-row auto-navigate
+ * — is what leaves the screen for that path, so the fuller thank-you message is guaranteed to be
+ * seen even though the report row (and therefore `state.exists`) can flip to gone moments after
+ * `SubmitUiState.SUCCEEDED`, once `ReportUploadWorker` finishes.
+ */
+@Composable
+private fun ReportSubmittedDialog(onAcknowledge: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onAcknowledge,
+        text = { Text(stringResource(R.string.report_submitted)) },
+        confirmButton = {
+            TextButton(onClick = onAcknowledge) {
+                Text(stringResource(R.string.report_submitted_dismiss))
+            }
+        },
+    )
 }
