@@ -57,6 +57,14 @@ data class AppSettings(
      */
     val retentionCount: Int = 0,
     val retentionMonths: Int = 0,
+    /**
+     * The user-chosen default account (issue #163): the account [org.libremail.ui.compose.ComposeViewModel]
+     * uses when compose opens without an explicit account context (e.g. the unified-inbox FAB, or a
+     * `mailto:`/share intent with no account hint). Null means no default is set. A value here is not
+     * guaranteed to still name an existing account (see [SettingsRepository.clearDefaultAccountId]) —
+     * treat it as a hint to validate against the current account list, never as a trusted id.
+     */
+    val defaultAccountId: String? = null,
 )
 
 private object Keys {
@@ -71,6 +79,7 @@ private object Keys {
     val FETCH_POLICY = stringPreferencesKey("fetch_policy")
     val RETENTION_COUNT = intPreferencesKey("retention_count")
     val RETENTION_MONTHS = intPreferencesKey("retention_months")
+    val DEFAULT_ACCOUNT_ID = stringPreferencesKey("default_account_id")
     val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
     val CONTACTS_PROMPT_HANDLED = booleanPreferencesKey("contacts_prompt_handled")
     val CONTACTS_PERMISSION_REQUESTED = booleanPreferencesKey("contacts_permission_requested")
@@ -96,6 +105,7 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
         ?: FetchPolicy.WIFI_ONLY,
     retentionCount = this[Keys.RETENTION_COUNT] ?: 0,
     retentionMonths = this[Keys.RETENTION_MONTHS] ?: 0,
+    defaultAccountId = this[Keys.DEFAULT_ACCOUNT_ID],
 )
 
 @Singleton
@@ -173,6 +183,29 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     /** Global default retention by age in months; 0 = keep everything. */
     suspend fun setRetentionMonths(value: Int) {
         context.settingsDataStore.edit { it[Keys.RETENTION_MONTHS] = value.coerceAtLeast(0) }
+    }
+
+    /**
+     * Sets (or, when [value] is null, clears) the user-chosen default account (#163). Used directly by
+     * the per-account "set as default" toggle; deleting an account should go through
+     * [clearDefaultAccountId] instead so it can't clobber a different account's default.
+     */
+    suspend fun setDefaultAccountId(value: String?) {
+        context.settingsDataStore.edit {
+            if (value != null) it[Keys.DEFAULT_ACCOUNT_ID] = value else it.remove(Keys.DEFAULT_ACCOUNT_ID)
+        }
+    }
+
+    /**
+     * Clears the default-account preference, but only if it currently points at [accountId]. Called
+     * when that account is deleted, so a stale id is never left behind — and so deleting some other
+     * (non-default) account never disturbs an unrelated default. No-op if [accountId] isn't the current
+     * default.
+     */
+    suspend fun clearDefaultAccountId(accountId: String) {
+        context.settingsDataStore.edit {
+            if (it[Keys.DEFAULT_ACCOUNT_ID] == accountId) it.remove(Keys.DEFAULT_ACCOUNT_ID)
+        }
     }
 
     private suspend fun put(key: Preferences.Key<Boolean>, value: Boolean) {
