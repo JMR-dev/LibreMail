@@ -54,8 +54,8 @@ class MailboxScreenTest {
         smtp = ServerConfig("smtp.example.org", 465, MailSecurity.SSL_TLS),
     )
 
-    private fun message(uid: String, subject: String, bodyFetched: Boolean = false) = Message(
-        id = "imap:a:INBOX:$uid",
+    private fun message(uid: String, subject: String, bodyFetched: Boolean = false, folder: String = "INBOX") = Message(
+        id = "imap:a:$folder:$uid",
         accountId = "imap:a",
         sender = "Sender $uid",
         senderEmail = "s$uid@example.org",
@@ -66,12 +66,12 @@ class MailboxScreenTest {
         timestampMillis = 1_000L,
         isRead = true,
         isStarred = false,
-        folder = "INBOX",
+        folder = folder,
         inInbox = true,
         bodyFetched = bodyFetched,
     )
 
-    private fun setContent(repo: FakeMailRepository) {
+    private fun setContent(repo: FakeMailRepository): MailboxViewModel {
         val viewModel = MailboxViewModel(
             repo,
             FakeAccountRepository(accounts = listOf(account)),
@@ -92,6 +92,7 @@ class MailboxScreenTest {
                 )
             }
         }
+        return viewModel
     }
 
     private fun waitForText(text: String) = composeTestRule.waitUntil(5_000) {
@@ -132,9 +133,56 @@ class MailboxScreenTest {
         composeTestRule.onNodeWithText("Second").performClick()
         composeTestRule.onNodeWithContentDescription(string(R.string.action_more)).performClick()
 
-        composeTestRule.onNodeWithText(string(R.string.action_archive)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.action_select_all)).assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.action_reply)).assertDoesNotExist()
         composeTestRule.onNodeWithText(string(R.string.action_forward)).assertDoesNotExist()
+    }
+
+    @Test
+    fun archiveIcon_isDirect_andArchivesTheSelection() {
+        val repo = FakeMailRepository(messages = listOf(message("1", "First"), message("2", "Second")))
+        setContent(repo)
+        waitForText("First")
+
+        composeTestRule.onNodeWithText("First").performTouchInput { longClick() }
+        composeTestRule.onNodeWithText("Second").performClick()
+        // A direct icon button — no trip through the overflow menu.
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_archive)).performClick()
+
+        composeTestRule.waitUntil(5_000) { repo.archivedIds.isNotEmpty() }
+        assertEquals(setOf("imap:a:INBOX:1", "imap:a:INBOX:2"), repo.archivedIds.first().toSet())
+    }
+
+    @Test
+    fun spamIcon_isDirect_andConfirmsBeforeReporting() {
+        val repo = FakeMailRepository(messages = listOf(message("1", "First")))
+        setContent(repo)
+        waitForText("First")
+
+        composeTestRule.onNodeWithText("First").performTouchInput { longClick() }
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_spam)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.confirm_spam_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.action_move)).performClick()
+
+        composeTestRule.waitUntil(5_000) { repo.spammedIds.isNotEmpty() }
+        assertEquals(listOf("imap:a:INBOX:1"), repo.spammedIds.first())
+    }
+
+    @Test
+    fun archiveIcon_hides_whileViewingTheArchiveFolder() {
+        val repo = FakeMailRepository(
+            messages = listOf(message("1", "Old news", folder = "Archive")),
+            folders = listOf(Folder("imap:a", "Archive", "Archive", FolderRole.ARCHIVE, selectable = true)),
+        )
+        val viewModel = setContent(repo)
+        viewModel.selectFolder("imap:a", "Archive")
+        waitForText("Old news")
+
+        composeTestRule.onNodeWithText("Old news").performTouchInput { longClick() }
+
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_archive)).assertDoesNotExist()
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_spam)).assertIsDisplayed()
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_delete)).assertIsDisplayed()
     }
 
     @Test
