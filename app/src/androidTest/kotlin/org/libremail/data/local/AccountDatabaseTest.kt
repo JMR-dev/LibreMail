@@ -49,7 +49,7 @@ class AccountDatabaseTest {
     )
 
     @Test
-    fun credentialRoundTripsAndIsIndependentOfTheAccountRow() = runBlocking {
+    fun credentialRoundTripsAndIsIndependentOfTheAccountRow() = runBlocking<Unit> {
         db.accountDao().upsert(account())
         db.credentialDao().upsert(CredentialEntity("acct", "sealed-secret"))
 
@@ -57,7 +57,7 @@ class AccountDatabaseTest {
     }
 
     @Test
-    fun accountSettingsRoundTripAndCascadeWithTheirAccount() = runBlocking {
+    fun accountSettingsRoundTripAndCascadeWithTheirAccount() = runBlocking<Unit> {
         db.accountDao().upsert(account())
         db.accountSettingsDao().upsert(
             AccountSettingsEntity("acct", signature = "Hi", signatureEnabled = false, notificationsEnabled = false),
@@ -70,7 +70,7 @@ class AccountDatabaseTest {
     }
 
     @Test
-    fun signaturesCascadeWithTheirAccount() = runBlocking {
+    fun signaturesCascadeWithTheirAccount() = runBlocking<Unit> {
         db.accountDao().upsert(account())
         db.signatureDao().upsert(SignatureEntity("sig-1", "acct", "Work", "<p>Regards</p>", isDefault = true))
         assertEquals(1, db.signatureDao().observeForAccount("acct").first().size)

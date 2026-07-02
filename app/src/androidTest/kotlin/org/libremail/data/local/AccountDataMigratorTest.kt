@@ -92,7 +92,7 @@ class AccountDataMigratorTest {
         Room.databaseBuilder(context, AccountDatabase::class.java, accountsName).build()
 
     @Test
-    fun movesEveryAccountTableOutOfAPlaintextCache() = runBlocking {
+    fun movesEveryAccountTableOutOfAPlaintextCache() = runBlocking<Unit> {
         seedVersion14Cache()
 
         AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
@@ -121,7 +121,7 @@ class AccountDataMigratorTest {
     }
 
     @Test
-    fun movesAccountsOutOfAnEncryptedCache() = runBlocking {
+    fun movesAccountsOutOfAnEncryptedCache() = runBlocking<Unit> {
         seedVersion14Cache()
         // Turn the cache into the SQLCipher form an app-lock + encrypted-cache user has on disk.
         DatabaseEncryption.ensureEncrypted(cacheFile, passphrase)
@@ -141,7 +141,7 @@ class AccountDataMigratorTest {
     }
 
     @Test
-    fun reRunningTheCopyIsIdempotentAndKeepsLaterEdits() = runBlocking {
+    fun reRunningTheCopyIsIdempotentAndKeepsLaterEdits() = runBlocking<Unit> {
         seedVersion14Cache()
         AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
 
@@ -167,7 +167,7 @@ class AccountDataMigratorTest {
     }
 
     @Test
-    fun accountsAndCredentialsSurviveACacheWipe() = runBlocking {
+    fun accountsAndCredentialsSurviveACacheWipe() = runBlocking<Unit> {
         seedVersion14Cache()
         AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
 
