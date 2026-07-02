@@ -3,6 +3,7 @@ package org.libremail.ui.compose
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -167,6 +168,59 @@ class ComposeScreenTest {
         val sent = mailRepository.sentMessages.single()
         assertEquals("cc@example.com", sent.cc)
         assertEquals("bcc@example.com", sent.bcc)
+    }
+
+    @Test
+    fun formattingToolbar_bulletButtonMarksTheLineAndSendsItAsHtml() {
+        val mailRepository = FakeMailRepository()
+        setContent(mailRepository)
+
+        composeTestRule.onNodeWithText(string(R.string.compose_to)).performTextInput("you@example.com")
+        composeTestRule.onNodeWithText(string(R.string.compose_body)).performTextInput("Buy milk")
+        // The bullet-list button is deliberately chosen over the inline styles (bold/italic): block
+        // markers apply to the caret's whole line, so the end-of-text caret that performTextInput
+        // leaves is enough - no on-device range selection (which is unreliable in instrumented tests)
+        // is needed to prove that a toolbar tap flows real formatting into the sent message's HTML.
+        // "•" is the bullet button's own (untranslated) glyph label - see FormattingToolbar.
+        composeTestRule.onNodeWithText("•").performClick()
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { mailRepository.sentMessages.isNotEmpty() }
+        val sent = mailRepository.sentMessages.single()
+        // Plaintext keeps the readable "• " marker; the HTML part carries the real <ul>/<li> structure.
+        assertEquals("• Buy milk", sent.body)
+        assertTrue(
+            "expected bullet-list html, got ${sent.bodyHtml}",
+            sent.bodyHtml?.contains("<ul><li>Buy milk</li></ul>") == true,
+        )
+    }
+
+    @Test
+    fun formattingToolbar_buttonsCarryOnClickLabelsForAccessibility() {
+        setContent()
+
+        // Every toolbar button (see FormattingToolbar in RichTextEditor.kt) is a plain clickable Box with
+        // a bare glyph Text as its only visible content, so TalkBack relies entirely on the click action's
+        // label (there is no separate contentDescription) to announce what the button does.
+        val buttons = listOf(
+            "B" to R.string.format_bold,
+            "I" to R.string.format_italic,
+            "U" to R.string.format_underline,
+            "•" to R.string.format_bullet_list,
+            "1." to R.string.format_numbered_list,
+            "❝" to R.string.format_quote,
+            "🔗" to R.string.format_link,
+        )
+        buttons.forEach { (glyph, descriptionRes) ->
+            val config = composeTestRule.onNodeWithText(glyph).fetchSemanticsNode().config
+            val clickLabel = if (config.contains(SemanticsActions.OnClick)) {
+                config[SemanticsActions.OnClick].label
+            } else {
+                null
+            }
+            val message = "toolbar button \"$glyph\" is missing its accessibility label"
+            assertEquals(message, string(descriptionRes), clickLabel)
+        }
     }
 
     /** Matches the editable field labelled [labelRes] but not the collapsed Cc/Bcc link buttons. */

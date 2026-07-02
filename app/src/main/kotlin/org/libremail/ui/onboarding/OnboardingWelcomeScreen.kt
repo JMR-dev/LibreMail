@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.onboarding
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -18,11 +23,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import org.libremail.R
 
 /**
@@ -31,6 +39,11 @@ import org.libremail.R
  */
 @Composable
 fun OnboardingWelcomeScreen(onAddAccount: () -> Unit) {
+    // Requested from here, rather than the Activity root, so the system permission dialog appears
+    // once this screen (with onboarding context behind it) is actually visible instead of racing
+    // the cold-start/splash transition (#151). Already-onboarded users skip onboarding entirely, so
+    // this composable — and the request — never runs for them.
+    NotificationPermissionEffect()
     Scaffold { padding ->
         WelcomeContent(
             onAddAccount = onAddAccount,
@@ -81,5 +94,20 @@ fun WelcomeContent(onAddAccount: () -> Unit, modifier: Modifier = Modifier) {
         ) {
             Text(stringResource(R.string.onboarding_add_account))
         }
+    }
+}
+
+/** Requests POST_NOTIFICATIONS once on first launch (no-op if already granted). */
+@Composable
+private fun NotificationPermissionEffect() {
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        // POST_NOTIFICATIONS is a runtime permission only on Android 13 (API 33)+. On older
+        // versions notifications are enabled by default, so there's nothing to request.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
