@@ -10,6 +10,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.work.WorkManager
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
@@ -27,6 +28,7 @@ import org.libremail.domain.model.ServerConfig
 import org.libremail.ui.FakeAccountRepository
 import org.libremail.ui.navigation.Routes
 import org.libremail.ui.theme.LibreMailTheme
+import javax.inject.Provider
 
 /**
  * End-to-end test for the per-account settings screen: editing the signature and toggling the
@@ -68,7 +70,7 @@ class AccountSettingsScreenTest {
             accountRepository = FakeAccountRepository(accounts = listOf(account)),
             accountSettingsRepository = repository,
             signatureRepository = SignatureRepository(db.signatureDao()),
-            syncScheduler = SyncScheduler(context),
+            syncScheduler = SyncScheduler(Provider { WorkManager.getInstance(context) }),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
