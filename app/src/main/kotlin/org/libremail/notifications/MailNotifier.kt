@@ -35,7 +35,6 @@ class MailNotifier @Inject constructor(@ApplicationContext private val context: 
         if (messages.isEmpty() || !hasPermission()) return
         ensureAccountChannel(account)
         val manager = NotificationManagerCompat.from(context)
-        val contentIntent = contentIntent()
         val channelId = channelId(account.id)
         val groupKey = groupKey(account.id)
         val summaryId = summaryId(account.id)
@@ -52,7 +51,7 @@ class MailNotifier @Inject constructor(@ApplicationContext private val context: 
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
                 .setGroup(groupKey)
-                .setContentIntent(contentIntent)
+                .setContentIntent(openMessageIntent(message.id))
                 .build()
             manager.notify(notificationId(message.id, summaryId), notification)
         }
@@ -72,7 +71,7 @@ class MailNotifier @Inject constructor(@ApplicationContext private val context: 
             .setOnlyAlertOnce(true)
             .setGroup(groupKey)
             .setGroupSummary(true)
-            .setContentIntent(contentIntent)
+            .setContentIntent(openAppIntent())
             .build()
         manager.notify(summaryId, summary)
     }
@@ -105,7 +104,16 @@ class MailNotifier @Inject constructor(@ApplicationContext private val context: 
         manager.deleteNotificationChannelGroup(accountId)
     }
 
-    private fun contentIntent(): PendingIntent {
+    /** Opens the tapped message's reader (each message's intent is distinct — see [NotificationIntents]). */
+    private fun openMessageIntent(messageId: String): PendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        NotificationIntents.openMessage(context, messageId),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** Just brings the app to the foreground — used by the group summary, which has no single message. */
+    private fun openAppIntent(): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }

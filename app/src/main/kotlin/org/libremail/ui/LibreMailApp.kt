@@ -55,6 +55,8 @@ fun LibreMailApp(
     startupViewModel: StartupReportViewModel = hiltViewModel(),
     pendingCompose: ComposePrefill? = null,
     onComposeHandled: () -> Unit = {},
+    pendingOpenMessageId: String? = null,
+    onOpenMessageHandled: () -> Unit = {},
 ) {
     val startDestination by appViewModel.startDestination.collectAsStateWithLifecycle()
     // Hold (render nothing) until the account count is known, so a cold start never flashes the
@@ -77,6 +79,15 @@ fun LibreMailApp(
             ),
         )
         onComposeHandled()
+    }
+
+    // A tapped new-mail notification opens that message's reader on top of the current stack, so back
+    // lands where the user was (the mailbox on a cold start). If the account vanished in the meantime
+    // (start = onboarding) the request is consumed without navigating.
+    LaunchedEffect(pendingOpenMessageId) {
+        val messageId = pendingOpenMessageId ?: return@LaunchedEffect
+        if (start != Routes.ONBOARDING) navController.navigate(Routes.reader(messageId))
+        onOpenMessageHandled()
     }
 
     NavHost(

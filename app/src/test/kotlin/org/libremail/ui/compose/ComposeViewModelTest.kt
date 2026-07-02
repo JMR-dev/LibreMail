@@ -24,6 +24,7 @@ import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.MailSecurity
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.Signature
@@ -31,6 +32,7 @@ import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -154,6 +156,27 @@ class ComposeViewModelTest {
     }
 
     @Test
+    fun `resuming a draft restores the bcc recipients`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.getDraft("d1") } returns Draft(
+            id = "d1",
+            accountId = "imap:a",
+            to = "x@example.org",
+            cc = "",
+            bcc = "hidden@example.org",
+            subject = "Hi",
+            body = "Draft body",
+            updatedAt = 0L,
+        )
+        val vm = viewModel(
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_DRAFT to "d1")),
+            mailRepository = mailRepository,
+        )
+
+        assertEquals("hidden@example.org", vm.state.value.bcc)
+    }
+
+    @Test
     fun `send carries the HTML body through to the outgoing message`() = runTest(testDispatcher) {
         val mailRepository = mockk<MailRepository>(relaxed = true)
         val sent = slot<OutgoingMessage>()
@@ -210,5 +233,120 @@ class ComposeViewModelTest {
         val sent = slot<OutgoingMessage>()
         coVerify { mailRepository.sendMessage(capture(sent)) }
         assertEquals("secret@example.org", sent.captured.bcc)
+    }
+
+    @Test
+    fun `asks about attachments when the body mentions one but none is attached`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("I attached the report.", null)
+        vm.send()
+
+        assertTrue(vm.state.value.showAttachmentPrompt)
+        coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `asks about attachments when only the subject mentions one`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onSubjectChange("Contract attachment")
+        vm.send()
+
+        assertTrue(vm.state.value.showAttachmentPrompt)
+        coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `matches attachment variants but not lookalike words`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+
+        listOf("Attached is the file", "attaching it now", "see the ATTACHMENTS", "can you attach it").forEach {
+            val vm = viewModel(mailRepository = mailRepository)
+            vm.onToChange("bob@example.org")
+            vm.onBodyChange(it, null)
+            vm.send()
+            assertTrue(vm.state.value.showAttachmentPrompt, "should prompt for: $it")
+        }
+
+        listOf("planning an attack", "the base is attachable", "no keyword here").forEach {
+            val vm = viewModel(mailRepository = mailRepository)
+            vm.onToChange("bob@example.org")
+            vm.onBodyChange(it, null)
+            vm.send()
+            assertFalse(vm.state.value.showAttachmentPrompt, "should not prompt for: $it")
+        }
+    }
+
+    @Test
+    fun `sends without asking when an attachment is present`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("The report is attached.", null)
+        vm.addAttachments(listOf(OutgoingAttachment("content://docs/report.pdf", "report.pdf")))
+        vm.send()
+
+        assertFalse(vm.state.value.showAttachmentPrompt)
+        coVerify(exactly = 1) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `sendAnyway sends the message the prompt held back`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("I attached the report.", null)
+        vm.send()
+        assertTrue(vm.state.value.showAttachmentPrompt)
+
+        vm.sendAnyway()
+
+        assertFalse(vm.state.value.showAttachmentPrompt)
+        coVerify(exactly = 1) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `attachInstead returns to composing and highlights the attach button`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Attachment coming.", null)
+        vm.send()
+
+        vm.attachInstead()
+
+        assertFalse(vm.state.value.showAttachmentPrompt)
+        assertTrue(vm.state.value.highlightAttach)
+        coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
+
+        vm.consumeAttachHighlight()
+        assertFalse(vm.state.value.highlightAttach)
+    }
+
+    @Test
+    fun `dismissing the prompt cancels the send without highlighting`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("See attached.", null)
+        vm.send()
+
+        vm.dismissAttachmentPrompt()
+
+        assertFalse(vm.state.value.showAttachmentPrompt)
+        assertFalse(vm.state.value.highlightAttach)
+        coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
     }
 }

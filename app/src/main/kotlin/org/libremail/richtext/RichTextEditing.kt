@@ -15,17 +15,22 @@ data class EditResult(val content: RichTextContent, val selectionStart: Int, val
  */
 object RichTextEditing {
 
-    /** Adds [style] over [[start], [end]) if it is not already fully styled, otherwise removes it. */
+    /**
+     * Toggles [style] over [[start], [end]): if the exact style already covers the whole range it is
+     * removed; otherwise it is applied, replacing any other value of the same kind over the range
+     * (e.g. picking a new [RichStyle.FontSize] replaces the old size instead of stacking a second one).
+     */
     fun toggleStyle(content: RichTextContent, start: Int, end: Int, style: RichStyle): RichTextContent {
         if (start >= end) return content
-        val others = content.spans.filter { it.style != style }
-        val same = content.spans.filter { it.style == style }
-        val updated = if (isFullyStyled(same, start, end)) {
-            subtractRange(same, start, end)
+        val otherKinds = content.spans.filter { it.style::class != style::class }
+        val sameKind = content.spans.filter { it.style::class == style::class }
+        val cleared = subtractRange(sameKind, start, end)
+        val updated = if (isFullyStyled(sameKind.filter { it.style == style }, start, end)) {
+            cleared
         } else {
-            mergeSameStyle(same + RichSpan(start, end, style))
+            mergeSameValueSpans(cleared + RichSpan(start, end, style))
         }
-        return content.copy(spans = (others + updated).sortedBy { it.start })
+        return content.copy(spans = (otherKinds + updated).sortedBy { it.start })
     }
 
     /** Links [[start], [end]) to [url], replacing any links that overlap the range. */
@@ -45,6 +50,27 @@ object RichTextEditing {
     fun isStyled(content: RichTextContent, start: Int, end: Int, style: RichStyle): Boolean =
         start < end && isFullyStyled(content.spans.filter { it.style == style }, start, end)
 
+    /**
+     * The single value of style kind [T] over the selection, or null when absent or mixed — one call
+     * gives a picker its "current value". For a caret the boundaries count as inside, so the query
+     * matches the run the user is typing at the end of; at a boundary between two runs the earlier
+     * run wins.
+     */
+    inline fun <reified T : RichStyle> styleAt(content: RichTextContent, start: Int, end: Int): T? =
+        styleAt(content, start, end, T::class.java)
+
+    /** Non-reified form of [styleAt] for callers that carry the kind as a [Class]. */
+    fun <T : RichStyle> styleAt(content: RichTextContent, start: Int, end: Int, kind: Class<T>): T? {
+        val candidates = content.spans.filter { kind.isInstance(it.style) }
+        val value = if (start >= end) {
+            candidates.firstOrNull { it.start <= start && start <= it.end }?.style
+        } else {
+            candidates.map { it.style }.distinct()
+                .firstOrNull { v -> isFullyStyled(candidates.filter { it.style == v }, start, end) }
+        }
+        return kind.cast(value)
+    }
+
     /** Whether every line the selection touches carries [marker]. */
     fun hasBlock(content: RichTextContent, start: Int, end: Int, marker: BlockMarker): Boolean {
         val lineStarts = lineStartsTouching(content.text, start, end)
@@ -54,7 +80,7 @@ object RichTextEditing {
     /**
      * Toggles [marker] across every line the selection touches: if all those lines already carry it,
      * it is removed; otherwise it is applied (replacing any other block marker already there). Spans,
-     * links and the selection are shifted to track the inserted/removed prefixes.
+     * links, alignments, images and the selection are shifted to track the inserted/removed prefixes.
      */
     fun toggleBlock(content: RichTextContent, start: Int, end: Int, marker: BlockMarker): EditResult {
         val text = content.text
@@ -71,9 +97,14 @@ object RichTextEditing {
             }
         }
         val (newText, remap) = applyEdits(text, edits)
-        val newSpans = content.spans.mapNotNull { remapSpan(it, remap) }
-        val newLinks = content.links.mapNotNull { remapLink(it, remap) }
-        return EditResult(RichTextContent(newText, newSpans, newLinks), remap(start), remap(end))
+        val updated = content.copy(
+            text = newText,
+            spans = content.spans.mapNotNull { remapSpan(it, remap) },
+            links = content.links.mapNotNull { remapLink(it, remap) },
+            alignments = content.alignments.mapNotNull { remapAlignment(it, remap) },
+            images = content.images.mapNotNull { remapImage(it, remap) },
+        )
+        return EditResult(updated, remap(start), remap(end))
     }
 }
 
@@ -93,6 +124,18 @@ private fun remapLink(link: RichLink, remap: (Int) -> Int): RichLink? {
     val s = remap(link.start)
     val e = remap(link.end)
     return if (s < e) RichLink(s, e, link.url) else null
+}
+
+private fun remapAlignment(alignment: RichAlignment, remap: (Int) -> Int): RichAlignment? {
+    val s = remap(alignment.start)
+    val e = remap(alignment.end)
+    return if (s < e) alignment.copy(start = s, end = e) else null
+}
+
+private fun remapImage(image: RichImage, remap: (Int) -> Int): RichImage? {
+    val s = remap(image.start)
+    val e = remap(image.end)
+    return if (s < e) image.copy(start = s, end = e) else null
 }
 
 // --- inline style helpers ---
@@ -115,19 +158,6 @@ private fun subtractRange(spans: List<RichSpan>, start: Int, end: Int): List<Ric
             if (span.end > end) add(span.copy(start = end))
         }
     }
-}
-
-private fun mergeSameStyle(spans: List<RichSpan>): List<RichSpan> {
-    val merged = ArrayList<RichSpan>()
-    for (span in spans.sortedBy { it.start }) {
-        val last = merged.lastOrNull()
-        if (last != null && span.start <= last.end) {
-            merged[merged.size - 1] = last.copy(end = maxOf(last.end, span.end))
-        } else {
-            merged.add(span)
-        }
-    }
-    return merged
 }
 
 // --- block marker helpers ---

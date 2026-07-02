@@ -1,0 +1,8 @@
+First release of LibreMail.
+
+* Outlook/Microsoft (OAuth 2.0), Gmail/Yahoo/iCloud (app password), and generic IMAP/SMTP accounts
+* Offline-first mail cache with full-history backfill and background sync
+* Rich-text compose, drafts, signatures, attachments, and a reliable outbox
+* Unified inbox across multiple accounts, local + server search
+* New-mail notifications and optional IMAP IDLE instant push
+* Hardened HTML reader: JavaScript off, remote images blocked by default

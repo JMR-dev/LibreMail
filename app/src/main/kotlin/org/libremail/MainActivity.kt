@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.notifications.NotificationIntents
 import org.libremail.ui.LibreMailApp
 import org.libremail.ui.compose.ComposePrefill
 import org.libremail.ui.compose.IntentComposeParser
@@ -38,6 +39,12 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingCompose = mutableStateOf<ComposePrefill?>(null)
 
+    /**
+     * The message a tapped new-mail notification asks to open, consumed once by the NavHost. Compose
+     * state for the same reason as [pendingCompose].
+     */
+    private val pendingOpenMessageId = mutableStateOf<String?>(null)
+
     override fun onStart() {
         super.onStart()
         // Foreground: recover IDLE push if a background start was previously blocked.
@@ -47,10 +54,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // Only on a fresh launch — on a config-change recreation the NavHost restores the compose
-        // destination itself, so re-parsing the (unchanged) intent would open a duplicate.
+        // Only on a fresh launch — on a config-change recreation the NavHost restores the compose /
+        // reader destination itself, so re-parsing the (unchanged) intent would open a duplicate.
         if (savedInstanceState == null) {
             pendingCompose.value = IntentComposeParser.parse(intent)
+            pendingOpenMessageId.value = NotificationIntents.messageId(intent)
         }
         setContent {
             val dynamicColor by settingsRepository.dynamicColor.collectAsStateWithLifecycle(initialValue = true)
@@ -59,6 +67,8 @@ class MainActivity : ComponentActivity() {
                 LibreMailApp(
                     pendingCompose = pendingCompose.value,
                     onComposeHandled = { pendingCompose.value = null },
+                    pendingOpenMessageId = pendingOpenMessageId.value,
+                    onOpenMessageHandled = { pendingOpenMessageId.value = null },
                 )
             }
         }
@@ -68,6 +78,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         IntentComposeParser.parse(intent)?.let { pendingCompose.value = it }
+        NotificationIntents.messageId(intent)?.let { pendingOpenMessageId.value = it }
     }
 }
 
