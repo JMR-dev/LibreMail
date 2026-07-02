@@ -31,11 +31,13 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -530,9 +532,12 @@ private fun SelectedAvatar() {
 }
 
 /**
- * The contextual action bar shown while messages are selected. Archive/Delete are the common actions;
- * the overflow holds the rest. Reply/Reply All/Forward appear only for a single selected message, and
- * Archive/Spam are hidden while already viewing that role's folder.
+ * The contextual action bar shown while messages are selected. The common actions — Archive, Spam,
+ * Delete — are direct icon buttons (matching the reader's icons-not-menus app bar); Archive/Spam are
+ * hidden while already viewing that role's folder. The overflow keeps only the long tail: Move (no
+ * usable glyph in material-icons-core) and Select all, plus Reply/Reply All/Forward for a single
+ * selected message. At most four 48dp actions plus the close button fit a 320dp-wide bar; the
+ * count title just truncates earlier on such screens.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -558,6 +563,18 @@ private fun SelectionTopBar(
             }
         },
         actions = {
+            if (folderRole != FolderRole.ARCHIVE) {
+                IconButton(onClick = onArchive) {
+                    // material-icons-core ships no archive glyph; the checkmark leans on the
+                    // "done with it = archive it" mail idiom (Google Inbox's sweep).
+                    Icon(Icons.Filled.Done, contentDescription = stringResource(R.string.action_archive))
+                }
+            }
+            if (folderRole != FolderRole.SPAM) {
+                IconButton(onClick = onSpam) {
+                    Icon(Icons.Filled.Warning, contentDescription = stringResource(R.string.action_spam))
+                }
+            }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
             }
@@ -566,24 +583,6 @@ private fun SelectionTopBar(
                 Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                if (folderRole != FolderRole.ARCHIVE) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_archive)) },
-                        onClick = {
-                            expanded = false
-                            onArchive()
-                        },
-                    )
-                }
-                if (folderRole != FolderRole.SPAM) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_spam)) },
-                        onClick = {
-                            expanded = false
-                            onSpam()
-                        },
-                    )
-                }
                 if (canMove) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_move)) },
