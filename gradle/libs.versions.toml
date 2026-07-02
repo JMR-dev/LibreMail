@@ -26,6 +26,7 @@ angusMail = "2.0.5"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.7.0"
+androidxTestRules = "1.7.0"
 turbine = "1.2.1"
 mockk = "1.14.11"
 greenmail = "2.1.9"
@@ -110,6 +111,7 @@ greenmail = { group = "com.icegreen", name = "greenmail", version.ref = "greenma
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 androidx-espresso-intents = { group = "androidx.test.espresso", name = "espresso-intents", version.ref = "espresso" }
+androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "androidxTestRules" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

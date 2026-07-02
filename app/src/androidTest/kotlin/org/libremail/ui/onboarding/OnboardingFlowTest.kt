@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.onboarding
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -18,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.rule.GrantPermissionRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,6 +56,19 @@ class OnboardingFlowTest {
 
     @get:Rule
     val composeTestRule = createAndroidComposeRule<ComponentActivity>()
+
+    // OnboardingWelcomeScreen requests POST_NOTIFICATIONS when it first composes (#151). On API 33+
+    // that runtime dialog would pop over the test, backgrounding the activity and leaving the compose
+    // rule with "No compose hierarchies found". Pre-grant it so the flow runs uninterrupted; the
+    // permission only exists on API 33+, so below TIRAMISU grant nothing (granting a nonexistent
+    // permission errors on older devices).
+    @get:Rule
+    val notificationPermission: GrantPermissionRule =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            GrantPermissionRule.grant()
+        }
 
     private fun string(resId: Int, vararg args: Any) = composeTestRule.activity.getString(resId, *args)
 
