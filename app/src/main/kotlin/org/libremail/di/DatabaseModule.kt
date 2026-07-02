@@ -11,6 +11,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import org.libremail.data.local.AccountDataMigrator
 import org.libremail.data.local.DatabaseEncryption
 import org.libremail.data.local.DatabaseFiles
 import org.libremail.data.local.LibreMailDatabase
@@ -19,6 +20,7 @@ import org.libremail.data.local.MIGRATION_11_12
 import org.libremail.data.local.MIGRATION_12_13
 import org.libremail.data.local.MIGRATION_13_14
 import org.libremail.data.local.MIGRATION_14_15
+import org.libremail.data.local.MIGRATION_15_16
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
@@ -28,16 +30,12 @@ import org.libremail.data.local.MIGRATION_6_7
 import org.libremail.data.local.MIGRATION_7_8
 import org.libremail.data.local.MIGRATION_8_9
 import org.libremail.data.local.MIGRATION_9_10
-import org.libremail.data.local.dao.AccountDao
-import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.dao.AttachmentDao
 import org.libremail.data.local.dao.BackfillProgressDao
-import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
-import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.SettingsRepository
 import javax.inject.Singleton
@@ -52,6 +50,7 @@ object DatabaseModule {
         @ApplicationContext context: Context,
         keyStore: DatabaseKeyStore,
         settingsRepository: SettingsRepository,
+        accountDataMigrator: AccountDataMigrator,
     ): LibreMailDatabase {
         val builder = Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
             .addMigrations(
@@ -69,10 +68,11 @@ object DatabaseModule {
                 MIGRATION_12_13,
                 MIGRATION_13_14,
                 MIGRATION_14_15,
+                MIGRATION_15_16,
             )
         // No destructive fallback: the migration chain is complete, and silently dropping the
-        // accounts/credentials/mail tables would lose stored secrets. A missing migration should
-        // fail loudly in testing instead.
+        // mail/message tables would lose cached data. A missing migration should fail loudly in
+        // testing instead.
 
         // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
         // before the database is opened — so it never races an open connection; toggling the setting
@@ -92,6 +92,8 @@ object DatabaseModule {
         // restarts the app; we wipe the cache HERE — at cold start, before Room opens — so the file is
         // never deleted from under an open connection. Crash-safe order: wipe + reset the seals, and
         // only THEN clear the flag, so a kill mid-wipe just repeats the idempotent wipe next start.
+        // Only libremail.db is wiped: accounts/credentials live in AccountDatabase (a separate file),
+        // so the user stays signed in across the wipe (issue #111).
         if (runBlocking { keyStore.isClearPending() }) {
             DatabaseFiles.clear(context)
             runBlocking {
@@ -99,6 +101,12 @@ object DatabaseModule {
                 keyStore.clearClearPending()
             }
         }
+
+        // One-time move of accounts/credentials/settings/signatures into the non-auth AccountDatabase
+        // (issue #111). MUST run before builder.build() below: opening the cache applies MIGRATION_15_16,
+        // which drops the moved tables. It runs AFTER the wipe above so an unrecoverable-key cache is
+        // gone first (nothing left to move) and we never block waiting on a passphrase we can't get.
+        runBlocking { accountDataMigrator.migrateIfNeeded() }
 
         val settings = runBlocking { settingsRepository.settings.first() }
         val appLock = settings.appLock
@@ -120,15 +128,6 @@ object DatabaseModule {
     fun provideMessageDao(database: LibreMailDatabase): MessageDao = database.messageDao()
 
     @Provides
-    fun provideAccountDao(database: LibreMailDatabase): AccountDao = database.accountDao()
-
-    @Provides
-    fun provideAccountSettingsDao(database: LibreMailDatabase): AccountSettingsDao = database.accountSettingsDao()
-
-    @Provides
-    fun provideCredentialDao(database: LibreMailDatabase): CredentialDao = database.credentialDao()
-
-    @Provides
     fun provideAttachmentDao(database: LibreMailDatabase): AttachmentDao = database.attachmentDao()
 
     @Provides
@@ -139,9 +138,6 @@ object DatabaseModule {
 
     @Provides
     fun provideFolderDao(database: LibreMailDatabase): FolderDao = database.folderDao()
-
-    @Provides
-    fun provideSignatureDao(database: LibreMailDatabase): SignatureDao = database.signatureDao()
 
     @Provides
     fun provideBackfillProgressDao(database: LibreMailDatabase): BackfillProgressDao = database.backfillProgressDao()
