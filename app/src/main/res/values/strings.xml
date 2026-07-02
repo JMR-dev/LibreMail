@@ -131,6 +131,14 @@
     <string name="message_available_offline">Available offline</string>
     <string name="attachment_download_failed">Couldn\'t download %1$s</string>
     <string name="attachment_no_app">No app can open this file</string>
+    <!-- Reader attachment accordion (#134). %1$d = attachments beyond the first, always one or more. -->
+    <plurals name="attachments_see_more">
+        <item quantity="one">See %1$d more attachment</item>
+        <item quantity="other">See %1$d more attachments</item>
+    </plurals>
+    <string name="attachments_see_fewer">See fewer attachments</string>
+    <string name="attachments_expand">Expand attachments</string>
+    <string name="attachments_collapse">Collapse attachments</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Welcome to LibreMail</string>
