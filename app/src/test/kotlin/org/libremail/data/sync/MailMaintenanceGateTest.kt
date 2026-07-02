@@ -26,6 +26,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
+import org.libremail.power.BatteryStatus
+import org.libremail.power.BatteryStatusProvider
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -167,6 +169,9 @@ class MailMaintenanceGateTest {
             connectionFactory = connectionFactory,
             settingsRepository = settingsRepository,
             accountSettingsRepository = accountSettingsRepository,
+            batteryStatusProvider = mockk<BatteryStatusProvider> {
+                every { current() } returns BatteryStatus(percent = 100, isCharging = false)
+            },
             mailRepository = mockk(relaxed = true),
             maintenanceGate = gate,
         )
