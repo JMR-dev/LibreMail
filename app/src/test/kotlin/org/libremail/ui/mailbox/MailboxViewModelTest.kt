@@ -167,7 +167,6 @@ class MailboxViewModelTest {
     @Test
     fun `folder list lags a drawer-account switch until the new folders arrive`() = runTest(testDispatcher) {
         val repo = mockk<MailRepository>(relaxed = true)
-        every { repo.observeMessages() } returns MutableStateFlow(emptyList<Message>())
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())
         every { repo.observeFolders("imap:a") } returns
@@ -483,7 +482,17 @@ class MailboxViewModelTest {
         repo: MailRepository = mockk(relaxed = true),
         initialAccountId: String? = null,
     ): MailboxViewModel {
-        every { repo.observeMessages() } returns MutableStateFlow(messages)
+        // Mimic the SQL scoping: return the seed list narrowed to the queried account+folder / folder,
+        // exactly as MessageDao.observeFolderSummaries / observeUnifiedFolderSummaries do (issue #86).
+        every { repo.observeFolderMessages(any(), any()) } answers {
+            val accountId = firstArg<String>()
+            val folder = secondArg<String>()
+            MutableStateFlow(messages.filter { it.accountId == accountId && it.folder == folder })
+        }
+        every { repo.observeUnifiedFolderMessages(any()) } answers {
+            val folder = firstArg<String>()
+            MutableStateFlow(messages.filter { it.folder == folder })
+        }
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())
         every { repo.observeUnreadCounts() } returns MutableStateFlow(unreadCounts)
