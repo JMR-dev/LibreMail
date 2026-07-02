@@ -16,7 +16,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
-import org.libremail.data.local.LibreMailDatabase
+import org.libremail.data.local.AccountDatabase
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
@@ -59,7 +59,7 @@ class AccountSettingsScreenTest {
         // stateIn/WhileSubscribed) keeps querying after the test body, so closing the in-memory DB out
         // from under it races and crashes ("connection pool has been closed"). The DB is reclaimed with
         // the test process.
-        val db = Room.inMemoryDatabaseBuilder(context, LibreMailDatabase::class.java).build()
+        val db = Room.inMemoryDatabaseBuilder(context, AccountDatabase::class.java).build()
         val repository = AccountSettingsRepository(db.accountSettingsDao())
         runBlocking {
             db.accountDao().upsert(account.toEntity()) // FK parent for the account_settings row

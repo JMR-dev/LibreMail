@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.domain.repository
 
+import androidx.paging.PagingData
 import kotlinx.coroutines.flow.Flow
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
@@ -26,6 +27,14 @@ interface MailRepository {
 
     /** Like [observeFolderMessages] but for [folder] across every account (the unified inbox). */
     fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>>
+
+    /**
+     * The unified inbox as a [PagingData] stream so the list's query, mapping, and recomposition cost
+     * scale with the visible window rather than the whole cache (issue #124). Emits only folder-synced
+     * rows of [folder] across every account, newest-first — unified *search* still uses
+     * [observeUnifiedFolderMessages]. Callers must `cachedIn` a scope before collecting.
+     */
+    fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>>
 
     /** The account's cached IMAP folders for the navigation drawer. */
     fun observeFolders(accountId: String): Flow<List<Folder>>

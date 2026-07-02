@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.local.dao
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -53,6 +54,24 @@ interface MessageDao {
             "WHERE folder = :folder ORDER BY timestampMillis DESC",
     )
     fun observeUnifiedFolderSummaries(folder: String): Flow<List<MessageSummary>>
+
+    /**
+     * Paged unified-inbox projection: folder-synced rows of [folder] across every account,
+     * newest-first, as a Paging 3 [PagingSource] (issue #124). Unlike [observeUnifiedFolderSummaries]
+     * — which materializes the *entire* unified inbox (~thousands of rows) on every emission — Room
+     * loads only the requested window (LIMIT/OFFSET), so the mailbox list's query, mapping, and
+     * recomposition cost scale with what's on screen, not the whole cache. Filters `inInbox = 1`
+     * because the paged browse list shows only synced rows; unified *search* (which must also surface
+     * transient `inInbox = 0` hits) stays on [observeUnifiedFolderSummaries]. Profiling (see
+     * `docs/perf/issue-124-unified-inbox-paging.md`) showed the first page loads flat regardless of
+     * total cache size on the existing indices, so no `(folder, …)` index / schema migration is added.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC",
+    )
+    fun pagingUnifiedFolderSummaries(folder: String): PagingSource<Int, MessageSummary>
 
     /**
      * Live per-(account, folder) unread counts for the drawer's folder badges and the bold styling of
