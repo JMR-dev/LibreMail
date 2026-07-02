@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.settings
 
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -18,11 +17,14 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -55,10 +57,14 @@ fun SettingsScreen(
     val batteryUnrestricted by viewModel.batteryUnrestricted.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val resources = LocalResources.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
+    // Surface a rejected app-lock toggle via the canonical snackbar pattern (matches MailboxScreen).
+    // The ViewModel holds the @StringRes id; resolve it here via LocalResources (so it re-resolves on
+    // configuration changes) at the display boundary, then clear it.
     LaunchedEffect(appLockMessage) {
-        appLockMessage?.let {
-            Toast.makeText(context, resources.getString(it), Toast.LENGTH_LONG).show()
+        appLockMessage?.let { messageId ->
+            snackbarHostState.showSnackbar(resources.getString(messageId))
             viewModel.clearAppLockMessage()
         }
     }
@@ -69,6 +75,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) },
         bottomBar = { LibreMailBottomBar(current = TopDest.SETTINGS, onSelect = onSelectTab) },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier

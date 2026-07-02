@@ -97,8 +97,18 @@ class AppLockViewModel @Inject constructor(
         }
     }
 
-    private fun emitLocked(error: String? = null) {
-        _uiState.value = AppLockUiState.Locked(error, ++lockSeq)
+    /**
+     * Single writer for the gated UI state: derive it from [AppLockGate.state] — the source of truth
+     * for whether the session is locked — instead of hand-mirroring the gate at each call site. [error]
+     * is a human-readable reason the previous unlock attempt failed. The transient
+     * [AppLockUiState.Checking] cover and the "app-lock off / just disabled" unlocked states are driven
+     * by settings/lifecycle rather than the session gate, so their sites set [_uiState] directly.
+     */
+    private fun publish(error: String? = null) {
+        _uiState.value = when (gate.state) {
+            LockState.UNLOCKED -> AppLockUiState.Unlocked
+            LockState.LOCKED -> AppLockUiState.Locked(error, ++lockSeq)
+        }
     }
 
     /** Recompute the lock state when the app comes to the foreground (lifecycle ON_START). */
@@ -136,18 +146,15 @@ class AppLockViewModel @Inject constructor(
                 LockAction.CLEAR_AND_REQUIRE_AUTH -> clearCacheAndRestart(disableAppLock = false)
 
                 LockAction.REQUIRE_AUTH -> {
-                    val state = gate.onForeground(foregroundAt, appLockEnabled = true)
-                    if (state == LockState.UNLOCKED) {
-                        _uiState.value = AppLockUiState.Unlocked
-                    } else {
-                        // Re-lock on grace expiry (timeout). The SQLCipher passphrase is intentionally
-                        // NOT evicted here: PassphraseSession is the only separately-held copy, but
-                        // clearing it flips EncryptedCacheGuard to "locked" and would stall background
-                        // sync/push while locked, and the already-open Room handle keeps the key
-                        // resident regardless. Full eviction needs the DB close/reopen owned by #93 /
-                        // #111 — see PassphraseSession's KDoc.
-                        emitLocked()
-                    }
+                    // Advance the gate for this foreground pass, then publish its decision (UNLOCKED
+                    // within the grace window, otherwise LOCKED). Re-locking on grace expiry
+                    // intentionally does NOT evict the SQLCipher passphrase: PassphraseSession is the
+                    // only separately-held copy, but clearing it flips EncryptedCacheGuard to "locked"
+                    // and would stall background sync/push while locked, and the already-open Room handle
+                    // keeps the key resident regardless. Full eviction needs the DB close/reopen owned by
+                    // #93 / #111 — see PassphraseSession's KDoc.
+                    gate.onForeground(foregroundAt, appLockEnabled = true)
+                    publish()
                 }
             }
         }
@@ -169,7 +176,7 @@ class AppLockViewModel @Inject constructor(
             when (withContext(Dispatchers.Default) { unlockOrArm() }) {
                 UnlockResult.OK -> {
                     gate.onAuthenticated()
-                    _uiState.value = AppLockUiState.Unlocked
+                    publish()
                 }
 
                 UnlockResult.UNRECOVERABLE -> {
@@ -181,7 +188,7 @@ class AppLockViewModel @Inject constructor(
 
                 UnlockResult.RETRY -> {
                     gate.lock()
-                    emitLocked(context.getString(R.string.app_lock_unlock_failed))
+                    publish(context.getString(R.string.app_lock_unlock_failed))
                 }
             }
         }
@@ -190,7 +197,7 @@ class AppLockViewModel @Inject constructor(
     /** Called by the host when the prompt is cancelled or errors. */
     fun onAuthError(message: String?) {
         gate.lock()
-        emitLocked(message)
+        publish(message)
     }
 
     /** Outcome of unwrapping/arming the auth-bound passphrase after a successful device auth. */
