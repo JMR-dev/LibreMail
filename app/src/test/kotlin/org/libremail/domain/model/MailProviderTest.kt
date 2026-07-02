@@ -3,6 +3,7 @@ package org.libremail.domain.model
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -134,4 +135,45 @@ class MailProviderTest {
             assertTrue(provider.displayName.isNotBlank())
         }
     }
+
+    // #69: host→brand matching is consolidated here. forImapHost matches primary hosts and aliases;
+    // brandFor is the single seam that adds Outlook (deliberately not a preset entry) to the mix.
+    @Test
+    fun `forImapHost matches primary hosts and Gmail's legacy alias, case-insensitively`() {
+        assertEquals(MailProvider.GMAIL, MailProvider.forImapHost("imap.gmail.com"))
+        assertEquals(MailProvider.GMAIL, MailProvider.forImapHost("imap.googlemail.com"))
+        assertEquals(MailProvider.GMAIL, MailProvider.forImapHost("IMAP.GMAIL.COM"))
+        assertEquals(MailProvider.ICLOUD, MailProvider.forImapHost("imap.mail.me.com"))
+        assertNull(MailProvider.forImapHost("imap.example.org"))
+    }
+
+    @Test
+    fun `matchesHost recognizes a provider's aliases but not unrelated hosts`() {
+        assertTrue(MailProvider.GMAIL.matchesHost("imap.googlemail.com"))
+        assertFalse(MailProvider.GMAIL.matchesHost("imap.mail.me.com"))
+    }
+
+    @Test
+    fun `brandFor centralizes host to brand matching, including Outlook`() {
+        assertEquals("Gmail", MailProvider.brandFor(account("imap.googlemail.com")))
+        assertEquals("iCloud Mail", MailProvider.brandFor(account("imap.mail.me.com")))
+        // A manually configured Office 365 host is Outlook even without the OAuth auth type.
+        assertEquals(MailProvider.OUTLOOK_BRAND, MailProvider.brandFor(account("outlook.office365.com")))
+        // The OAuth auth type brands as Outlook regardless of host.
+        assertEquals(
+            MailProvider.OUTLOOK_BRAND,
+            MailProvider.brandFor(account("example.com", AuthType.OAUTH_OUTLOOK)),
+        )
+        // Over-match guard: a host merely containing "outlook" maps to no brand.
+        assertNull(MailProvider.brandFor(account("outlook.example.com")))
+    }
+
+    private fun account(imapHost: String, authType: AuthType = AuthType.PASSWORD_IMAP) = Account(
+        id = "acct",
+        email = "user@example.com",
+        displayName = "user",
+        authType = authType,
+        imap = ServerConfig(imapHost, 993, MailSecurity.SSL_TLS),
+        smtp = ServerConfig("smtp.example.com", 587, MailSecurity.STARTTLS),
+    )
 }

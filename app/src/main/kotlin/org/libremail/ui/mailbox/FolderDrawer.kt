@@ -97,7 +97,9 @@ fun FolderDrawer(
             }
             val unread = folderUnreadCounts[folder.fullName] ?: 0
             NavigationDrawerItem(
-                label = { Text(resolvedLabels[folder.fullName] ?: folderDisplayLabel(folder)) },
+                // getValue: resolvedLabels is keyed by every folder in this same list, so a miss is
+                // a bug to surface, not to paper over with a re-derived (un-deduplicated) label.
+                label = { Text(resolvedLabels.getValue(folder.fullName)) },
                 icon = iconContent,
                 badge = if (unread > 0) {
                     { UnreadBadgeLabel(unread) }
@@ -183,24 +185,43 @@ private fun UnreadBadgeLabel(count: Int) {
  * The provider suffix derives from the account owning the listed folders (see [providerLabelFor]),
  * not from whichever account is currently selected, so a folder list that briefly lags an account
  * switch never borrows the incoming account's brand.
+ *
+ * The Compose-only lookups (the role→name strings and the localized disambiguation [LabelPatterns])
+ * are hoisted out of the [remember] calculation — `stringResource` can't run inside its
+ * `@DisallowComposableCalls` body — which then memoizes the resolved map, rebuilding it only when
+ * the folders, accounts, or those strings change. Callers that compose while idle (the closed
+ * navigation drawer) and taps that change only the selection then reuse the same map instance.
  */
 @Composable
 fun resolvedFolderLabels(folders: List<Folder>, accounts: List<Account>): Map<String, String> {
-    val baseLabels = folders.associate { it.fullName to folderDisplayLabel(it) }
-    return resolveDrawerLabels(folders, baseLabels, providerLabelFor(folders, accounts))
+    val roleLabels = folderRoleLabels()
+    val patterns = LabelPatterns(
+        withProvider = stringResource(R.string.folder_label_with_provider),
+        withParent = stringResource(R.string.folder_label_with_parent),
+        withPath = stringResource(R.string.folder_label_with_path),
+    )
+    return remember(folders, accounts, roleLabels, patterns) {
+        val baseLabels = folders.associate { folder ->
+            folder.fullName to (roleLabels[folder.role] ?: folder.displayName)
+        }
+        resolveDrawerLabels(folders, baseLabels, providerLabelFor(folders, accounts), patterns)
+    }
 }
+
+/** The localized friendly names for the standard folder roles; [FolderRole.NORMAL] has none. */
+@Composable
+private fun folderRoleLabels(): Map<FolderRole, String> = mapOf(
+    FolderRole.INBOX to stringResource(R.string.folder_inbox),
+    FolderRole.SENT to stringResource(R.string.folder_sent),
+    FolderRole.DRAFTS to stringResource(R.string.folder_drafts),
+    FolderRole.ARCHIVE to stringResource(R.string.folder_archive),
+    FolderRole.SPAM to stringResource(R.string.folder_spam),
+    FolderRole.TRASH to stringResource(R.string.folder_trash),
+)
 
 /** The user-facing label for a folder: a friendly name for standard roles, else the server name. */
 @Composable
-fun folderDisplayLabel(folder: Folder): String = when (folder.role) {
-    FolderRole.INBOX -> stringResource(R.string.folder_inbox)
-    FolderRole.SENT -> stringResource(R.string.folder_sent)
-    FolderRole.DRAFTS -> stringResource(R.string.folder_drafts)
-    FolderRole.ARCHIVE -> stringResource(R.string.folder_archive)
-    FolderRole.SPAM -> stringResource(R.string.folder_spam)
-    FolderRole.TRASH -> stringResource(R.string.folder_trash)
-    FolderRole.NORMAL -> folder.displayName
-}
+fun folderDisplayLabel(folder: Folder): String = folderRoleLabels()[folder.role] ?: folder.displayName
 
 /** A leading icon for standard folders, limited to the material-icons-core set (null = no icon). */
 private fun folderIcon(role: FolderRole): ImageVector? = when (role) {

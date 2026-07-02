@@ -39,6 +39,12 @@ enum class MailProvider(
     private val smtpHost: String,
     private val smtpPort: Int,
     private val smtpSecurity: MailSecurity,
+    /**
+     * Extra IMAP hosts that also identify this provider, besides [imapHost] — e.g. Gmail's legacy
+     * `imap.googlemail.com`. Matched case-insensitively by [matchesHost] so a manually configured
+     * account on a legacy host still resolves to the right brand.
+     */
+    private val hostAliases: List<String> = emptyList(),
 ) {
     GMAIL(
         key = "gmail",
@@ -52,6 +58,8 @@ enum class MailProvider(
         // Google documents smtp.gmail.com:587 with STARTTLS as the standard submission endpoint.
         smtpPort = SMTP_SUBMISSION_PORT,
         smtpSecurity = MailSecurity.STARTTLS,
+        // Legacy Gmail IMAP host still seen on older, manually configured accounts.
+        hostAliases = listOf("imap.googlemail.com"),
     ),
     YAHOO(
         key = "yahoo",
@@ -92,12 +100,45 @@ enum class MailProvider(
         )
     }
 
+    /**
+     * True when [host] is this provider's [imapHost] or one of its [hostAliases] (case-insensitive).
+     * The single place that knows which IMAP hosts belong to this provider.
+     */
+    fun matchesHost(host: String): Boolean =
+        imapHost.equals(host, ignoreCase = true) || hostAliases.any { it.equals(host, ignoreCase = true) }
+
     companion object {
+        /** The folder-label brand shown for Microsoft Outlook / Office 365 accounts. */
+        const val OUTLOOK_BRAND = "Outlook"
+
         /** Resolves a provider by its [key], or null if none matches (case-insensitive). */
         fun fromKey(key: String): MailProvider? = entries.firstOrNull { it.key.equals(key, ignoreCase = true) }
 
-        /** Resolves a provider by its IMAP host, or null if none matches (case-insensitive). */
-        fun forImapHost(host: String): MailProvider? =
-            entries.firstOrNull { it.imapHost.equals(host, ignoreCase = true) }
+        /** Resolves an app-password provider by its IMAP host (or alias), or null if none matches. */
+        fun forImapHost(host: String): MailProvider? = entries.firstOrNull { it.matchesHost(host) }
+
+        /**
+         * The recognized brand name for [account], or null when its host maps to no known brand. The
+         * single source of truth for host→brand matching: Outlook is identified by its OAuth auth
+         * type or a Microsoft mail host (it is deliberately not an app-password [MailProvider] entry,
+         * as it uses interactive OAuth), and every other brand resolves through [forImapHost].
+         */
+        fun brandFor(account: Account): String? = when {
+            account.authType == AuthType.OAUTH_OUTLOOK -> OUTLOOK_BRAND
+            isOutlookHost(account.imap.host) -> OUTLOOK_BRAND
+            else -> forImapHost(account.imap.host)?.displayName
+        }
+
+        /**
+         * True for Microsoft's Outlook / Office 365 mail hosts (e.g. `outlook.office365.com`). Matches
+         * the `office365.com` domain and `outlook.office.com` precisely, rather than any host merely
+         * containing "outlook", so an unrelated host can't be mislabeled as Outlook.
+         */
+        private fun isOutlookHost(host: String): Boolean {
+            val normalized = host.lowercase()
+            return normalized == "office365.com" ||
+                normalized.endsWith(".office365.com") ||
+                normalized == "outlook.office.com"
+        }
     }
 }

@@ -2,22 +2,16 @@
 package org.libremail.ui.mailbox
 
 import org.libremail.domain.model.Account
-import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.Folder
 import org.libremail.domain.model.MailProvider
 
 /**
  * The provider name appended when de-duplicating a folder label (the "Gmail" in "Drafts - Gmail").
- * A recognized brand where possible, else the account's email domain so any account has a suffix.
+ * A recognized brand where possible (resolved through [MailProvider.brandFor], the single source of
+ * host→brand knowledge), else the account's email domain so any account still gets a suffix.
  */
-fun providerLabel(account: Account): String = when {
-    account.authType == AuthType.OAUTH_OUTLOOK ||
-        account.imap.host.contains("outlook", ignoreCase = true) ||
-        account.imap.host.contains("office365", ignoreCase = true) -> "Outlook"
-
-    else -> MailProvider.forImapHost(account.imap.host)?.displayName
-        ?: account.email.substringAfterLast('@', account.imap.host)
-}
+fun providerLabel(account: Account): String =
+    MailProvider.brandFor(account) ?: account.email.substringAfterLast('@', account.imap.host)
 
 /**
  * The provider suffix used when de-duplicating [folders]' labels, derived from the account that owns
@@ -28,6 +22,24 @@ fun providerLabel(account: Account): String = when {
  */
 fun providerLabelFor(folders: List<Folder>, accounts: List<Account>): String =
     accounts.firstOrNull { it.id == folders.firstOrNull()?.accountId }?.let(::providerLabel).orEmpty()
+
+// Default disambiguation patterns. These mirror the strings.xml resources of the same names, and the
+// literals used before the patterns were externalized (#68); the localized resources are supplied by
+// the composable call site (see resolvedFolderLabels). "%1$s" is the base label, "%2$s" the detail.
+private const val PROVIDER_LABEL_PATTERN = "%1\$s - %2\$s"
+private const val PARENT_LABEL_PATTERN = "%1\$s (%2\$s)"
+private const val PATH_LABEL_PATTERN = "%1\$s [%2\$s]"
+
+/**
+ * The locale-specific patterns for joining a folder's base label with its disambiguating detail.
+ * Defaults match the pre-i18n literals so [resolveDrawerLabels] stays a pure, JVM-testable function;
+ * the drawer supplies the localized strings.xml values (the folder_label_with_* strings).
+ */
+data class LabelPatterns(
+    val withProvider: String = PROVIDER_LABEL_PATTERN,
+    val withParent: String = PARENT_LABEL_PATTERN,
+    val withPath: String = PATH_LABEL_PATTERN,
+)
 
 /**
  * Resolves each folder's user-facing label so folders that would render the same name are told apart
@@ -46,16 +58,22 @@ fun resolveDrawerLabels(
     folders: List<Folder>,
     baseLabels: Map<String, String>,
     providerLabel: String,
+    patterns: LabelPatterns = LabelPatterns(),
 ): Map<String, String> {
-    fun base(folder: Folder) = baseLabels[folder.fullName] ?: folder.displayName
+    // getValue, not a fallback: baseLabels is built from this same folder list, so a miss is a
+    // programming error that should fail loudly rather than silently revert to an un-deduped label.
+    fun base(folder: Folder) = baseLabels.getValue(folder.fullName)
     val duplicated = folders.groupingBy(::base).eachCount().filterValues { it > 1 }.keys
+    // Dominant case: nothing collides, so every label is already its base. Return the base labels
+    // as-is rather than rebuilding a value-identical map (and re-running the counting pass below).
+    if (duplicated.isEmpty()) return baseLabels
 
     val resolved = folders.associate { folder ->
         val base = base(folder)
         val label = when {
             base !in duplicated -> base
-            folder.specialUse -> "$base - $providerLabel"
-            else -> userFolderLabel(folder, base)
+            folder.specialUse -> patterns.withProvider.format(base, providerLabel)
+            else -> userFolderLabel(folder, base, patterns.withParent)
         }
         folder.fullName to label
     }
@@ -64,7 +82,9 @@ fun resolveDrawerLabels(
     // unambiguous full path so the tied entries stay apart.
     val stillTied = resolved.values.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
     if (stillTied.isEmpty()) return resolved
-    return resolved.mapValues { (fullName, label) -> if (label in stillTied) "$label [$fullName]" else label }
+    return resolved.mapValues { (fullName, label) ->
+        if (label in stillTied) patterns.withPath.format(label, fullName) else label
+    }
 }
 
 /**
@@ -74,10 +94,10 @@ fun resolveDrawerLabels(
  * named like the base keeps it — the others show their real server name rather than falling through
  * to the safety net as a self-referential "Sent [Sent]".
  */
-private fun userFolderLabel(folder: Folder, base: String): String {
+private fun userFolderLabel(folder: Folder, base: String, parentPattern: String): String {
     val parent = parentOf(folder.fullName, folder.displayName)
     return when {
-        parent != null -> "$base ($parent)"
+        parent != null -> parentPattern.format(base, parent)
         folder.displayName.equals(base, ignoreCase = true) -> base
         else -> folder.displayName
     }

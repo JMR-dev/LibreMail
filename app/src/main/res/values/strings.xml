@@ -68,6 +68,12 @@
     <string name="folder_archive">Archive</string>
     <string name="folder_spam">Spam</string>
     <string name="folder_trash">Trash</string>
+    <!-- Folder-label disambiguation patterns, used only when two folders would otherwise show the
+         same name. %1$s is the base label; %2$s is the distinguishing detail. Reorder or
+         re-punctuate per locale (e.g. for RTL). -->
+    <string name="folder_label_with_provider">%1$s - %2$s</string>
+    <string name="folder_label_with_parent">%1$s (%2$s)</string>
+    <string name="folder_label_with_path">%1$s [%2$s]</string>
     <!-- Unread badge shown after a folder name; caps very large counts. -->
     <string name="folder_unread_overflow">99+</string>
     <!-- Screen-reader description for a folder's unread badge, e.g. "12 unread messages". -->
