@@ -1,22 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -84,7 +75,6 @@ class MainActivity : FragmentActivity() {
         setContent {
             val dynamicColor by settingsRepository.dynamicColor.collectAsStateWithLifecycle(initialValue = true)
             LibreMailTheme(dynamicColor = dynamicColor) {
-                NotificationPermissionEffect()
                 // Gate the whole app behind the screen-lock when app-lock is enabled. When it is off
                 // the gate resolves straight to the content, so this is a no-op for most users.
                 AppLockGateHost {
@@ -104,20 +94,5 @@ class MainActivity : FragmentActivity() {
         setIntent(intent)
         IntentComposeParser.parse(intent)?.let { pendingCompose.value = it }
         NotificationIntents.messageId(intent)?.let { pendingOpenMessageId.value = it }
-    }
-}
-
-/** Requests POST_NOTIFICATIONS once on first launch (no-op if already granted). */
-@Composable
-private fun NotificationPermissionEffect() {
-    val context = LocalContext.current
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    LaunchedEffect(Unit) {
-        // POST_NOTIFICATIONS is a runtime permission only on Android 13 (API 33)+. On older
-        // versions notifications are enabled by default, so there's nothing to request.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
-        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!granted) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
