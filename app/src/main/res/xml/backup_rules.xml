@@ -5,10 +5,11 @@
   which applies on API 31+. Backup is still gated by LibreMailBackupAgent (opt-in, OFF by default).
 
   <include> makes this a strict allowlist: ONLY the libremail_settings DataStore is backed up. The
-  Keystore-sealed cache passphrase (datastore/libremail_dbkey.preferences_pb) and the encrypted
-  credentials + mail-cache database (libremail.db and its -wal/-shm/-journal side files) are kept
-  off-device by being omitted from the allowlist; the mail cache re-downloads on the next sync and
-  accounts are re-added on a new device. (Lint's FullBackupContent rule forbids <exclude> paths
+  Keystore-sealed cache passphrase (datastore/libremail_dbkey.preferences_pb), the mail-cache
+  database (libremail.db) and the accounts + encrypted-credentials database (libremail-accounts.db,
+  which issue #111 split out of libremail.db) — each with their -wal/-shm/-journal side files — are
+  kept off-device by being omitted from the allowlist; the mail cache re-downloads on the next sync
+  and accounts are re-added on a new device. (Lint's FullBackupContent rule forbids <exclude> paths
   outside an <include>, so exclusion is expressed by omission rather than explicit <exclude> entries.)
 -->
 <full-backup-content>

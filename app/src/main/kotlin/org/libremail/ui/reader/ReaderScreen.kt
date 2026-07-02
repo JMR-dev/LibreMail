@@ -64,6 +64,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.libremail.R
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import java.io.File
 
@@ -147,6 +148,7 @@ fun ReaderScreen(
             message != null -> MessageBody(
                 message = message,
                 attachments = state.attachments,
+                inlineImages = state.inlineImages,
                 downloading = state.downloading,
                 downloaded = state.downloaded,
                 onDownloadAttachment = viewModel::downloadAttachment,
@@ -166,6 +168,7 @@ fun ReaderScreen(
 private fun MessageBody(
     message: Message,
     attachments: List<Attachment>,
+    inlineImages: Map<String, InlineImage>,
     downloading: Set<Int>,
     downloaded: Set<Int>,
     onDownloadAttachment: (Attachment) -> Unit,
@@ -194,6 +197,7 @@ private fun MessageBody(
             message.isHtml -> HtmlBody(
                 html = message.body,
                 loadRemoteImages = loadRemoteImages,
+                inlineImages = inlineImages,
                 modifier = Modifier.fillMaxSize(),
             )
 

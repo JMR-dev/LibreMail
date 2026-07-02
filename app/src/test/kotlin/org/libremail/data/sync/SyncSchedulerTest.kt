@@ -4,12 +4,15 @@ package org.libremail.data.sync
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
+import androidx.work.Operation
 import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.Test
 import javax.inject.Provider
+import kotlin.test.assertSame
 
 /**
  * The enqueue methods are thin wrappers over WorkManager, so these tests pin the one thing that carries
@@ -77,6 +80,18 @@ class SyncSchedulerTest {
                 any<OneTimeWorkRequest>(),
             )
         }
+    }
+
+    // The app-lock key-invalidation recovery restart awaits this Operation before killing the process
+    // (see AppLockViewModel), so the WorkSpec is durably persisted and the post-wipe re-sync survives.
+    @Test
+    fun `syncNow returns the enqueue operation so callers can await durable persistence`() {
+        val operation = mockk<Operation>()
+        every {
+            workManager.enqueueUniqueWork(any<String>(), any<ExistingWorkPolicy>(), any<OneTimeWorkRequest>())
+        } returns operation
+
+        assertSame(operation, scheduler.syncNow())
     }
 
     @Test

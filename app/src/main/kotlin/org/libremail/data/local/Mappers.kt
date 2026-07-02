@@ -184,6 +184,7 @@ internal fun AttachmentEntity.toDomain(): Attachment = Attachment(
     filename = filename,
     mimeType = mimeType,
     sizeBytes = sizeBytes,
+    contentId = contentId,
 )
 
 internal fun AttachmentPart.toEntity(messageId: String): AttachmentEntity = AttachmentEntity(
@@ -192,6 +193,7 @@ internal fun AttachmentPart.toEntity(messageId: String): AttachmentEntity = Atta
     filename = filename,
     mimeType = mimeType,
     sizeBytes = sizeBytes,
+    contentId = contentId,
 )
 
 internal fun DraftEntity.toDomain(): Draft = Draft(

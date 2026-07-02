@@ -330,3 +330,17 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
         db.execSQL("DROP TABLE IF EXISTS `accounts`")
     }
 }
+
+/**
+ * v16 -> v17: inline-image support in the reader (issue #133; preserves existing data). Adds a
+ * nullable `contentId` column to `attachments` recording the `Content-ID` of an inline image
+ * (`<img src="cid:...">`) so the reader's WebView can resolve `cid:` requests to the cached bytes,
+ * and so such parts can be filtered out of the user-facing attachment list. Nullable with no SQL
+ * default (the MIGRATION_14_15 `hierarchyDelimiter` pattern) so existing attachment rows read back
+ * null — i.e. treated as ordinary attachments — until the next fetch reclassifies them.
+ */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `attachments` ADD COLUMN `contentId` TEXT")
+    }
+}
