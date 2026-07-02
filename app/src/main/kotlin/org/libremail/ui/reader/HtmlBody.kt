@@ -4,6 +4,7 @@ package org.libremail.ui.reader
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -19,11 +20,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import org.libremail.domain.model.InlineImage
+import java.io.ByteArrayInputStream
 
 /**
  * Renders an HTML email body in a hardened WebView: JavaScript and file/content access are
  * disabled, links open in the system browser, and remote content is blocked until the user
  * opts in (tracking-pixel protection).
+ *
+ * Inline images the email carries itself (`<img src="cid:...">`, resolved via [inlineImages]) are
+ * always served — they are embedded content, not a remote fetch, so they render even while remote
+ * images are blocked.
  *
  * The email is wrapped with an explicit background/text/link color drawn from the active Material
  * theme so it is always readable — in dark mode the previous transparent WebView showed the
@@ -33,7 +40,12 @@ import androidx.webkit.WebViewFeature
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modifier) {
+fun HtmlBody(
+    html: String,
+    loadRemoteImages: Boolean,
+    inlineImages: Map<String, InlineImage>,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val surface = colorScheme.surface
@@ -50,10 +62,15 @@ fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modif
             dark = isDark,
         )
     }
+    // A mutable holder the WebViewClient reads on the (background) interception thread, kept current
+    // by the update block so inline images that arrive after the first composition are resolvable.
+    val imageHolder = remember { InlineImageHolder() }
+    imageHolder.images = inlineImages
     // Tracks the content actually loaded so recompositions (star/attachment state changes) don't
     // reload the page and throw away the user's scroll position. Keyed on the fully wrapped
-    // document so a theme (light/dark) change still re-renders with the new colors.
-    val lastLoaded = remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    // document so a theme (light/dark) change still re-renders with the new colors, and on the set
+    // of available cid: keys so the page reloads once when inline images finish resolving.
+    val lastLoaded = remember { mutableStateOf<Triple<String, Boolean, Set<String>>?>(null) }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -72,6 +89,17 @@ fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modif
                 applyAlgorithmicDarkening(isDark)
                 isVerticalScrollBarEnabled = true
                 webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): WebResourceResponse? {
+                        // Serve inline images the email embedded itself (cid:) from the message's own
+                        // parts; everything else falls through to normal (remote-blockable) loading.
+                        val image = request?.url?.toString()?.let { resolveInlineImage(it, imageHolder.images) }
+                            ?: return null
+                        return WebResourceResponse(image.mimeType, null, ByteArrayInputStream(image.bytes))
+                    }
+
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val url = request?.url ?: return false
                         // Only open ordinary web/mail links, and only on an actual user tap — never
@@ -96,7 +124,7 @@ fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modif
             webView.setBackgroundColor(surfaceArgb)
             webView.applyAlgorithmicDarkening(isDark)
             webView.settings.blockNetworkLoads = !loadRemoteImages
-            val key = document to loadRemoteImages
+            val key = Triple(document, loadRemoteImages, inlineImages.keys.toSet())
             if (lastLoaded.value != key) {
                 lastLoaded.value = key
                 webView.loadDataWithBaseURL(null, document, "text/html", "UTF-8", null)
@@ -104,6 +132,27 @@ fun HtmlBody(html: String, loadRemoteImages: Boolean, modifier: Modifier = Modif
         },
     )
 }
+
+/** Mutable, thread-visible reference to the current inline images (read from the interception thread). */
+private class InlineImageHolder {
+    @Volatile
+    var images: Map<String, InlineImage> = emptyMap()
+}
+
+/**
+ * Extracts and normalizes the `Content-ID` from a `cid:` URL (surrounding angle brackets stripped),
+ * or null when [url] is not a `cid:` reference. Kept separate from Android types so it is unit-testable.
+ */
+internal fun cidKey(url: String): String? {
+    if (!url.startsWith("cid:", ignoreCase = true)) return null
+    return url.substring(CID_PREFIX_LENGTH).trim().trim('<', '>').trim().takeUnless { it.isBlank() }
+}
+
+/** Resolves a `cid:` [url] to its [InlineImage] among [images] (keyed by normalized Content-ID), or null. */
+internal fun resolveInlineImage(url: String, images: Map<String, InlineImage>): InlineImage? =
+    cidKey(url)?.let { images[it] }
+
+private const val CID_PREFIX_LENGTH = 4
 
 /**
  * Lets the WebView algorithmically darken email content that does not declare its own dark support,

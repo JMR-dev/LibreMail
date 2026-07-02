@@ -35,6 +35,7 @@ import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
 import org.libremail.domain.model.FolderRole
 import org.libremail.domain.model.ImapConnectionParams
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingAttachment
@@ -123,6 +124,15 @@ class MailRepositoryImpl @Inject constructor(
     override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
         attachmentDao.observeForMessage(messageId).map { rows ->
             rows.map { it.toDomain() }
+        }
+
+    override suspend fun inlineImages(messageId: String): List<InlineImage> = attachmentDao.getForMessage(messageId)
+        .filter { it.contentId != null }
+        .mapNotNull { row ->
+            // Reuse the on-disk attachment cache (download once, then instant + offline). A failed
+            // fetch just omits that image, leaving a broken <img> rather than failing the open.
+            val file = downloadAttachment(messageId, row.partIndex).getOrNull() ?: return@mapNotNull null
+            InlineImage(contentId = row.contentId!!, mimeType = row.mimeType, bytes = file.readBytes())
         }
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> = runCatching {

@@ -15,6 +15,7 @@ import jakarta.mail.event.MessageCountAdapter
 import jakarta.mail.event.MessageCountEvent
 import jakarta.mail.internet.ContentType
 import jakarta.mail.internet.InternetAddress
+import jakarta.mail.internet.MimePart
 import jakarta.mail.internet.MimeUtility
 import jakarta.mail.search.BodyTerm
 import jakarta.mail.search.FromStringTerm
@@ -67,8 +68,19 @@ data class FetchedMessage(
 /** A message body extracted from the server, with metadata for any attachment parts. */
 data class MessageContent(val body: String, val isHtml: Boolean, val attachments: List<AttachmentPart> = emptyList())
 
-/** Metadata for one attachment part. [partIndex] is its position in attachment-tree order. */
-data class AttachmentPart(val partIndex: Int, val filename: String, val mimeType: String, val sizeBytes: Long)
+/**
+ * Metadata for one downloadable part. [partIndex] is its position in attachment-tree order.
+ * [contentId] is the normalized `Content-ID` (angle brackets stripped) for an inline image referenced
+ * from the HTML body via `cid:` — null for an ordinary attachment. Inline parts are persisted so the
+ * reader can resolve `cid:` requests, but excluded from the user-facing attachment list.
+ */
+data class AttachmentPart(
+    val partIndex: Int,
+    val filename: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val contentId: String? = null,
+)
 
 /** A downloaded attachment's bytes plus the metadata needed to open it. */
 class DownloadedAttachment(val filename: String, val mimeType: String, val bytes: ByteArray)
@@ -476,7 +488,12 @@ class ImapClient @Inject constructor() {
         return plain
     }
 
-    /** Walks the MIME tree and returns attachment metadata in a stable, depth-first order. */
+    /**
+     * Walks the MIME tree and returns downloadable-part metadata in a stable, depth-first order.
+     * Inline images (a `Content-ID` referenced from the HTML via `cid:`) are included so their
+     * bytes can be fetched by [partIndex] and resolved by the reader, but each carries its
+     * [AttachmentPart.contentId] so the display layer can filter them out of the attachment list.
+     */
     private fun collectAttachments(message: Part): List<AttachmentPart> {
         val parts = mutableListOf<Part>()
         collectAttachmentParts(message, parts)
@@ -486,6 +503,7 @@ class ImapClient @Inject constructor() {
                 filename = attachmentName(part) ?: "attachment",
                 mimeType = baseType(part),
                 sizeBytes = part.size.toLong().coerceAtLeast(0L),
+                contentId = if (isInlineImagePart(part)) inlineContentId(part) else null,
             )
         }
     }
@@ -496,12 +514,9 @@ class ImapClient @Inject constructor() {
                 val multipart = part.content as? Multipart ?: return
                 for (i in 0 until multipart.count) collectAttachmentParts(multipart.getBodyPart(i), into)
             }
-            isAttachment(part) -> into.add(part)
+            isAttachmentPart(part) || isInlineImagePart(part) -> into.add(part)
         }
     }
-
-    private fun isAttachment(part: Part): Boolean =
-        Part.ATTACHMENT.equals(part.disposition, ignoreCase = true) || !part.fileName.isNullOrBlank()
 
     private fun attachmentName(part: Part): String? = part.fileName?.let {
         runCatching { MimeUtility.decodeText(it) }.getOrDefault(it)
@@ -566,3 +581,30 @@ class ImapClient @Inject constructor() {
         const val TAG = "LibreMailIdle"
     }
 }
+
+/**
+ * True when [part] is a user-facing downloadable attachment: its `Content-Disposition` is
+ * `attachment`, OR it has a filename but no `Content-ID` header. A part with a filename AND a
+ * `Content-ID` (an inline image carried by `Content-Disposition: inline`) is deliberately NOT an
+ * attachment — it belongs in the message body, not the attachment list (issue #133).
+ */
+internal fun isAttachmentPart(part: Part): Boolean = Part.ATTACHMENT.equals(part.disposition, ignoreCase = true) ||
+    (!part.fileName.isNullOrBlank() && inlineContentId(part) == null)
+
+/**
+ * True when [part] is an inline image embedded in the HTML body and referenced from it via
+ * `cid:<Content-ID>` (e.g. a USPS Informed Delivery digest's mail-piece thumbnails): it has a
+ * `Content-ID`, is an image, and is not already an [isAttachmentPart]. Such parts are excluded from
+ * the attachment list and instead served to the reader's WebView by their Content-ID.
+ */
+internal fun isInlineImagePart(part: Part): Boolean =
+    inlineContentId(part) != null && part.isMimeType("image/*") && !isAttachmentPart(part)
+
+/**
+ * The normalized `Content-ID` of [part] (surrounding angle brackets stripped), or null if it has
+ * none. Reads it via [MimePart.getContentID] rather than `getHeader("Content-ID")`: over IMAP the
+ * Content-ID comes from the already-fetched BODYSTRUCTURE, whereas a raw header lookup would force
+ * (and often miss on) a separate per-part MIME-header fetch.
+ */
+internal fun inlineContentId(part: Part): String? = runCatching { (part as? MimePart)?.contentID }.getOrNull()
+    ?.trim()?.trim('<', '>')?.trim()?.takeUnless { it.isBlank() }

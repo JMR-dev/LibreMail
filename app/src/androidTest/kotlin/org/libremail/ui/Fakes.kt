@@ -11,6 +11,7 @@ import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
 import org.libremail.domain.model.ImapConnectionParams
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.OutboxMessage
 import org.libremail.domain.model.OutgoingMessage
@@ -119,6 +120,8 @@ class FakeMailRepository(
                 messageId
         },
     )
+
+    override suspend fun inlineImages(messageId: String): List<InlineImage> = emptyList()
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> =
         Result.failure(UnsupportedOperationException("not used in UI tests"))
