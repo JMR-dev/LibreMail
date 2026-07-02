@@ -17,10 +17,16 @@ class FolderLabelsTest {
         displayName: String = fullName.substringAfterLast('/'),
         role: FolderRole = FolderRole.NORMAL,
         specialUse: Boolean = false,
-    ) = Folder("acct", fullName, displayName, role, selectable = true, specialUse = specialUse)
+        accountId: String = "acct",
+    ) = Folder(accountId, fullName, displayName, role, selectable = true, specialUse = specialUse)
 
-    private fun account(email: String, imapHost: String, authType: AuthType = AuthType.PASSWORD_IMAP) = Account(
-        id = "acct",
+    private fun account(
+        email: String,
+        imapHost: String,
+        authType: AuthType = AuthType.PASSWORD_IMAP,
+        id: String = "acct",
+    ) = Account(
+        id = id,
         email = email,
         displayName = email,
         authType = authType,
@@ -115,6 +121,77 @@ class FolderLabelsTest {
         )
         val labels = resolve(folders, "Gmail")
         assertEquals(2, labels.values.toSet().size, "every drawer entry must be unique")
+    }
+
+    // Issue #60: on a server without SPECIAL-USE (e.g. GreenMail) top-level "Sent" and "Sent Items"
+    // both classify as SENT via the name fallback and share the friendly "Sent" base label. The tie
+    // must break on the display name, not net out as a self-referential "Sent [Sent]".
+    @Test
+    fun `top-level folders sharing a role tie-break on their names, not a self-referential path`() {
+        val folders = listOf(
+            folder("Sent", "Sent", FolderRole.SENT),
+            folder("Sent Items", "Sent Items", FolderRole.SENT),
+        )
+        val labels = resolve(folders, "example.org")
+        assertEquals("Sent", labels["Sent"])
+        assertEquals("Sent Items", labels["Sent Items"])
+    }
+
+    @Test
+    fun `same-role top-level folders where none matches the friendly name keep their own names`() {
+        val folders = listOf(
+            folder("Sent Mail", "Sent Mail", FolderRole.SENT),
+            folder("Sent Items", "Sent Items", FolderRole.SENT),
+        )
+        val labels = resolve(folders, "example.org")
+        assertEquals("Sent Mail", labels["Sent Mail"])
+        assertEquals("Sent Items", labels["Sent Items"])
+    }
+
+    @Test
+    fun `provider special, canonical, and synonym folders for one role all stay apart`() {
+        val folders = listOf(
+            folder("[Gmail]/Sent Mail", "Sent Mail", FolderRole.SENT, specialUse = true),
+            folder("Sent", "Sent", FolderRole.SENT),
+            folder("Sent Items", "Sent Items", FolderRole.SENT),
+        )
+        val labels = resolve(folders, "Gmail")
+        assertEquals("Sent - Gmail", labels["[Gmail]/Sent Mail"])
+        assertEquals("Sent", labels["Sent"])
+        assertEquals("Sent Items", labels["Sent Items"])
+    }
+
+    // Issue #61: while switching accounts the drawer's account updates before its folder list, so
+    // the provider suffix must derive from the rendered folders' own account — never from the newer
+    // drawer selection.
+    @Test
+    fun `providerLabelFor derives the suffix from the folder list's owner account`() {
+        val gmail = account("user@gmail.com", "imap.gmail.com", id = "acct-gmail")
+        val outlook =
+            account("user@outlook.com", "outlook.office365.com", AuthType.OAUTH_OUTLOOK, id = "acct-outlook")
+        // The drawer account has already switched to Outlook, but these stale folders are Gmail's.
+        val staleGmailFolders = listOf(
+            folder("[Gmail]/Drafts", "Drafts", FolderRole.DRAFTS, specialUse = true, accountId = "acct-gmail"),
+            folder("Drafts", "Drafts", FolderRole.DRAFTS, accountId = "acct-gmail"),
+        )
+
+        val provider = providerLabelFor(staleGmailFolders, listOf(gmail, outlook))
+
+        assertEquals("Gmail", provider)
+        val labels =
+            resolveDrawerLabels(staleGmailFolders, baseLabelsOf(staleGmailFolders, friendlyNames), provider)
+        assertEquals("Drafts - Gmail", labels["[Gmail]/Drafts"])
+        assertEquals("Drafts", labels["Drafts"])
+    }
+
+    @Test
+    fun `providerLabelFor is empty for an empty or orphaned folder list`() {
+        val outlook =
+            account("user@outlook.com", "outlook.office365.com", AuthType.OAUTH_OUTLOOK, id = "acct-outlook")
+        assertEquals("", providerLabelFor(emptyList(), listOf(outlook)))
+
+        val orphaned = listOf(folder("INBOX", "INBOX", FolderRole.INBOX, accountId = "acct-gone"))
+        assertEquals("", providerLabelFor(orphaned, listOf(outlook)))
     }
 
     @Test
