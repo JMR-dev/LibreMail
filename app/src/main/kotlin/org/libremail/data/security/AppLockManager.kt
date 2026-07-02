@@ -3,8 +3,6 @@ package org.libremail.data.security
 
 import android.app.KeyguardManager
 import android.content.Context
-import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
-import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -19,8 +17,13 @@ interface AppLockManager {
     fun isDeviceSecure(): Boolean
 
     companion object {
-        /** Accept a strong biometric OR the device credential (PIN/pattern/password) as fallback. */
-        const val AUTHENTICATORS: Int = BIOMETRIC_STRONG or DEVICE_CREDENTIAL
+        /**
+         * `BiometricPrompt` authenticators (a strong biometric OR the device credential). Derived
+         * from the single [AuthenticatorPolicy] source of truth so it can never drift from the
+         * auth-bound Keystore key's authenticators in [DatabaseKeyCipher] — a drift that would let a
+         * prompt succeed against an authenticator the key rejects with `UserNotAuthenticatedException`.
+         */
+        val AUTHENTICATORS: Int = AuthenticatorPolicy.biometricPromptAuthenticators
     }
 }
 
