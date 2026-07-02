@@ -4,6 +4,8 @@ package org.libremail.ui.reader
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,12 +45,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -213,15 +222,80 @@ private fun Attachments(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
-        attachments.forEach { attachment ->
-            AttachmentRow(
-                attachment = attachment,
-                downloading = attachment.partIndex in downloading,
-                downloaded = attachment.partIndex in downloaded,
-                onClick = { onDownload(attachment) },
+        // The first attachment always shows. Any extras collapse behind an accordion so a message
+        // with many attachments can't push its body off-screen (#134).
+        val first = attachments.first()
+        AttachmentRow(
+            attachment = first,
+            downloading = first.partIndex in downloading,
+            downloaded = first.partIndex in downloaded,
+            onClick = { onDownload(first) },
+        )
+        Spacer(Modifier.height(8.dp))
+        val extras = attachments.drop(1)
+        if (extras.isNotEmpty()) {
+            var expanded by rememberSaveable { mutableStateOf(false) }
+            AttachmentsToggle(
+                extraCount = extras.size,
+                expanded = expanded,
+                onToggle = { expanded = !expanded },
             )
-            Spacer(Modifier.height(8.dp))
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    extras.forEach { attachment ->
+                        Spacer(Modifier.height(8.dp))
+                        AttachmentRow(
+                            attachment = attachment,
+                            downloading = attachment.partIndex in downloading,
+                            downloaded = attachment.partIndex in downloaded,
+                            onClick = { onDownload(attachment) },
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+/**
+ * Collapsed-by-default control that reveals the 2nd..Nth attachments. It is a single clickable
+ * [Role.Button] whose label ("See x more attachments" / "See fewer attachments") and rotating
+ * chevron expose the expanded state to screen readers.
+ */
+@Composable
+private fun AttachmentsToggle(extraCount: Int, expanded: Boolean, onToggle: () -> Unit) {
+    val label = if (expanded) {
+        stringResource(R.string.attachments_see_fewer)
+    } else {
+        pluralStringResource(R.plurals.attachments_see_more, extraCount, extraCount)
+    }
+    val chevronDescription = stringResource(
+        if (expanded) R.string.attachments_collapse else R.string.attachments_expand,
+    )
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "attachmentsChevronRotation",
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable(role = Role.Button, onClick = onToggle)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = chevronDescription,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.rotate(rotation),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
