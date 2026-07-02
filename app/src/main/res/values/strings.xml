@@ -45,6 +45,8 @@
     <string name="action_more">More options</string>
     <string name="move_picker_title">Move to</string>
     <string name="cancel">Cancel</string>
+    <string name="action_yes">Yes</string>
+    <string name="action_no">No</string>
     <string name="confirm_spam_title">Move to Spam?</string>
     <string name="confirm_spam_text">Move %1$d message(s) to the Spam folder?</string>
     <string name="confirm_trash_title">Move to Trash?</string>
@@ -53,6 +55,8 @@
     <string name="confirm_delete_text">This permanently deletes %1$d message(s) and can\'t be undone.</string>
     <string name="confirm_reply_all_title">Reply to all?</string>
     <string name="confirm_reply_all_text">Reply to everyone included on this message?</string>
+    <string name="confirm_attachment_title">Need to attach anything?</string>
+    <string name="confirm_attachment_text">Your message mentions an attachment, but nothing is attached.</string>
 
     <!-- Folder navigation drawer -->
     <string name="drawer_open">Show folders</string>
@@ -88,6 +92,7 @@
     <string name="format_link_url">Link address</string>
     <string name="format_link_apply">Link</string>
     <string name="format_link_needs_selection">Select some text first, then add a link.</string>
+    <string name="format_color_none">No color</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>
