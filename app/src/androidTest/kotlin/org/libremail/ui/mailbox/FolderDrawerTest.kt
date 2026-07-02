@@ -42,16 +42,20 @@ class FolderDrawerTest {
             folders = listOf(
                 folder("imap:a", "INBOX", "INBOX", FolderRole.INBOX),
                 folder("imap:a", "[Gmail]/Sent Mail", "Sent Mail", FolderRole.SENT),
-                folder("imap:a", "Archive", "Archive", FolderRole.ARCHIVE),
+                // Give ARCHIVE a server name that differs from its friendly label so the assertion
+                // below actually discriminates a role-to-label regression (displayName != friendly).
+                folder("imap:a", "[Gmail]/All Mail", "All Mail", FolderRole.ARCHIVE),
                 folder("imap:a", "Receipts", "Receipts", FolderRole.NORMAL),
             ),
         )
 
         composeTestRule.onNodeWithText(string(R.string.folder_inbox)).assertIsDisplayed()
-        composeTestRule.onNodeWithText(string(R.string.folder_archive)).assertIsDisplayed()
-        // Standard folders use the friendly role name ("Sent"), not the raw server name ("Sent Mail").
+        // Standard folders use the friendly role name, not the raw server name — verified for both
+        // Sent ("Sent Mail" -> "Sent") and Archive ("All Mail" -> "Archive").
         composeTestRule.onNodeWithText(string(R.string.folder_sent)).assertIsDisplayed()
         composeTestRule.onNodeWithText("Sent Mail").assertDoesNotExist()
+        composeTestRule.onNodeWithText(string(R.string.folder_archive)).assertIsDisplayed()
+        composeTestRule.onNodeWithText("All Mail").assertDoesNotExist()
         // Normal folders keep their server name.
         composeTestRule.onNodeWithText("Receipts").assertIsDisplayed()
         // A single account shows no account switcher / "All Inboxes" entry.
