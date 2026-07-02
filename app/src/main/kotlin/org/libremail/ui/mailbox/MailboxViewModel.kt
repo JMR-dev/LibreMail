@@ -117,21 +117,25 @@ class MailboxViewModel @Inject constructor(
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
     val messages: StateFlow<List<Message>> =
-        combine(
-            mailRepository.observeMessages(),
-            _selectedAccountId,
-            _selectedFolder,
-            _searchQuery,
-        ) { all, accountId, folder, query ->
-            val q = query.trim()
-            all.filter { message ->
-                (accountId == null || message.accountId == accountId) &&
-                    message.folder == folder &&
-                    // Outside of search show only synced rows; while searching show every match in this
-                    // folder, including transient server-search hits that aren't synced.
-                    (if (q.isEmpty()) message.inInbox else message.matchesSearch(q))
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        combine(_selectedAccountId, _selectedFolder) { accountId, folder -> accountId to folder }
+            .distinctUntilChanged()
+            .flatMapLatest { (accountId, folder) ->
+                // Scope the query in SQL to the viewed account+folder (or [folder] across accounts for
+                // the unified inbox) so Room only re-queries/re-emits when those rows change, and the
+                // cost scales with the folder, not the whole cache (issue #86).
+                val scoped = if (accountId == null) {
+                    mailRepository.observeUnifiedFolderMessages(folder)
+                } else {
+                    mailRepository.observeFolderMessages(accountId, folder)
+                }
+                // The only remaining client-side pass distinguishes the normal list (synced rows) from
+                // an active search (any matching row, including transient server-search hits) — a match
+                // over the small folder-scoped set, never the whole cache.
+                combine(scoped, _searchQuery) { rows, query ->
+                    val q = query.trim()
+                    rows.filter { if (q.isEmpty()) it.inInbox else it.matchesSearch(q) }
+                }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val draftCount: StateFlow<Int> = mailRepository.observeDrafts()
         .map { it.size }

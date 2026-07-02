@@ -60,9 +60,11 @@ class MailRepositoryImpl @Inject constructor(
     private val signatureRepository: SignatureRepository,
 ) : MailRepository {
 
-    override fun observeMessages(): Flow<List<Message>> = messageDao.observeSummaries().map { rows ->
-        rows.map { it.toDomain() }
-    }
+    override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
+        messageDao.observeFolderSummaries(accountId, folder).map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
+        messageDao.observeUnifiedFolderSummaries(folder).map { rows -> rows.map { it.toDomain() } }
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> =
         folderDao.observeForAccount(accountId).map { rows ->
