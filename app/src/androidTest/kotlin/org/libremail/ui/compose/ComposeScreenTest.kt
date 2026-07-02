@@ -3,8 +3,11 @@ package org.libremail.ui.compose
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -16,6 +19,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -118,4 +122,52 @@ class ComposeScreenTest {
 
         composeTestRule.waitUntil(timeoutMillis = 5_000) { closed }
     }
+
+    @Test
+    fun send_whenBodyMentionsAttachmentWithoutOne_promptsBeforeSending() {
+        val mailRepository = FakeMailRepository()
+        setContent(mailRepository)
+
+        composeTestRule.onNodeWithText(string(R.string.compose_to)).performTextInput("you@example.com")
+        composeTestRule.onNodeWithText(string(R.string.compose_body)).performTextInput("I attached the report")
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+
+        // "Yes" returns to composing: the dialog closes and nothing is sent.
+        composeTestRule.onNodeWithText(string(R.string.confirm_attachment_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.action_yes)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.confirm_attachment_title)).assertDoesNotExist()
+        assertTrue(mailRepository.sentMessages.isEmpty())
+
+        // Sending again and answering "No" delivers the message as-is.
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.action_no)).performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { mailRepository.sentMessages.isNotEmpty() }
+        assertEquals("I attached the report", mailRepository.sentMessages.single().body)
+    }
+
+    @Test
+    fun ccAndBcc_startCollapsed_expandViaLinksAndCarryThroughSend() {
+        val mailRepository = FakeMailRepository()
+        setContent(mailRepository)
+
+        // Collapsed: the Cc/Bcc labels exist only as links, not as editable fields.
+        editableField(R.string.compose_cc).assertDoesNotExist()
+        editableField(R.string.compose_bcc).assertDoesNotExist()
+
+        composeTestRule.onNodeWithText(string(R.string.compose_cc)).performClick()
+        editableField(R.string.compose_cc).performTextInput("cc@example.com")
+        composeTestRule.onNodeWithText(string(R.string.compose_bcc)).performClick()
+        editableField(R.string.compose_bcc).performTextInput("bcc@example.com")
+
+        composeTestRule.onNodeWithText(string(R.string.compose_to)).performTextInput("you@example.com")
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_send)).performClick()
+
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { mailRepository.sentMessages.isNotEmpty() }
+        val sent = mailRepository.sentMessages.single()
+        assertEquals("cc@example.com", sent.cc)
+        assertEquals("bcc@example.com", sent.bcc)
+    }
+
+    /** Matches the editable field labelled [labelRes] but not the collapsed Cc/Bcc link buttons. */
+    private fun editableField(labelRes: Int) = composeTestRule.onNode(hasText(string(labelRes)) and hasSetTextAction())
 }
