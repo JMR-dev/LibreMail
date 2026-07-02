@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.settings
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -20,11 +21,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -48,8 +51,17 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val advancedExpanded by viewModel.advancedExpanded.collectAsStateWithLifecycle()
+    val appLockMessage by viewModel.appLockMessage.collectAsStateWithLifecycle()
     val batteryUnrestricted by viewModel.batteryUnrestricted.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val resources = LocalResources.current
+
+    LaunchedEffect(appLockMessage) {
+        appLockMessage?.let {
+            Toast.makeText(context, resources.getString(it), Toast.LENGTH_LONG).show()
+            viewModel.clearAppLockMessage()
+        }
+    }
 
     // Re-read the battery status on resume so it reflects any change made in system settings.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshBatteryStatus() }
@@ -181,6 +193,12 @@ fun SettingsScreen(
                         checked = settings.encryptCache,
                         onCheckedChange = viewModel::setEncryptCache,
                         subtitle = stringResource(R.string.settings_adv_encrypt_cache_summary),
+                    )
+                    SwitchRow(
+                        title = stringResource(R.string.settings_adv_app_lock),
+                        checked = settings.appLock,
+                        onCheckedChange = viewModel::setAppLock,
+                        subtitle = stringResource(R.string.settings_adv_app_lock_summary),
                     )
                 }
             }

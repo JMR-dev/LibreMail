@@ -13,6 +13,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
+import org.libremail.data.security.AppLockAvailability
+import org.libremail.data.security.AppLockManager
+import org.libremail.data.security.DatabaseKeyCipher
+import org.libremail.data.security.DatabaseKeyStore
+import org.libremail.data.security.KeystoreCrypto
+import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
@@ -37,9 +43,16 @@ class SettingsScreenTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val settingsRepository = SettingsRepository(context)
         runBlocking { settingsRepository.setFetchPolicy(FetchPolicy.ALWAYS) } // known starting state
+        val appLockManager = object : AppLockManager {
+            override fun isDeviceSecure() = false
+            override fun availability() = AppLockAvailability.NONE_ENROLLED
+        }
+        val keyStore = DatabaseKeyStore(context, KeystoreCrypto(), DatabaseKeyCipher(), PassphraseSession())
         val viewModel = SettingsViewModel(
             FakeAccountRepository(),
             settingsRepository,
+            appLockManager,
+            keyStore,
             BatteryOptimizationManager(context),
             SyncScheduler(context),
         )

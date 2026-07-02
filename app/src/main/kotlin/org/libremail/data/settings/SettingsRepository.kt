@@ -48,6 +48,7 @@ data class AppSettings(
     val allowStartTls: Boolean = false,
     val loadRemoteImages: Boolean = false,
     val encryptCache: Boolean = false,
+    val appLock: Boolean = false,
     val includeInBackup: Boolean = false,
     val fetchPolicy: FetchPolicy = FetchPolicy.WIFI_ONLY,
     /**
@@ -65,6 +66,7 @@ private object Keys {
     val ALLOW_STARTTLS = booleanPreferencesKey("allow_starttls")
     val LOAD_REMOTE_IMAGES = booleanPreferencesKey("load_remote_images")
     val ENCRYPT_CACHE = booleanPreferencesKey("encrypt_cache")
+    val APP_LOCK = booleanPreferencesKey("app_lock")
     val INCLUDE_IN_BACKUP = booleanPreferencesKey("include_in_backup")
     val FETCH_POLICY = stringPreferencesKey("fetch_policy")
     val RETENTION_COUNT = intPreferencesKey("retention_count")
@@ -83,6 +85,7 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
     allowStartTls = this[Keys.ALLOW_STARTTLS] ?: false,
     loadRemoteImages = this[Keys.LOAD_REMOTE_IMAGES] ?: false,
     encryptCache = this[Keys.ENCRYPT_CACHE] ?: false,
+    appLock = this[Keys.APP_LOCK] ?: false,
     includeInBackup = this[Keys.INCLUDE_IN_BACKUP] ?: false,
     // The fallback here (not just the AppSettings default) must be WIFI_ONLY so existing installs
     // that never touched the setting also pick up the safer default (#88). An explicitly chosen
@@ -121,6 +124,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun setAllowStartTls(value: Boolean) = put(Keys.ALLOW_STARTTLS, value)
     suspend fun setLoadRemoteImages(value: Boolean) = put(Keys.LOAD_REMOTE_IMAGES, value)
     suspend fun setEncryptCache(value: Boolean) = put(Keys.ENCRYPT_CACHE, value)
+    suspend fun setAppLock(value: Boolean) = put(Keys.APP_LOCK, value)
 
     /**
      * Opts this app in/out of system Android Backup. Off by default. After persisting, nudges the

@@ -6,11 +6,13 @@ import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.toDomain
+import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.OutgoingMessage
@@ -25,11 +27,15 @@ import kotlin.coroutines.cancellation.CancellationException
 class SendWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
-    private val outboxDao: OutboxDao,
-    private val accountDao: AccountDao,
+    // Lazy: OutboxDao/AccountDao/MailConnectionFactory all resolve the Room DB (the last via
+    // CredentialStore), which blocks while the encrypted cache is locked. Resolve them only after the
+    // cache-lock check, so a run while locked fails fast instead of parking a WorkManager thread.
+    private val outboxDao: Lazy<OutboxDao>,
+    private val accountDao: Lazy<AccountDao>,
     private val smtpSender: SmtpSender,
     private val graphSender: GraphSender,
-    private val connectionFactory: MailConnectionFactory,
+    private val connectionFactory: Lazy<MailConnectionFactory>,
+    private val cacheGuard: EncryptedCacheGuard,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private companion object {
@@ -37,6 +43,10 @@ class SendWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
+        if (cacheGuard.isCacheLocked()) return Result.retry()
+        val outboxDao = this.outboxDao.get()
+        val accountDao = this.accountDao.get()
+        val connectionFactory = this.connectionFactory.get()
         val pending = outboxDao.getAll()
         if (pending.isEmpty()) return Result.success()
 
@@ -61,7 +71,7 @@ class SendWorker @AssistedInject constructor(
                 )
                 val files = orderedAttachments(attachmentDir)
                 if (account.authType == AuthType.OAUTH_OUTLOOK) {
-                    sendOutlook(account, message, files)
+                    sendOutlook(connectionFactory, account, message, files)
                 } else {
                     smtpSender.send(
                         connectionFactory.smtpParamsFor(account),
@@ -100,7 +110,12 @@ class SendWorker @AssistedInject constructor(
      * (a rejection, a pre-send/transport error, or a token failure); never fall back when the Graph
      * request may already have been accepted, or the message would be sent twice.
      */
-    private suspend fun sendOutlook(account: Account, message: OutgoingMessage, files: List<File>) {
+    private suspend fun sendOutlook(
+        connectionFactory: MailConnectionFactory,
+        account: Account,
+        message: OutgoingMessage,
+        files: List<File>,
+    ) {
         try {
             val token = connectionFactory.graphTokenFor(account)
             graphSender.send(token, message, files)

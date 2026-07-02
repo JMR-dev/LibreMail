@@ -4,6 +4,7 @@ package org.libremail
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +34,10 @@ class LibreMailApplication :
 
     @Inject lateinit var settingsRepository: SettingsRepository
 
-    @Inject lateinit var accountRepository: AccountRepository
+    // Lazy: resolving AccountRepository constructs the Room database, which — with app-lock + encrypted
+    // cache on — blocks until the user authenticates. Keeping it lazy means the DB is built off the main
+    // thread inside the collector below (never during onCreate), so the app never deadlocks at launch.
+    @Inject lateinit var accountRepository: Lazy<AccountRepository>
 
     @Inject lateinit var idlePushManager: IdlePushManager
 
@@ -74,7 +78,7 @@ class LibreMailApplication :
         appScope.launch {
             combine(
                 settingsRepository.settings.map { it.pushIdle },
-                accountRepository.observeAccounts().map { it.isNotEmpty() },
+                accountRepository.get().observeAccounts().map { it.isNotEmpty() },
             ) { pushEnabled, hasAccounts -> pushEnabled && hasAccounts }
                 .distinctUntilChanged()
                 .collect { active ->

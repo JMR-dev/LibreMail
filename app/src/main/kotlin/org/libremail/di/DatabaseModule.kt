@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.libremail.data.local.DatabaseEncryption
+import org.libremail.data.local.DatabaseFiles
 import org.libremail.data.local.LibreMailDatabase
 import org.libremail.data.local.MIGRATION_10_11
 import org.libremail.data.local.MIGRATION_11_12
@@ -74,16 +75,41 @@ object DatabaseModule {
         // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
         // before the database is opened — so it never races an open connection; toggling the setting
         // therefore takes effect on the next app start. The passphrase is sealed by the Keystore.
+        //
+        // The passphrase source is resolved from which seal actually exists
+        // ([DatabaseKeyStore.resolvePassphrase]), NOT from the app-lock setting (a separate DataStore
+        // that can disagree). When app-lock is ON the sealing key is auth-bound, so resolvePassphrase
+        // waits on PassphraseSession until the user authenticates. This provider must therefore never
+        // be constructed on the main thread while the cache is locked — LibreMailApplication injects
+        // AccountRepository lazily and the sync/push workers fail fast when locked, and the gate
+        // composes no DB-backed screen until Unlocked.
         val dbFile = context.getDatabasePath(DB_NAME)
-        if (runBlocking { settingsRepository.settings.first().encryptCache }) {
-            val passphrase = runBlocking { keyStore.passphrase() }
+
+        // A screen-lock change (biometric re-enrollment / lock removal) can invalidate the auth-bound
+        // key so the encrypted cache is no longer decryptable. AppLockViewModel records that and
+        // restarts the app; we wipe the cache HERE — at cold start, before Room opens — so the file is
+        // never deleted from under an open connection. Crash-safe order: wipe + reset the seals, and
+        // only THEN clear the flag, so a kill mid-wipe just repeats the idempotent wipe next start.
+        if (runBlocking { keyStore.isClearPending() }) {
+            DatabaseFiles.clear(context)
+            runBlocking {
+                keyStore.resetSealedPassphrase()
+                keyStore.clearClearPending()
+            }
+        }
+
+        val settings = runBlocking { settingsRepository.settings.first() }
+        val appLock = settings.appLock
+        if (settings.encryptCache) {
+            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
             DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
             builder.openHelperFactory(
                 SupportOpenHelperFactory(passphrase.toByteArray(Charsets.US_ASCII), null, false),
             )
         } else if (DatabaseEncryption.isEncrypted(dbFile)) {
             // Encryption was turned back off — decrypt so the default (unkeyed) open succeeds.
-            DatabaseEncryption.ensurePlaintext(dbFile, runBlocking { keyStore.passphrase() })
+            val passphrase = runBlocking { keyStore.resolvePassphrase(appLock) }
+            DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
         }
         return builder.build()
     }
@@ -118,5 +144,5 @@ object DatabaseModule {
     @Provides
     fun provideBackfillProgressDao(database: LibreMailDatabase): BackfillProgressDao = database.backfillProgressDao()
 
-    private const val DB_NAME = "libremail.db"
+    private const val DB_NAME = DatabaseFiles.NAME
 }

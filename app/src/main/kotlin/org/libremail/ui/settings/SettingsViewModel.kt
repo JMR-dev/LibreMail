@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.libremail.R
+import org.libremail.data.security.AppLockManager
+import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
@@ -25,6 +28,8 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val settingsRepository: SettingsRepository,
+    private val appLockManager: AppLockManager,
+    private val databaseKeyStore: DatabaseKeyStore,
     private val batteryOptimizationManager: BatteryOptimizationManager,
     private val syncScheduler: SyncScheduler,
 ) : ViewModel() {
@@ -37,6 +42,10 @@ class SettingsViewModel @Inject constructor(
 
     private val _advancedExpanded = MutableStateFlow(false)
     val advancedExpanded: StateFlow<Boolean> = _advancedExpanded.asStateFlow()
+
+    /** Non-null when a toggle was rejected; a string resource id the screen can surface, then clear. */
+    private val _appLockMessage = MutableStateFlow<Int?>(null)
+    val appLockMessage: StateFlow<Int?> = _appLockMessage.asStateFlow()
 
     private val _batteryUnrestricted = MutableStateFlow(batteryOptimizationManager.isIgnoringBatteryOptimizations())
 
@@ -61,6 +70,38 @@ class SettingsViewModel @Inject constructor(
     fun setEncryptCache(value: Boolean) = update { settingsRepository.setEncryptCache(value) }
     fun setIncludeInBackup(value: Boolean) = update { settingsRepository.setIncludeInBackup(value) }
     fun setFetchPolicy(value: FetchPolicy) = update { settingsRepository.setFetchPolicy(value) }
+
+    /**
+     * Toggle app-lock. Enabling requires a secure device lock (otherwise there is nothing to
+     * authenticate against) — rejected with a message if absent. Disabling reseals the cache
+     * passphrase with the non-auth master key so it stays readable without authentication; the user
+     * is already authenticated for this session (they passed the gate to reach settings).
+     */
+    fun setAppLock(value: Boolean) = update {
+        if (value) {
+            if (!appLockManager.isDeviceSecure()) {
+                _appLockMessage.value = R.string.app_lock_needs_device_lock
+                return@update
+            }
+            settingsRepository.setAppLock(true)
+        } else {
+            // Reseal under the master key whenever an auth seal actually exists — gate on the seal, not
+            // the encryptCache setting (a separate store that can already be off while the on-disk DB is
+            // still auth-sealed). Do it BEFORE dropping the gate, or the next launch can't open the
+            // cache. If it fails, keep app-lock on rather than strand the passphrase.
+            if (databaseKeyStore.hasAuthSealedPassphrase()) {
+                if (runCatching { databaseKeyStore.sealWithMaster() }.isFailure) {
+                    _appLockMessage.value = R.string.app_lock_disable_failed
+                    return@update
+                }
+            }
+            settingsRepository.setAppLock(false)
+        }
+    }
+
+    fun clearAppLockMessage() {
+        _appLockMessage.value = null
+    }
 
     /** Global retention defaults; kick a prune so a newly-tightened limit takes effect promptly (#13). */
     fun setRetentionCount(value: Int) = update {
