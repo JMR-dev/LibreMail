@@ -32,14 +32,38 @@ object HtmlToText {
         return s.trim()
     }
 
-    private fun decodeEntities(s: String): String = s
-        .replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&mdash;", "—")
-        .replace("&ndash;", "–")
-        .replace("&amp;", "&")
+    private val ENTITY = Regex("&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z][a-zA-Z0-9]*));")
+
+    private val NAMED_ENTITIES = mapOf(
+        "nbsp" to " ",
+        "lt" to "<",
+        "gt" to ">",
+        "quot" to "\"",
+        "apos" to "'",
+        "mdash" to "—",
+        "ndash" to "–",
+        "amp" to "&",
+    )
+
+    /**
+     * Decodes named and numeric (`&#8217;` / `&#x2019;`) character references in a single pass, so a
+     * produced character is never re-parsed as the start of another entity (`&amp;lt;` → `&lt;`).
+     * Unknown names and out-of-range code points are left as-is.
+     */
+    private fun decodeEntities(s: String): String = ENTITY.replace(s) { match ->
+        val (decimal, hex, name) = match.destructured
+        when {
+            decimal.isNotEmpty() -> decimal.toIntOrNull()?.toValidChars() ?: match.value
+            hex.isNotEmpty() -> hex.toIntOrNull(HEX_RADIX)?.toValidChars() ?: match.value
+            else -> NAMED_ENTITIES[name] ?: match.value
+        }
+    }
+
+    /** The code point as a string, or null when it is not a valid scalar value. */
+    private fun Int.toValidChars(): String? = takeIf { it in 1..MAX_CODE_POINT && it !in SURROGATES }
+        ?.let { String(Character.toChars(it)) }
+
+    private const val HEX_RADIX = 16
+    private const val MAX_CODE_POINT = 0x10FFFF
+    private val SURROGATES = 0xD800..0xDFFF
 }
