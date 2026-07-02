@@ -308,3 +308,25 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         db.execSQL("ALTER TABLE `folders` ADD COLUMN `hierarchyDelimiter` TEXT")
     }
 }
+
+/**
+ * v15 -> v16: move account identity + configuration OUT of the cache database (issue #111). The
+ * `accounts`, `credentials`, `account_settings` and `signatures` tables now live in [AccountDatabase]
+ * — a separate file that is never sealed by the auth-bound SQLCipher key — so a cache-key invalidation
+ * (biometric re-enrollment / lock removal) wipes only mail and can no longer sign the user out.
+ *
+ * The rows are copied into [AccountDatabase] by [AccountDataMigrator] at startup BEFORE Room opens the
+ * cache and runs this migration. The copy CANNOT happen here: Room wraps each migration in a
+ * transaction and SQLite forbids `ATTACH DATABASE` inside one, so a cross-database copy has to run on
+ * a separate connection before the cache is opened. This migration therefore only drops the tables
+ * that were moved. `DROP TABLE IF EXISTS` keeps it idempotent, and children (foreign-keyed to
+ * `accounts`) are dropped before the parent so the drop never trips a foreign-key check.
+ */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("DROP TABLE IF EXISTS `signatures`")
+        db.execSQL("DROP TABLE IF EXISTS `account_settings`")
+        db.execSQL("DROP TABLE IF EXISTS `credentials`")
+        db.execSQL("DROP TABLE IF EXISTS `accounts`")
+    }
+}

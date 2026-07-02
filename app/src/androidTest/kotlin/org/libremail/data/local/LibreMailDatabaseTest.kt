@@ -9,22 +9,21 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.libremail.data.local.entity.AccountEntity
-import org.libremail.data.local.entity.AccountSettingsEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
-import org.libremail.data.local.entity.ServerConfigEmbedded
 
 /**
  * Schema-behavior tests on a fresh in-memory database at the current version. The migration DDL
  * itself is exercised by [MigrationTest], which replays the schema chain exported to app/schemas.
  * (Migrations from before v7 predate schema export, so they can't be replayed there.)
+ *
+ * Account/credential/settings/signature behavior moved to [AccountDatabaseTest] with those tables
+ * (issue #111).
  */
 @RunWith(AndroidJUnit4::class)
 class LibreMailDatabaseTest {
@@ -95,30 +94,6 @@ class LibreMailDatabaseTest {
             "attachment rows must cascade-delete with their message",
             attachmentDao.observeForMessage("acct:1").first().isEmpty(),
         )
-    }
-
-    @Test
-    fun accountSettingsRoundTripAndCascadeWithTheirAccount() = runBlocking {
-        val accountDao = db.accountDao()
-        val settingsDao = db.accountSettingsDao()
-        accountDao.upsert(
-            AccountEntity(
-                id = "acct",
-                email = "a@example.org",
-                displayName = "A",
-                authType = "PASSWORD_IMAP",
-                imap = ServerConfigEmbedded("imap.example.org", 993, "SSL_TLS"),
-                smtp = ServerConfigEmbedded("smtp.example.org", 465, "SSL_TLS"),
-            ),
-        )
-        settingsDao.upsert(
-            AccountSettingsEntity("acct", signature = "Hi", signatureEnabled = false, notificationsEnabled = false),
-        )
-        assertEquals("Hi", settingsDao.get("acct")?.signature)
-
-        accountDao.deleteById("acct")
-
-        assertNull("account_settings must cascade-delete with its account", settingsDao.get("acct"))
     }
 
     @Test

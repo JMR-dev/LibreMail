@@ -133,6 +133,9 @@ class MigrationTest {
             open?.close()
             val stepDb = helper.runMigrationsAndValidate(TEST_DB, migration.endVersion, true, migration)
             stepDb.writeMidChainData()
+            // v16 moves the account tables out to AccountDatabase and drops them, so assert their rows
+            // and backfills reached v15 intact — just before the move (issue #111).
+            if (stepDb.version == 15) stepDb.assertAccountDataPresentAtV15()
             open = stepDb
         }
         val db = checkNotNull(open) { "no migration starts at v$OLDEST_EXPORTED_SCHEMA" }
@@ -140,6 +143,29 @@ class MigrationTest {
         assertEquals("the chain must end at the newest exported schema", latestExportedSchemaVersion(), db.version)
         db.assertVersion7CacheSurvived()
         db.assertMigrationBackfillsApplied()
+        db.assertAccountTablesDroppedAtV16()
+        db.close()
+    }
+
+    /** v15 -> v16 (issue #111): the moved account tables are dropped and the mail cache is untouched. */
+    @Test
+    fun migrate15To16_dropsMovedAccountTablesAndKeepsCache() {
+        helper.createDatabase(TEST_DB, 15).apply {
+            insertAccount()
+            execSQL("INSERT INTO credentials (accountId, encryptedSecret) VALUES ('acct', 'sealed')")
+            execSQL(
+                "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+                    "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched, uid) VALUES " +
+                    "('acct:INBOX:1', 'acct', 'Ada', 'ada@example.org', 'Hi', '', '', 0, 1000, 0, 0, " +
+                    "'INBOX', 1, 0, 1)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, MIGRATION_15_16)
+
+        db.assertAccountTablesDroppedAtV16()
+        assertEquals("the mail cache must be untouched by 15->16", 1, db.count("messages"))
         db.close()
     }
 
@@ -203,9 +229,8 @@ class MigrationTest {
         }
     }
 
-    /** Every row cached at v7 must still be present and correct at the end of the chain. */
+    /** Every mail-cache row cached at v7 must survive to v16 (account tables are checked separately). */
     private fun SupportSQLiteDatabase.assertVersion7CacheSurvived() {
-        assertEquals(1, count("accounts"))
         assertEquals(2, count("messages"))
         assertEquals(1, count("outbox"))
         assertEquals(1, count("drafts"))
@@ -215,24 +240,14 @@ class MigrationTest {
             assertEquals("Analytical engines", c.getString(1))
             assertEquals(1, c.getInt(2))
         }
-        query("SELECT encryptedSecret FROM credentials WHERE accountId = 'acct'").use { c ->
-            assertTrue("stored credentials must never be dropped by a migration", c.moveToFirst())
-            assertEquals("sealed-secret", c.getString(0))
-        }
         query("SELECT filename FROM attachments WHERE messageId = 'acct:1'").use { c ->
             assertTrue("attachment rows must survive the 6->7 style table rebuilds", c.moveToFirst())
             assertEquals("notes.pdf", c.getString(0))
         }
     }
 
-    /** Columns and rows created by the migrations themselves must hold their documented defaults. */
+    /** Cache-table columns/rows the migrations backfill must hold their documented defaults at v16. */
     private fun SupportSQLiteDatabase.assertMigrationBackfillsApplied() {
-        // 8->9 backfills one default settings row per existing account.
-        query("SELECT signatureEnabled, notificationsEnabled FROM account_settings").use { c ->
-            assertTrue("8->9 must backfill a settings row for the v7 account", c.moveToFirst())
-            assertEquals(1, c.getInt(0))
-            assertEquals(1, c.getInt(1))
-        }
         // 9->10 adds bcc columns defaulting to ''; 10->11 adds nullable bodyHtml.
         query("SELECT bccAddresses, bodyHtml FROM outbox WHERE id = 'out-1'").use { c ->
             assertTrue(c.moveToFirst())
@@ -244,14 +259,6 @@ class MigrationTest {
             assertEquals("", c.getString(0))
             assertTrue(c.isNull(1))
         }
-        // 10->11 turns the signature written at v9 into that account's default rich-text signature.
-        query("SELECT name, contentHtml, isDefault FROM signatures WHERE accountId = 'acct'").use { c ->
-            assertTrue("10->11 must backfill the legacy per-account signature", c.moveToFirst())
-            assertEquals("Signature", c.getString(0))
-            assertEquals("Cheers,<br>Ada", c.getString(1))
-            assertEquals(1, c.getInt(2))
-            assertFalse("exactly one signature row must be backfilled", c.moveToNext())
-        }
         // 11->12 stamps the folder cached at v8 as not special-use.
         query("SELECT specialUse FROM folders WHERE fullName = 'INBOX'").use { c ->
             assertTrue("folder cached at v8 must survive to the newest version", c.moveToFirst())
@@ -262,6 +269,42 @@ class MigrationTest {
         query("SELECT hierarchyDelimiter FROM folders WHERE fullName = 'INBOX'").use { c ->
             assertTrue(c.moveToFirst())
             assertTrue("a folder cached before v15 must read a null delimiter", c.isNull(0))
+        }
+    }
+
+    /**
+     * The account tables' rows + migration backfills must be intact at v15, just before 15->16 moves
+     * them to [AccountDatabase] and drops them (issue #111). AccountDataMigrator's own copy is
+     * exercised in `AccountDataMigratorTest`; here we only assert the source rows reach the move point.
+     */
+    private fun SupportSQLiteDatabase.assertAccountDataPresentAtV15() {
+        assertEquals(1, count("accounts"))
+        query("SELECT encryptedSecret FROM credentials WHERE accountId = 'acct'").use { c ->
+            assertTrue("stored credentials must reach v15 before the move", c.moveToFirst())
+            assertEquals("sealed-secret", c.getString(0))
+        }
+        // 8->9 backfills one default settings row per existing account.
+        query("SELECT signatureEnabled, notificationsEnabled FROM account_settings").use { c ->
+            assertTrue("8->9 must backfill a settings row for the v7 account", c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+            assertEquals(1, c.getInt(1))
+        }
+        // 10->11 turns the signature written at v9 into that account's default rich-text signature.
+        query("SELECT name, contentHtml, isDefault FROM signatures WHERE accountId = 'acct'").use { c ->
+            assertTrue("10->11 must backfill the legacy per-account signature", c.moveToFirst())
+            assertEquals("Signature", c.getString(0))
+            assertEquals("Cheers,<br>Ada", c.getString(1))
+            assertEquals(1, c.getInt(2))
+            assertFalse("exactly one signature row must be backfilled", c.moveToNext())
+        }
+    }
+
+    /** 15->16 drops the account tables from the cache (AccountDataMigrator copies them out first). */
+    private fun SupportSQLiteDatabase.assertAccountTablesDroppedAtV16() {
+        listOf("accounts", "credentials", "account_settings", "signatures").forEach { table ->
+            query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '$table'").use { c ->
+                assertFalse("15->16 must drop `$table` from the cache database", c.moveToFirst())
+            }
         }
     }
 
