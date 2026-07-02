@@ -110,7 +110,9 @@ class AccountDataMigratorTest {
             assertEquals("smtp.example.org", account?.smtp?.host)
             assertEquals("sealed-secret", credentialDao().getById("acct")?.encryptedSecret)
             val settings = accountSettingsDao().get("acct")
-            assertEquals(false, settings?.signatureEnabled)
+            // Seeded signatureEnabled = 1, notificationsEnabled = 0: both booleans must round-trip.
+            assertEquals(true, settings?.signatureEnabled)
+            assertEquals(false, settings?.notificationsEnabled)
             assertEquals(6, settings?.retentionMonths)
             assertNull(settings?.retentionCount)
             val signatures = signatureDao().observeForAccount("acct").first()
@@ -198,7 +200,7 @@ class AccountDataMigratorTest {
         for (i in 0 until entities.length()) {
             val entity = entities.getJSONObject(i)
             val table = entity.getString("tableName")
-            val expectedCreate = entity.getString("createSql").replace("\${TABLE_NAME}", "`$table`")
+            val expectedCreate = entity.getString("createSql").replace("\${TABLE_NAME}", table)
             assertEquals(
                 "AccountDataMigrator DDL for `$table` must match the exported AccountDatabase schema",
                 expectedCreate,
@@ -211,7 +213,7 @@ class AccountDataMigratorTest {
                     if (index.getString("name") == "index_signatures_accountId") {
                         assertEquals(
                             "AccountDataMigrator signatures index must match the exported schema",
-                            index.getString("createSql").replace("\${TABLE_NAME}", "`$table`"),
+                            index.getString("createSql").replace("\${TABLE_NAME}", table),
                             AccountDataMigrator.SIGNATURES_INDEX_SQL,
                         )
                         checkedIndex = true
