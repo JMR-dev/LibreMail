@@ -98,7 +98,23 @@ data class ReplyContext(
 
 /** Thin IMAP client over Jakarta/Angus Mail. Supports password and XOAUTH2 auth. */
 @Singleton
-class ImapClient @Inject constructor() {
+class ImapClient(private val reuseConnections: Boolean) {
+
+    /**
+     * Production entry point. Connection reuse is a SPIKE flag (issue #125), **OFF by default** so it
+     * cannot destabilize the connect-per-operation behaviour on `main`: with it off, [withStore] is
+     * byte-for-byte today's connect + LOGOUT-per-call. Once real-device validation (see
+     * `docs/perf/issue-125-connection-reuse-spike.md`) confirms the win, wire this to a setting or
+     * `BuildConfig`; today only the reuse harness flips it on via the primary constructor.
+     */
+    @Inject constructor() : this(reuseConnections = false)
+
+    /**
+     * Per-account keep-alive cache; allocated only when the spike flag is on, so the default build
+     * carries neither the state nor the reuse code path.
+     */
+    private val connectionCache: ImapConnectionCache? =
+        if (reuseConnections) ImapConnectionCache(::openConnectedStore) else null
 
     /** Connects and returns the account's folders with their SPECIAL-USE attributes. Throws on failure. */
     suspend fun listFolders(params: ImapConnectionParams): List<FetchedFolder> = withContext(Dispatchers.IO) {
@@ -545,36 +561,70 @@ class ImapClient @Inject constructor() {
         )
     }
 
-    private inline fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
-        val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
-        val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
-        store.connect(params.host, params.port, params.username, params.secret)
-        return try {
-            block(store)
-        } finally {
-            runCatching { store.close() }
+    /**
+     * Runs [block] against a connected [Store]. With the reuse flag OFF (default) this is the original
+     * behaviour: a fresh, authenticated connection per call, torn down in `finally`. With it ON, the
+     * call borrows a kept-alive per-account connection from [connectionCache] (established once, reused
+     * across folder-opens) instead — see issue #125.
+     */
+    private suspend fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
+        val cache = connectionCache
+        return if (cache != null) {
+            cache.withStore(params, block)
+        } else {
+            val store = openConnectedStore(params)
+            try {
+                block(store)
+            } finally {
+                runCatching { store.close() }
+            }
         }
     }
 
-    private fun buildProps(protocol: String, params: ImapConnectionParams): Properties = Properties().apply {
-        put("mail.store.protocol", protocol)
-        put("mail.$protocol.host", params.host)
-        put("mail.$protocol.port", params.port.toString())
-        put("mail.$protocol.connectiontimeout", TIMEOUT_MS)
-        put("mail.$protocol.timeout", TIMEOUT_MS)
-        put("mail.$protocol.writetimeout", TIMEOUT_MS)
-        if (params.security == MailSecurity.STARTTLS) {
-            put("mail.$protocol.starttls.enable", "true")
-            put("mail.$protocol.starttls.required", params.strictStartTls.toString())
-        }
-        // Verify the server certificate matches the host whenever TLS is used. Angus already
-        // defaults this to true; set it explicitly so a future library-default change can't
-        // silently disable hostname checking and expose us to MITM. (No-op for MailSecurity.NONE.)
-        put("mail.$protocol.ssl.checkserveridentity", "true")
-        if (params.useXoauth2) {
-            put("mail.$protocol.auth.mechanisms", "XOAUTH2")
-        }
+    /** Builds and authenticates a fresh [Store] (`CONNECT + TLS + LOGIN`); the caller owns closing it. */
+    private fun openConnectedStore(params: ImapConnectionParams): Store {
+        val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
+        val store = Session.getInstance(buildProps(protocol, params, reuse = reuseConnections)).getStore(protocol)
+        store.connect(params.host, params.port, params.username, params.secret)
+        return store
     }
+
+    /**
+     * SPIKE hook (issue #125): closes any kept-alive reused connections (`LOGOUT` + teardown), a no-op
+     * when the reuse flag is OFF. The reuse harness calls this to force settlement; a shipped feature
+     * would also drive it from an idle-eviction timer and the low-battery push teardown (#88/#89/#90).
+     */
+    suspend fun closeReusedConnections() {
+        connectionCache?.closeAll()
+    }
+
+    private fun buildProps(protocol: String, params: ImapConnectionParams, reuse: Boolean = false): Properties =
+        Properties().apply {
+            put("mail.store.protocol", protocol)
+            put("mail.$protocol.host", params.host)
+            put("mail.$protocol.port", params.port.toString())
+            put("mail.$protocol.connectiontimeout", TIMEOUT_MS)
+            put("mail.$protocol.timeout", TIMEOUT_MS)
+            put("mail.$protocol.writetimeout", TIMEOUT_MS)
+            if (params.security == MailSecurity.STARTTLS) {
+                put("mail.$protocol.starttls.enable", "true")
+                put("mail.$protocol.starttls.required", params.strictStartTls.toString())
+            }
+            // Verify the server certificate matches the host whenever TLS is used. Angus already
+            // defaults this to true; set it explicitly so a future library-default change can't
+            // silently disable hostname checking and expose us to MITM. (No-op for MailSecurity.NONE.)
+            put("mail.$protocol.ssl.checkserveridentity", "true")
+            if (params.useXoauth2) {
+                put("mail.$protocol.auth.mechanisms", "XOAUTH2")
+            }
+            if (reuse) {
+                // SPIKE (issue #125): pin a reused Store to exactly one authenticated socket. The
+                // per-account mutex already serializes access, so one pooled connection suffices — and
+                // capping it here makes "1 connection for N opens" the literal, provable invariant.
+                put("mail.$protocol.connectionpoolsize", "1")
+                put("mail.$protocol.separatestoreconnection", "false")
+            }
+        }
 
     private companion object {
         const val TIMEOUT_MS = "15000"

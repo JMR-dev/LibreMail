@@ -4,6 +4,7 @@ package org.libremail.mail
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -33,7 +34,12 @@ class ImapFolderOpenLatencyTest {
 
     private lateinit var greenMail: GreenMail
     private lateinit var proxy: CountingImapProxy
+
+    /** Flag OFF (production default): a fresh connect + LOGOUT per operation. */
     private val client = ImapClient()
+
+    /** Flag ON (the spike prototype, issue #125): one kept-alive connection reused across operations. */
+    private val reuseClient = ImapClient(reuseConnections = true)
 
     @Before
     fun setUp() {
@@ -46,6 +52,7 @@ class ImapFolderOpenLatencyTest {
 
     @After
     fun tearDown() {
+        runBlocking { reuseClient.closeReusedConnections() } // release any kept-alive socket before the server stops
         proxy.close()
         greenMail.stop()
     }
@@ -117,6 +124,46 @@ class ImapFolderOpenLatencyTest {
         // second full CONNECT + LOGIN even though it targets the folder we just had open.
         assertEquals(2, proxy.connectionCount, "list + read each open their own connection")
         assertEquals(2, proxy.authCommandCount(), "list + read each pay a full LOGIN")
+    }
+
+    // --- Flag ON: the spike prototype reuses one connection across operations (issue #125). ---
+    // These are the deterministic proof that reuse works: the SAME real-IMAP operations that cost N
+    // connections / N LOGINs above collapse to ONE connection / ONE LOGIN here, with the necessary
+    // per-open EXAMINE unchanged. Localhost is ~0 RTT so this proves the STRUCTURE, not wall-clock.
+
+    @Test
+    fun `with reuse on, N folder-opens share one connection and one LOGIN`() = runTest {
+        seedInbox(2)
+
+        repeat(OPENS) { reuseClient.fetchRecent(params(), "INBOX", limit = 50) }
+
+        // The win: one socket accepted for all OPENS opens (vs. OPENS sockets with the flag off).
+        // connectionCount is incremented synchronously on accept, so it needs no stream settling.
+        assertEquals(1, proxy.connectionCount, "reuse: a single TCP connection serves every folder-open")
+
+        reuseClient.closeReusedConnections() // evict -> LOGOUT + close, so the proxy's command stream settles
+        proxy.awaitClientStreamsSettled()
+
+        assertEquals(1, proxy.authCommandCount(), "reuse: LOGIN paid once, then reused (vs. one per open)")
+        assertEquals(OPENS, proxy.commandCount("EXAMINE"), "reuse keeps the necessary one EXAMINE per open")
+        assertEquals(1, proxy.commandCount("LOGOUT"), "reuse: one LOGOUT at eviction, not one per open")
+    }
+
+    @Test
+    fun `with reuse on, opening a folder then reading a message reuses the one connection`() = runTest {
+        seedInbox(1)
+
+        val uid = reuseClient.fetchRecent(params(), "INBOX", limit = 50).first().uid // open folder
+        reuseClient.fetchBodyMarkingSeen(params(), "INBOX", uid) // read a message in it
+
+        // Contrast with `opening a folder then reading a message uses two separate connections`: the
+        // same list-then-read here shares the one kept-alive connection instead of paying a second setup.
+        assertEquals(1, proxy.connectionCount, "reuse: list + read share the one connection")
+
+        reuseClient.closeReusedConnections()
+        proxy.awaitClientStreamsSettled()
+
+        assertEquals(1, proxy.authCommandCount(), "reuse: one LOGIN covers both the list and the read")
     }
 
     private companion object {
