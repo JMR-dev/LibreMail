@@ -164,6 +164,49 @@ class RichTextEditorTest {
         assertTrue(result.annotatedString.toRichContent().spans.isEmpty())
     }
 
+    // --- clearStyle ---
+
+    @Test
+    fun `clearStyle removes a font color span regardless of its value`() {
+        val value = field("hello", TextRange(0, 5))
+        val colored = applyStyle(value, RichStyle.FontColor(0xFFFF0000.toInt()), linkColor)
+        val cleared = clearStyle(colored, RichStyle.FontColor::class.java, linkColor)
+        assertTrue(cleared.annotatedString.toRichContent().spans.isEmpty())
+    }
+
+    @Test
+    fun `clearStyle splits a span that only partially overlaps the selection`() {
+        val value = field("abcdef", TextRange(0, 6))
+        val colored = applyStyle(value, RichStyle.Highlight(0xFFFFFF00.toInt()), linkColor)
+        val narrowed = colored.copy(selection = TextRange(2, 4))
+        val cleared = clearStyle(narrowed, RichStyle.Highlight::class.java, linkColor)
+        assertEquals(
+            listOf(
+                RichSpan(0, 2, RichStyle.Highlight(0xFFFFFF00.toInt())),
+                RichSpan(4, 6, RichStyle.Highlight(0xFFFFFF00.toInt())),
+            ),
+            cleared.annotatedString.toRichContent().spans,
+        )
+    }
+
+    @Test
+    fun `clearStyle only removes spans of the given kind, leaving other styles intact`() {
+        val value = field("hi", TextRange(0, 2))
+        val bolded = applyStyle(value, RichStyle.Bold, linkColor)
+        val both = applyStyle(bolded, RichStyle.FontColor(0xFF000000.toInt()), linkColor)
+        val cleared = clearStyle(both, RichStyle.FontColor::class.java, linkColor)
+        assertEquals(listOf(RichSpan(0, 2, RichStyle.Bold)), cleared.annotatedString.toRichContent().spans)
+    }
+
+    @Test
+    fun `clearStyle is a no-op with a collapsed selection`() {
+        val value = field("hello", TextRange(0, 5))
+        val colored = applyStyle(value, RichStyle.FontColor(0xFFFF0000.toInt()), linkColor)
+        val collapsed = colored.copy(selection = TextRange(2))
+        val result = clearStyle(collapsed, RichStyle.FontColor::class.java, linkColor)
+        assertEquals(colored.annotatedString.toRichContent().spans, result.annotatedString.toRichContent().spans)
+    }
+
     // --- applyBlock ---
 
     @Test
