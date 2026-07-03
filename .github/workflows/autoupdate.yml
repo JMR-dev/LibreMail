@@ -18,6 +18,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, ready_for_review]
     branches: [main]
 
 permissions:
@@ -39,4 +40,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN || secrets.GITHUB_TOKEN }}
           PR_FILTER: "all"
+          PR_READY_STATE: "all"
           MERGE_CONFLICT_ACTION: "ignore"
