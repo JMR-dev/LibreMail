@@ -37,6 +37,32 @@ class MigrationTest {
         FrameworkSQLiteOpenHelperFactory(),
     )
 
+    /** v18 -> v19 (issue #232): the four casefold search columns appear, backfilled from their source. */
+    @Test
+    fun migrate18To19_addsAndBackfillsCasefoldSearchColumns() {
+        helper.createDatabase(TEST_DB, 18).apply {
+            execSQL(
+                "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+                    "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched, uid) VALUES " +
+                    "('acct:INBOX:1', 'acct', 'Ada LOVELACE', 'Ada@Example.ORG', 'HELLO There', 'World Preview', " +
+                    "'', 0, 1000, 0, 0, 'INBOX', 1, 1, 1)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 19, true, MIGRATION_18_19)
+
+        db.query(
+            "SELECT senderFold, senderEmailFold, subjectFold, snippetFold FROM messages WHERE id = 'acct:INBOX:1'",
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("ada lovelace", c.getString(0))
+            assertEquals("ada@example.org", c.getString(1))
+            assertEquals("hello there", c.getString(2))
+            assertEquals("world preview", c.getString(3))
+        }
+    }
+
     /** v11 -> v12 (PR #54): `folders.specialUse` appears defaulting to 0 and existing data survives. */
     @Test
     fun migrate11To12_defaultsExistingFoldersToNotSpecialUse() {
