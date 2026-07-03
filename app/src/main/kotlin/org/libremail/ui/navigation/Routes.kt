@@ -31,6 +31,12 @@ object Routes {
     // ViewModel, so the picker/setup screens are registered inside it for onboarding and reused as
     // the top-level ACCOUNT_SETUP / APP_PASSWORD / MANUAL_SETUP routes for "Add account" later.
     const val ONBOARDING = "onboarding"
+
+    // The graph's actual start destination whenever SettingsRepository.licenseAccepted is false
+    // (#172): the user must scroll through the GPL-3.0 text and tap Agree before reaching anything
+    // else. An already-accepted user skips straight to ONBOARDING_WELCOME instead — see
+    // onboardingGraph() in LibreMailApp.kt.
+    const val ONBOARDING_LICENSE = "onboarding/license"
     const val ONBOARDING_WELCOME = "onboarding/welcome"
     const val ONBOARDING_PICKER = "onboarding/picker"
     const val ONBOARDING_MANUAL = "onboarding/manual"

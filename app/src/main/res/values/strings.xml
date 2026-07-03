@@ -158,6 +158,12 @@
     <string name="attachments_expand">Expand attachments</string>
     <string name="attachments_collapse">Collapse attachments</string>
 
+    <!-- Onboarding: GPL-3.0 license agreement, the first screen the user ever sees (#172) -->
+    <string name="license_title">License agreement</string>
+    <string name="license_intro">LibreMail is free software, licensed under the GNU General Public License version 3. Please read it below, then Agree to continue or Decline to exit.</string>
+    <string name="license_agree">Agree</string>
+    <string name="license_decline">Decline</string>
+
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Welcome to LibreMail</string>
     <string name="onboarding_welcome_subtitle">A private, open-source home for all your email. Add your first account to get started.</string>
