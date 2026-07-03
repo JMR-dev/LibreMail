@@ -28,11 +28,15 @@ or via Gradle Managed Devices `./gradlew e2eGroupDebugAndroidTest` (whole matrix
 
 **Before treating a change as done**, run the fast CI gate: `assembleDebug` +
 `testDebugUnitTest` + `compileDebugAndroidTestKotlin` + `lintDebug` + `ktlintCheck` +
-`detekt` (the `/preflight` skill does this). `compileDebugAndroidTestKotlin` compiles the
-`androidTest` source set that the rest of the gate skips, catching E2E/instrumented-test
-compile errors before they surface only in CI. `ktlintCheck`/`detekt` cover the
-`test`/`androidTest` source sets that `lintDebug` skips, so they catch style violations that
-would otherwise fail CI's Static analysis gate. Emulator E2E is left to CI unless asked.
+`detekt` + the latest-API emulator E2E `api36DebugAndroidTest` (the `/preflight` skill does
+all of this). `compileDebugAndroidTestKotlin` compiles the `androidTest` source set that the
+static part of the gate skips, catching E2E/instrumented-test compile errors before they
+surface only in CI. `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that
+`lintDebug` skips, so they catch style violations that would otherwise fail CI's Static
+analysis gate. `api36DebugAndroidTest` runs the instrumented/E2E suite on API 36 — the highest
+API level in the E2E matrix — via its Gradle Managed Device (Gradle boots and tears down the
+emulator automatically). Running that one latest-API level locally is required; the full
+multi-API matrix (and the API 37 preview job) stays CI's job.
 
 ## Build-config gotchas
 
@@ -60,6 +64,15 @@ would otherwise fail CI's Static analysis gate. Emulator E2E is left to CI unles
 JVM unit tests use JUnit4 + `kotlin.test`, **Turbine** for `Flow`, **MockK** for mocks,
 **GreenMail** for a real in-process IMAP/SMTP server, and coroutines-test. `org.json` is
 pulled in as a real dependency for unit tests because `android.jar`'s version is a no-op stub.
+
+## Definition of done
+
+A change is not done until it ships with passing **unit tests** and **E2E/instrumented tests**
+that exercise the new or changed behaviour. Writing and committing that E2E/instrumented test
+is a required part of every task — and the test must actually **run and pass**, not merely
+compile: preflight runs the latest-API-level emulator E2E locally (`api36DebugAndroidTest`, the
+highest API level in the E2E matrix and its Gradle Managed Device task) and it must be green
+before the change is done. CI then runs the full multi-API matrix.
 
 ## Repo etiquette
 
