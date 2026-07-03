@@ -107,6 +107,20 @@
     <string name="format_link_apply">Link</string>
     <string name="format_link_needs_selection">Select some text first, then add a link.</string>
     <string name="format_color_none">No color</string>
+    <string name="format_color">Font color</string>
+    <string name="format_color_black">Black</string>
+    <string name="format_color_gray">Gray</string>
+    <string name="format_color_red">Red</string>
+    <string name="format_color_orange">Orange</string>
+    <string name="format_color_yellow">Yellow</string>
+    <string name="format_color_green">Green</string>
+    <string name="format_color_blue">Blue</string>
+    <string name="format_color_purple">Purple</string>
+    <string name="format_highlight">Highlight</string>
+    <string name="format_highlight_yellow">Yellow</string>
+    <string name="format_highlight_green">Green</string>
+    <string name="format_highlight_cyan">Cyan</string>
+    <string name="format_highlight_pink">Pink</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>
