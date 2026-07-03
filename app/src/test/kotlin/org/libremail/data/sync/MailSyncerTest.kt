@@ -28,7 +28,9 @@ import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
+import java.io.IOException
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class MailSyncerTest {
 
@@ -282,6 +284,88 @@ class MailSyncerTest {
             accountSettingsRepository = accountSettingsRepository,
             batteryStatusProvider = batteryProvider(BatteryStatus(percent = 100, isCharging = false)),
             notifier = notifier,
+            mailRepository = mockk(relaxed = true),
+        )
+    }
+
+    @Test
+    fun `syncAll succeeds with a zero total when there are no accounts`() = runTest {
+        val syncer = syncAllSyncer(accounts = emptyList())
+
+        val result = syncer.syncAll()
+
+        assertEquals(0, result.getOrNull())
+    }
+
+    @Test
+    fun `syncAll syncs every account inbox and sums the fetched counts`() = runTest {
+        val syncer = syncAllSyncer(accounts = listOf(accountEntity("one"), accountEntity("two")))
+
+        val result = syncer.syncAll()
+
+        assertTrue(result.isSuccess)
+        assertEquals(2, result.getOrNull()) // one message fetched per account
+    }
+
+    @Test
+    fun `syncAll still succeeds when one account fails but another syncs`() = runTest {
+        val syncer = syncAllSyncer(
+            accounts = listOf(accountEntity("ok"), accountEntity("bad")),
+            failingIds = setOf("bad"),
+        )
+
+        val result = syncer.syncAll()
+
+        assertTrue(result.isSuccess, "at least one account synced")
+        assertEquals(1, result.getOrNull())
+    }
+
+    @Test
+    fun `syncAll fails only when every account fails`() = runTest {
+        val syncer = syncAllSyncer(
+            accounts = listOf(accountEntity("bad1"), accountEntity("bad2")),
+            failingIds = setOf("bad1", "bad2"),
+        )
+
+        assertTrue(syncer.syncAll().isFailure)
+    }
+
+    private fun accountEntity(id: String) = account.copy(id = id, email = "$id@example.org")
+
+    /**
+     * A syncer for the [MailSyncer.syncAll] path: [accountDao.getAll] returns [accounts], each inbox
+     * fetch yields one message (so a successful account contributes 1 to the total), and any account
+     * in [failingIds] fails its connection so its per-account sync errors out.
+     */
+    private fun syncAllSyncer(accounts: List<AccountEntity>, failingIds: Set<String> = emptySet()): MailSyncer {
+        val accountDao = mockk<AccountDao>()
+        coEvery { accountDao.getAll() } returns accounts
+        val messageDao = mockk<MessageDao>(relaxed = true)
+        coEvery { messageDao.getSyncedIds(any(), any()) } returns emptyList()
+        coEvery { messageDao.getUnfetchedIds(any(), any()) } returns emptyList()
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchRecent(any(), any(), any()) } returns listOf(
+            FetchedMessage("1", "Ada", "ada@example.org", "Hi", 1_000L, isRead = true, isFlagged = false),
+        )
+        val connectionFactory = mockk<MailConnectionFactory>()
+        coEvery { connectionFactory.imapParamsFor(match { it.id in failingIds }) } throws IOException("no network")
+        coEvery { connectionFactory.imapParamsFor(match { it.id !in failingIds }) } returns mockk()
+        val settingsRepository = mockk<SettingsRepository>()
+        coEvery { settingsRepository.fetchPolicy() } returns FetchPolicy.ON_DEMAND
+        coEvery { settingsRepository.isNewMailNotificationsEnabled() } returns false
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        val accountSettingsRepository = mockk<AccountSettingsRepository>()
+        coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
+        return MailSyncer(
+            context = mockk(relaxed = true),
+            accountDao = accountDao,
+            messageDao = messageDao,
+            imapClient = imapClient,
+            connectionFactory = connectionFactory,
+            settingsRepository = settingsRepository,
+            accountSettingsRepository = accountSettingsRepository,
+            batteryStatusProvider = batteryProvider(BatteryStatus(percent = 100, isCharging = false)),
+            notifier = mockk(relaxed = true),
             mailRepository = mockk(relaxed = true),
         )
     }
