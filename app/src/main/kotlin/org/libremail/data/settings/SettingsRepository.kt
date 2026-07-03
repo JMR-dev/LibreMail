@@ -73,6 +73,14 @@ data class AppSettings(
      * but exits (or whose process dies) before adding an account isn't forced to agree again.
      */
     val licenseAccepted: Boolean = false,
+    /**
+     * The font family CSS / point size last used in a sent formatted message (issue #78), so the next
+     * brand-new composition ([org.libremail.ui.compose.ComposeViewModel]) can default to it. Either
+     * may be null on its own (e.g. only a size was ever recorded); both null means nothing has been
+     * remembered yet, so new messages stay plaintext exactly as before this preference existed.
+     */
+    val lastFontCss: String? = null,
+    val lastFontSizePt: Int? = null,
 )
 
 private object Keys {
@@ -89,6 +97,8 @@ private object Keys {
     val RETENTION_MONTHS = intPreferencesKey("retention_months")
     val DEFAULT_ACCOUNT_ID = stringPreferencesKey("default_account_id")
     val LICENSE_ACCEPTED = booleanPreferencesKey("license_accepted")
+    val LAST_FONT_CSS = stringPreferencesKey("last_font_css")
+    val LAST_FONT_SIZE_PT = intPreferencesKey("last_font_size_pt")
     val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
     val CONTACTS_PROMPT_HANDLED = booleanPreferencesKey("contacts_prompt_handled")
     val CONTACTS_PERMISSION_REQUESTED = booleanPreferencesKey("contacts_permission_requested")
@@ -116,6 +126,8 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
     retentionMonths = this[Keys.RETENTION_MONTHS] ?: 0,
     defaultAccountId = this[Keys.DEFAULT_ACCOUNT_ID],
     licenseAccepted = this[Keys.LICENSE_ACCEPTED] ?: false,
+    lastFontCss = this[Keys.LAST_FONT_CSS],
+    lastFontSizePt = this[Keys.LAST_FONT_SIZE_PT],
 )
 
 @Singleton
@@ -218,6 +230,18 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun clearDefaultAccountId(accountId: String) {
         context.settingsDataStore.edit {
             if (it[Keys.DEFAULT_ACCOUNT_ID] == accountId) it.remove(Keys.DEFAULT_ACCOUNT_ID)
+        }
+    }
+
+    /**
+     * Records the font family/size last used in a sent formatted message (#78), so the next brand-new
+     * composition can default to it. Either argument may be null on its own; passing null for one
+     * clears just that key rather than persisting a sentinel value.
+     */
+    suspend fun setLastFont(fontCss: String?, fontSizePt: Int?) {
+        context.settingsDataStore.edit {
+            if (fontCss != null) it[Keys.LAST_FONT_CSS] = fontCss else it.remove(Keys.LAST_FONT_CSS)
+            if (fontSizePt != null) it[Keys.LAST_FONT_SIZE_PT] = fontSizePt else it.remove(Keys.LAST_FONT_SIZE_PT)
         }
     }
 

@@ -188,6 +188,7 @@ fun AppPasswordSetupScreen(
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                supportingText = { Text(stringResource(R.string.app_password_field_disclaimer)) },
                 modifier = Modifier.fillMaxWidth(),
             )
 
