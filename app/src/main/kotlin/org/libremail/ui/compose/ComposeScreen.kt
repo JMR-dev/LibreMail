@@ -107,6 +107,11 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                 PackageManager.PERMISSION_GRANTED,
         )
     }
+    // Flush the pending debounced draft save when the app is backgrounded (#177), so the latest edits
+    // aren't lost if the process is killed before the autosave debounce fires.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.flushDraft()
+    }
     LaunchedEffect(Unit) { viewModel.finished.collect { onBack() } }
     BackHandler { viewModel.onExit() }
     LaunchedEffect(state.error) {
