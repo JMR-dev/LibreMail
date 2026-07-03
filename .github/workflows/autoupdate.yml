@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: Auto-update PR branches
 
-# When main advances, rebase any auto-merge-armed PR that has fallen behind, so the
-# "require branches up to date" branch rule doesn't need manual branch updates. Only PRs
-# with GitHub auto-merge enabled are touched (PR_FILTER: auto_merge) — held/draft PRs are
-# left alone.
+# When main advances, rebase every open PR that has fallen behind, so the "require
+# branches up to date" branch rule doesn't need manual branch updates. All open PRs are
+# touched (PR_FILTER: all) — this is no longer limited to PRs with GitHub auto-merge
+# enabled.
 #
 # IMPORTANT: for the branch update to RE-TRIGGER the PR's CI (so it can pass and merge),
 # this must run with a PAT, not the default GITHUB_TOKEN — pushes made by GITHUB_TOKEN do
@@ -28,13 +28,13 @@ concurrency:
 
 jobs:
   autoupdate:
-    name: Auto-update armed PRs
+    name: Auto-update open PRs
     runs-on: ubuntu-latest
     environment: CI_CD
     steps:
-      - name: Update behind PRs that have auto-merge enabled
+      - name: Update all behind PRs
         uses: chinthakagodawita/autoupdate@0707656cd062a3b0cf8fa9b2cda1d1404d74437e # v1.7.0
         env:
           GITHUB_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_FILTER: "auto_merge"
+          PR_FILTER: "all"
           MERGE_CONFLICT_ACTION: "ignore"
