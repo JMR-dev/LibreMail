@@ -17,6 +17,8 @@ name: Auto-update PR branches
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
