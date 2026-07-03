@@ -69,4 +69,28 @@ class DebugReportTest {
 
         assertTrue(edited.contains("edited note"))
     }
+
+    @Test
+    fun `round-trips the reply-to email`() {
+        val original = sample().copy(userEmail = "reporter@example.com")
+
+        val restored = DebugReport.fromStorageJson(original.toStorageJson())
+
+        assertEquals("reporter@example.com", restored.userEmail)
+        assertEquals(original, restored)
+    }
+
+    @Test
+    fun `a report with no email round-trips to a blank one`() {
+        val restored = DebugReport.fromStorageJson(sample().toStorageJson())
+
+        assertEquals("", restored.userEmail)
+    }
+
+    @Test
+    fun `submission payload contains the reply-to email`() {
+        val payload = sample().copy(userEmail = "reporter@example.com").toSubmissionPayload()
+
+        assertTrue(payload.contains("reporter@example.com"))
+    }
 }
