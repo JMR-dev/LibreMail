@@ -280,4 +280,21 @@ class OnboardingFlowTest {
         composeTestRule.onNodeWithText(string(R.string.app_password_open_page, "iCloud Mail"))
             .assertIsDisplayed()
     }
+
+    @Test
+    fun appPasswordSetup_showsAccountPasswordDisclaimerNearField() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText("Gmail")
+        composeTestRule.onNodeWithText("Gmail").performClick()
+
+        // Issue #160: new users unfamiliar with app passwords commonly try their regular account
+        // password first. The disclaimer must render as supporting text directly under the "App
+        // password" field itself (not only in the intro InfoCards above), on every preset provider
+        // screen since they all share this composable.
+        waitForText(string(R.string.app_password_field))
+        composeTestRule.onNodeWithText(string(R.string.app_password_field_disclaimer))
+            .performScrollTo().assertIsDisplayed()
+    }
 }
