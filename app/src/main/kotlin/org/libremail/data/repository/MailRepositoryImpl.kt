@@ -9,8 +9,13 @@ import androidx.paging.PagingData
 import androidx.paging.map
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
 import org.libremail.data.Snippet
@@ -65,6 +70,12 @@ class MailRepositoryImpl @Inject constructor(
     private val signatureRepository: SignatureRepository,
 ) : MailRepository {
 
+    // Application-lifetime scope for fire-and-forget server pushes that must outlive the caller — e.g.
+    // openMessage() returning to the reader screen before the SEEN flag reaches the server (#148). Same
+    // pattern as LibreMailApplication.appScope / IdleService.scope: this class is @Singleton (bound to
+    // Hilt's SingletonComponent), so the scope's lifetime is the process's, not any one caller's coroutine.
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
         messageDao.observeFolderSummaries(accountId, folder).map { rows -> rows.map { it.toDomain() } }
 
@@ -114,11 +125,38 @@ class MailRepositoryImpl @Inject constructor(
                 attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
                 messageDao.setRead(id, true)
             } else if (!entity.isRead) {
-                runCatching { imapClient.setFlag(params, entity.folder, uidOf(id), Flags.Flag.SEEN, true) }
+                // Optimistic, local-only: the reader can render as soon as this returns. The SEEN flag
+                // still needs to reach the server, but that IMAP round trip (connection + STORE) must not
+                // sit on this path (#148) — the body/attachments are already fully local, so nothing about
+                // rendering the screen needs it. Pushed on backgroundScope, which outlives this call.
                 messageDao.setRead(id, true)
+                pushSeenFlagInBackground(params, entity.folder, id)
             }
         }
         messageDao.getById(id)?.toDomain() ?: error("Message not found")
+    }
+
+    /**
+     * Best-effort, fire-and-forget propagation of the SEEN flag to the server, off the message-open
+     * critical path (#148). Retries a few times with a short backoff, then gives up silently: local state
+     * is already correct (the caller set it before launching this), so a permanent failure here just means
+     * the server's copy stays "unread" until something else touches the flag — e.g. the message is opened
+     * from another client, or a future sync gains upward read-state reconciliation. Today's folder sync
+     * does NOT do that: it deliberately leaves cached read/star flags alone when refreshing headers from
+     * the server (see `MessageDao.updateHeaderContent`), so it protects an optimistic local flag from
+     * being clobbered by stale server state, but it does not re-drive a push that never reached the server
+     * either. This retry is in-memory only and does not survive process death mid-backoff.
+     */
+    private fun pushSeenFlagInBackground(params: ImapConnectionParams, folder: String, id: String) {
+        backgroundScope.launch {
+            var attempt = 0
+            while (true) {
+                attempt++
+                val result = runCatching { imapClient.setFlag(params, folder, uidOf(id), Flags.Flag.SEEN, true) }
+                if (result.isSuccess || attempt >= SEEN_FLAG_PUSH_MAX_ATTEMPTS) return@launch
+                delay(SEEN_FLAG_RETRY_BACKOFF_MS * attempt)
+            }
+        }
     }
 
     override fun observeAttachments(messageId: String): Flow<List<Attachment>> =
@@ -409,6 +447,12 @@ private const val SEARCH_LIMIT = 50
 
 /** Rows per page for the unified inbox (issue #124) — a page is a few screenfuls of message rows. */
 private const val MAILBOX_PAGE_SIZE = 40
+
+/** Attempts for the background best-effort SEEN-flag push before giving up silently (issue #148). */
+private const val SEEN_FLAG_PUSH_MAX_ATTEMPTS = 3
+
+/** Base backoff between SEEN-flag push retries, scaled by attempt number (2s, then 4s). */
+private const val SEEN_FLAG_RETRY_BACKOFF_MS = 2_000L
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
