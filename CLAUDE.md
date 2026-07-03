@@ -28,15 +28,22 @@ or via Gradle Managed Devices `./gradlew e2eGroupDebugAndroidTest` (whole matrix
 
 **Before treating a change as done**, run the fast CI gate: `assembleDebug` +
 `testDebugUnitTest` + `compileDebugAndroidTestKotlin` + `lintDebug` + `ktlintCheck` +
-`detekt` + the latest-API emulator E2E `api36DebugAndroidTest` (the `/preflight` skill does
-all of this). `compileDebugAndroidTestKotlin` compiles the `androidTest` source set that the
-static part of the gate skips, catching E2E/instrumented-test compile errors before they
-surface only in CI. `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that
-`lintDebug` skips, so they catch style violations that would otherwise fail CI's Static
-analysis gate. `api36DebugAndroidTest` runs the instrumented/E2E suite on API 36 — the highest
-API level in the E2E matrix — via its Gradle Managed Device (Gradle boots and tears down the
-emulator automatically). Running that one latest-API level locally is required; the full
-multi-API matrix (and the API 37 preview job) stays CI's job.
+`detekt` + the top-of-matrix emulator E2E `api35DebugAndroidTest` + `api36DebugAndroidTest` +
+the API 37 preview E2E via `python3 .claude/skills/preflight/api37_e2e.py` (the `/preflight`
+skill does all of this). `compileDebugAndroidTestKotlin` compiles the `androidTest` source set
+that the static part of the gate skips, catching E2E/instrumented-test compile errors before
+they surface only in CI. `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that
+`lintDebug` skips, so they catch style violations that would otherwise fail CI's Static analysis
+gate. `api35DebugAndroidTest` and `api36DebugAndroidTest` run the instrumented/E2E suite on the
+top two stable API levels in the E2E matrix, each via its own Gradle Managed Device (Gradle boots
+and tears down each emulator automatically). API 37 (preview) has no Gradle Managed Device — its
+only image is the nonstandard `android-37.0` / `google_apis_ps16k` pairing (see the comment above
+`testOptions.managedDevices` in `app/build.gradle.kts`) — so `api37_e2e.py` hand-provisions it,
+mirroring CI's `e2e-preview` job (same image + emulator flags, except it uses host-GPU
+`-gpu auto-no-window` locally vs CI's headless `-gpu swiftshader_indirect`), boots it headless,
+runs `connectedDebugAndroidTest`, and tears it down. Running all three levels locally is required; the
+rest of the multi-API matrix (API 29–34) stays CI's job. Emulators need a free hardware
+hypervisor (VT-x/WHPX), so shut down VirtualBox/other VMs first or the AVD hangs at 0% CPU.
 
 ## Build-config gotchas
 
@@ -70,9 +77,11 @@ pulled in as a real dependency for unit tests because `android.jar`'s version is
 A change is not done until it ships with passing **unit tests** and **E2E/instrumented tests**
 that exercise the new or changed behaviour. Writing and committing that E2E/instrumented test
 is a required part of every task — and the test must actually **run and pass**, not merely
-compile: preflight runs the latest-API-level emulator E2E locally (`api36DebugAndroidTest`, the
-highest API level in the E2E matrix and its Gradle Managed Device task) and it must be green
-before the change is done. CI then runs the full multi-API matrix.
+compile: preflight runs the top-of-matrix emulator E2E locally — `api35DebugAndroidTest` +
+`api36DebugAndroidTest` (Gradle Managed Devices) plus the API 37 preview via
+`api37_e2e.py` (hand-provisioned, mirroring CI's `e2e-preview` job) — and all three must be
+green before the change is done. CI then runs the full multi-API matrix plus the API 37 preview
+job.
 
 ## Repo etiquette
 
