@@ -203,6 +203,22 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
+            // Background battery usage (#162): relocated out of the collapsible Advanced section and
+            // into the main list, directly above local retention — OEM battery optimization delaying
+            // push mail is common enough that it shouldn't be hidden behind "Advanced".
+            ClickRow(
+                title = stringResource(R.string.settings_adv_battery),
+                subtitle = stringResource(
+                    if (batteryUnrestricted) {
+                        R.string.settings_adv_battery_unrestricted
+                    } else {
+                        R.string.settings_adv_battery_optimized
+                    },
+                ),
+                onClick = { runCatching { context.startActivity(viewModel.batterySettingsIntent()) } },
+            )
+            HorizontalDivider()
+
             // Global device-only retention default (issue #13); accounts may override it.
             RetentionSection(
                 count = settings.retentionCount,
@@ -230,23 +246,6 @@ fun SettingsScreen(
                         checked = settings.pushIdle,
                         onCheckedChange = viewModel::setPushIdle,
                     )
-                    ClickRow(
-                        title = stringResource(R.string.settings_adv_battery),
-                        subtitle = stringResource(
-                            if (batteryUnrestricted) {
-                                R.string.settings_adv_battery_unrestricted
-                            } else {
-                                R.string.settings_adv_battery_optimized
-                            },
-                        ),
-                        onClick = { runCatching { context.startActivity(viewModel.batterySettingsIntent()) } },
-                    )
-                    SwitchRow(
-                        title = stringResource(R.string.settings_adv_starttls),
-                        checked = settings.allowStartTls,
-                        onCheckedChange = viewModel::setAllowStartTls,
-                        subtitle = stringResource(R.string.settings_adv_starttls_summary),
-                    )
                     SwitchRow(
                         title = stringResource(R.string.settings_adv_remote_images),
                         checked = settings.loadRemoteImages,
@@ -263,6 +262,12 @@ fun SettingsScreen(
                         checked = settings.appLock,
                         onCheckedChange = viewModel::setAppLock,
                         subtitle = stringResource(R.string.settings_adv_app_lock_summary),
+                    )
+                    SwitchRow(
+                        title = stringResource(R.string.settings_adv_starttls),
+                        checked = settings.allowStartTls,
+                        onCheckedChange = viewModel::setAllowStartTls,
+                        subtitle = stringResource(R.string.settings_adv_starttls_summary),
                     )
                 }
             }
