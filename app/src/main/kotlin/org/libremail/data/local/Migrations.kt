@@ -359,3 +359,24 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
         db.execSQL("ALTER TABLE `outbox` ADD COLUMN `attachments` TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/**
+ * v18 -> v19: Unicode-aware case-insensitive search (issue #232; preserves existing data). SQLite's
+ * `LIKE` folds case only for ASCII, so search now matches against `lowercase()` copies of the four
+ * searchable fields. Adds the fold columns and backfills them. The backfill's SQL `lower()` is
+ * ASCII-only, so existing rows are casefolded for ASCII here and fully re-folded (via the Unicode-aware
+ * Kotlin `lowercase()` in the mapper / DAO) on their next write or sync.
+ */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `senderFold` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `senderEmailFold` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `subjectFold` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `snippetFold` TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "UPDATE `messages` SET `senderFold` = lower(`sender`), " +
+                "`senderEmailFold` = lower(`senderEmail`), `subjectFold` = lower(`subject`), " +
+                "`snippetFold` = lower(`snippet`)",
+        )
+    }
+}

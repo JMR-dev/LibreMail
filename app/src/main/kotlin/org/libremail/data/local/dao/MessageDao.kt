@@ -67,15 +67,16 @@ interface MessageDao {
      * Scans the same columns the old in-memory search filter (`matchesSearch`) did, but in SQL so a
      * search over a large folder loads only the visible window. Unlike the browse pagers this does
      * *not* filter `inInbox`, so it surfaces both synced rows and the transient `inInbox = 0`
-     * server-search hits `MailRepository.searchServer` inserts — exactly what the old filter saw. LIKE
-     * is case-insensitive for ASCII (SQLite's default), matching `matchesSearch`'s common case.
+     * server-search hits `MailRepository.searchServer` inserts — exactly what the old filter saw.
+     * Matches the Unicode-casefolded `*Fold` columns (issue #232) with a pattern built from the
+     * lowercased query, so search is case-insensitive beyond ASCII — unlike the old ASCII-only `LIKE`.
      */
     @Query(
         "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE folder = :folder AND (sender LIKE :pattern ESCAPE '\\' OR " +
-            "senderEmail LIKE :pattern ESCAPE '\\' OR subject LIKE :pattern ESCAPE '\\' OR " +
-            "snippet LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+            "WHERE folder = :folder AND (senderFold LIKE :pattern ESCAPE '\\' OR " +
+            "senderEmailFold LIKE :pattern ESCAPE '\\' OR subjectFold LIKE :pattern ESCAPE '\\' OR " +
+            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
     )
     fun pagingUnifiedFolderSearchSummaries(folder: String, pattern: String): PagingSource<Int, MessageSummary>
 
@@ -88,9 +89,9 @@ interface MessageDao {
     @Query(
         "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE accountId = :accountId AND folder = :folder AND (sender LIKE :pattern ESCAPE '\\' OR " +
-            "senderEmail LIKE :pattern ESCAPE '\\' OR subject LIKE :pattern ESCAPE '\\' OR " +
-            "snippet LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+            "WHERE accountId = :accountId AND folder = :folder AND (senderFold LIKE :pattern ESCAPE '\\' OR " +
+            "senderEmailFold LIKE :pattern ESCAPE '\\' OR subjectFold LIKE :pattern ESCAPE '\\' OR " +
+            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
     )
     fun pagingFolderSearchSummaries(
         accountId: String,
@@ -157,17 +158,34 @@ interface MessageDao {
      * Refreshes the display fields (and the materialized [MessageEntity.uid], keeping it fresh for
      * rows migrated before the column existed) from the server without touching the cached body, the
      * local read/star flags (which may hold an optimistic change the server hasn't reflected yet), or
-     * the inbox membership.
+     * the inbox membership. Keeps the header casefold search columns (issue #232) in sync.
      */
-    @Query(
-        "UPDATE messages SET sender = :sender, senderEmail = :senderEmail, subject = :subject, " +
-            "timestampMillis = :timestampMillis, uid = :uid WHERE id = :id",
-    )
     suspend fun updateHeaderContent(
         id: String,
         sender: String,
         senderEmail: String,
         subject: String,
+        timestampMillis: Long,
+        uid: Long,
+    ) = updateHeaderContentInternal(
+        id, sender, senderEmail, subject,
+        sender.lowercase(), senderEmail.lowercase(), subject.lowercase(),
+        timestampMillis, uid,
+    )
+
+    @Query(
+        "UPDATE messages SET sender = :sender, senderEmail = :senderEmail, subject = :subject, " +
+            "senderFold = :senderFold, senderEmailFold = :senderEmailFold, subjectFold = :subjectFold, " +
+            "timestampMillis = :timestampMillis, uid = :uid WHERE id = :id",
+    )
+    suspend fun updateHeaderContentInternal(
+        id: String,
+        sender: String,
+        senderEmail: String,
+        subject: String,
+        senderFold: String,
+        senderEmailFold: String,
+        subjectFold: String,
         timestampMillis: Long,
         uid: Long,
     )
@@ -176,8 +194,15 @@ interface MessageDao {
     @Query("UPDATE messages SET inInbox = 1 WHERE id IN (:ids)")
     suspend fun markSynced(ids: List<String>)
 
-    @Query("UPDATE messages SET body = :body, isHtml = :isHtml, snippet = :snippet, bodyFetched = 1 WHERE id = :id")
-    suspend fun updateBody(id: String, body: String, isHtml: Boolean, snippet: String)
+    /** Sets the fetched body + its derived snippet, keeping [MessageEntity.snippetFold] (search) in sync. */
+    suspend fun updateBody(id: String, body: String, isHtml: Boolean, snippet: String) =
+        updateBodyInternal(id, body, isHtml, snippet, snippet.lowercase())
+
+    @Query(
+        "UPDATE messages SET body = :body, isHtml = :isHtml, snippet = :snippet, " +
+            "snippetFold = :snippetFold, bodyFetched = 1 WHERE id = :id",
+    )
+    suspend fun updateBodyInternal(id: String, body: String, isHtml: Boolean, snippet: String, snippetFold: String)
 
     @Query("UPDATE messages SET isRead = :isRead WHERE id = :id")
     suspend fun setRead(id: String, isRead: Boolean)
