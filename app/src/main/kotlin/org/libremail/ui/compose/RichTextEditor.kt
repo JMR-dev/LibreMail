@@ -58,6 +58,7 @@ import org.libremail.richtext.RichTextEditing
 import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.compose.format.ColorSwatch
 import org.libremail.ui.compose.format.ColorSwatchRow
+import org.libremail.ui.compose.format.FontPicker
 import org.libremail.ui.compose.format.FontSizePicker
 import org.libremail.ui.compose.format.ParagraphAlignmentControl
 
@@ -76,9 +77,9 @@ internal const val IMAGE_TAG = "libremail:image"
 
 /**
  * A rich-text body editor: a formatting toolbar (bold / italic / underline / strikethrough, font
- * size, font color and highlight, bulleted + numbered lists, block quote, link, and paragraph
- * alignment) above a rounded [OutlinedTextField]. It converts its [AnnotatedString] to the app's
- * [RichTextContent] model and reports both the plaintext form and its HTML — or null HTML when
+ * family + size, font color and highlight, bulleted + numbered lists, block quote, link, and
+ * paragraph alignment) above a rounded [OutlinedTextField]. It converts its [AnnotatedString] to the
+ * app's [RichTextContent] model and reports both the plaintext form and its HTML — or null HTML when
  * nothing is formatted, so an unformatted message stays plaintext-only and feels exactly like the
  * old editor.
  *
@@ -149,6 +150,15 @@ fun RichTextBodyField(
                 )
             },
             onAlignment = { align -> emit(applyAlignment(value, align, linkColor, resolveFont)) },
+            onFont = { css ->
+                emit(
+                    if (css != null) {
+                        applyStyle(value, RichStyle.FontFamily(css), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontFamily::class.java, linkColor, resolveFont)
+                    },
+                )
+            },
         )
         OutlinedTextField(
             value = value,
@@ -234,6 +244,7 @@ private fun FormattingToolbar(
     onHighlight: () -> Unit,
     onFontSize: (Int?) -> Unit,
     onAlignment: (RichAlign) -> Unit,
+    onFont: (String?) -> Unit,
 ) {
     val content = value.annotatedString.toRichContent()
     val start = value.selection.min
@@ -320,6 +331,8 @@ private fun FormattingToolbar(
         // so its click lands on the button's on-screen center. Any control inserted *before* the block
         // buttons shifts them right and can push the bullet past the viewport, making that tap miss —
         // so these wider controls are appended last, leaving every pre-existing button in its tested spot.
+        val fontCss = RichTextEditing.styleAt(content, start, end, RichStyle.FontFamily::class.java)?.css
+        FontPicker(selectedCss = fontCss, onSelect = onFont)
         val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
         FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
         ParagraphAlignmentControl(
