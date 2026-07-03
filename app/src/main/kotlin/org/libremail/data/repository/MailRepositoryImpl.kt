@@ -93,6 +93,11 @@ class MailRepositoryImpl @Inject constructor(
             pageSize = MAILBOX_PAGE_SIZE,
             initialLoadSize = MAILBOX_PAGE_SIZE * 3,
             enablePlaceholders = false,
+            // Bound the in-memory window so a deep scroll can't accumulate the whole (potentially
+            // thousands-of-rows) inbox: keep ~5 pages resident and evict the rest. Must be
+            // >= pageSize + 2*prefetchDistance (40 + 2*40 = 120); with placeholders off, evicted leading
+            // positions drop from the loaded window and the list rendering already null-guards them.
+            maxSize = MAILBOX_PAGE_SIZE * 5,
         ),
         pagingSourceFactory = { messageDao.pagingUnifiedFolderSummaries(folder) },
     ).flow.map { page -> page.map { it.toDomain() } }

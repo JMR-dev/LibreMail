@@ -190,7 +190,27 @@ jobs:
           disable-animations: false
           script: echo "Generated AVD snapshot for caching."
 
+      # reactivecircus/android-emulator-runner runs an un-guarded, fatal `adb shell input keyevent 82`
+      # after boot. On snapshot resume that can race system_server (sys.boot_completed=1 before the
+      # `input` binder service is republished), aborting the job before Gradle runs with
+      # "No service published for: input" — an ~2%, API-29-only infra flake, not a test failure. Make
+      # the step non-fatal and retry once: two independent boots drop the race to ~0.04%. The definitive
+      # fix (adopt the e2e-preview job's manual-boot + `keyevent 82 || true`) is tracked separately.
       - name: Run E2E tests
+        id: e2e
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: ./gradlew connectedDebugAndroidTest --stacktrace
+
+      - name: Run E2E tests (retry after emulator boot race)
+        if: steps.e2e.outcome == 'failure'
         uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
         with:
           api-level: ${{ matrix.api-level }}

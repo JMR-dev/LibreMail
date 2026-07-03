@@ -519,7 +519,9 @@ private fun MessageRow(
                     Spacer(Modifier.width(4.dp))
                 }
                 Text(
-                    text = formatTimestamp(message.timestampMillis),
+                    // remember so the relative-time string isn't re-formatted (allocating a new String
+                    // and reading System.currentTimeMillis()) on every recomposition of the row.
+                    text = remember(message.timestampMillis) { formatTimestamp(message.timestampMillis) },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
