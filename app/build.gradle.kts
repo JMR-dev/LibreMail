@@ -157,8 +157,11 @@ android {
         // no DSL path to this image today, the same root cause documented on e2e-preview for why
         // reactivecircus/android-emulator-runner can't provision it either. issue #124's perf doc
         // (docs/perf/issue-124-unified-inbox-paging.md) independently corroborates this: its API 37
-        // cross-check used a physical Pixel, not an emulator/AVD. Once a managed-device-compatible
-        // image is published, add `api37` here (and to the CI matrix) and delete the e2e-preview job.
+        // cross-check used a physical Pixel, not an emulator/AVD. Locally, preflight covers API 37
+        // by hand-provisioning it with .claude/skills/preflight/api37_e2e.py, which mirrors the
+        // e2e-preview job (same image + emulator flags). Once a managed-device-compatible image is
+        // published, add `api37` here (and to the CI matrix), delete that script, and drop the
+        // e2e-preview job.
         managedDevices {
             localDevices {
                 listOf(29, 30, 31, 32, 33, 34, 35, 36).forEach { api ->
