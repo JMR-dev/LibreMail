@@ -124,6 +124,19 @@ class MailRepositoryImplTest {
     }
 
     @Test
+    fun `pagedUnifiedSearchMessages lowercases the query for Unicode case-insensitive matching`() = runTest {
+        val pattern = slot<String>()
+        every { messageDao.pagingUnifiedFolderSearchSummaries("INBOX", capture(pattern)) } returns
+            FakeSummaryPagingSource(listOf(messageSummary("1", "INBOX")))
+
+        repository.pagedUnifiedSearchMessages("INBOX", "ÄPFEL").asSnapshot()
+
+        // The query is casefolded (Kotlin's Unicode-aware lowercase) before the LIKE pattern is built, so
+        // it matches the lowercase()d *Fold columns regardless of case, beyond ASCII (issue #232).
+        assertEquals("%äpfel%", pattern.captured)
+    }
+
+    @Test
     fun `pagedFolderSearchMessages scopes the paged search to the account and folder`() = runTest {
         val pattern = slot<String>()
         every { messageDao.pagingFolderSearchSummaries("acct", "INBOX", capture(pattern)) } returns
