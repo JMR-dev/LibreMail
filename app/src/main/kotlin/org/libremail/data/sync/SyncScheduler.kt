@@ -10,6 +10,7 @@ import androidx.work.Operation
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import org.libremail.reporting.ReportPurgeWorker
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Provider
@@ -39,6 +40,12 @@ class SyncScheduler @Inject constructor(
     // Pruning is purely local (no server calls), so it needs no network — only a healthy battery.
     private val pruneConstraint = Constraints.Builder()
         .setRequiresBatteryNotLow(true)
+        .build()
+
+    // Report purge is low-priority housekeeping (issue #239): run it only while charging so it never
+    // costs the user battery, and it needs no network (reports are local files).
+    private val chargingConstraint = Constraints.Builder()
+        .setRequiresCharging(true)
         .build()
 
     /** Periodic background sync (WorkManager's 15-minute floor). */
@@ -98,6 +105,14 @@ class SyncScheduler @Inject constructor(
         workManager.enqueueUniqueWork(ONESHOT_PRUNE, ExistingWorkPolicy.REPLACE, request)
     }
 
+    /** Periodic purge of crash/problem reports older than a month, only while charging (issue #239). */
+    fun schedulePeriodicReportPurge() {
+        val request = PeriodicWorkRequestBuilder<ReportPurgeWorker>(1, TimeUnit.DAYS)
+            .setConstraints(chargingConstraint)
+            .build()
+        workManager.enqueueUniquePeriodicWork(PERIODIC_REPORT_PURGE, PERIODIC_POLICY, request)
+    }
+
     private companion object {
         const val PERIODIC_WORK = "libremail_periodic_sync"
         const val ONESHOT_WORK = "libremail_oneshot_sync"
@@ -105,6 +120,7 @@ class SyncScheduler @Inject constructor(
         const val ONESHOT_BACKFILL = "libremail_oneshot_backfill"
         const val PERIODIC_PRUNE = "libremail_periodic_prune"
         const val ONESHOT_PRUNE = "libremail_oneshot_prune"
+        const val PERIODIC_REPORT_PURGE = "libremail_periodic_report_purge"
 
         // UPDATE, not KEEP (issue #96). These periodic jobs are re-enqueued at every app start, so KEEP
         // pinned an already-installed device to the interval/constraints from the version that first

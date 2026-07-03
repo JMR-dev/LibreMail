@@ -121,6 +121,12 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
                 .padding(16.dp),
         ) {
             PiiDisclaimer()
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.report_auto_delete_notice),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
                 value = state.comment,

@@ -38,4 +38,12 @@ data class MessageEntity(
      * (refreshed to the real UID on the next sync).
      */
     @ColumnInfo(defaultValue = "0") val uid: Long = 0L,
+    // Unicode-casefolded copies of the searchable fields (issue #232). SQLite's LIKE folds case only for
+    // ASCII, so search matches against these `lowercase()` copies (Kotlin's lowercase is Unicode-aware)
+    // for case-insensitive Unicode search. Kept in sync wherever their source is written — toEntity,
+    // MessageDao.updateBody (snippet), and MessageDao.updateHeaderContent (headers).
+    @ColumnInfo(defaultValue = "") val senderFold: String = "",
+    @ColumnInfo(defaultValue = "") val senderEmailFold: String = "",
+    @ColumnInfo(defaultValue = "") val subjectFold: String = "",
+    @ColumnInfo(defaultValue = "") val snippetFold: String = "",
 )

@@ -149,6 +149,10 @@ internal fun FetchedMessage.toEntity(accountId: String, folder: String, inInbox:
         inInbox = inInbox,
         bodyFetched = false,
         uid = uid.toLongOrNull() ?: 0L,
+        senderFold = sender.lowercase(),
+        senderEmailFold = senderEmail.lowercase(),
+        subjectFold = subject.lowercase(),
+        snippetFold = "",
     )
 
 internal fun FolderEntity.toDomain(): Folder = Folder(
