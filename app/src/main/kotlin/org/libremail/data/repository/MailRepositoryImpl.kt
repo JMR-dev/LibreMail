@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
 import org.libremail.data.Snippet
@@ -27,7 +28,7 @@ import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.FolderEntity
-import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageRouting
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
@@ -114,26 +115,34 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun getMessage(id: String): Message? = messageDao.getById(id)?.toDomain()
 
-    override suspend fun openMessage(id: String): Result<Message> = runCatching {
-        val entity = messageDao.getById(id) ?: error("Message not found")
-        val account = accountDao.getById(entity.accountId)?.toDomain()
-        if (account != null) {
-            val params = connectionFactory.imapParamsFor(account)
-            if (!entity.bodyFetched) {
-                val content = imapClient.fetchBodyMarkingSeen(params, entity.folder, uidOf(id))
-                messageDao.updateBody(id, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
-                attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
-                messageDao.setRead(id, true)
-            } else if (!entity.isRead) {
-                // Optimistic, local-only: the reader can render as soon as this returns. The SEEN flag
-                // still needs to reach the server, but that IMAP round trip (connection + STORE) must not
-                // sit on this path (#148) — the body/attachments are already fully local, so nothing about
-                // rendering the screen needs it. Pushed on backgroundScope, which outlives this call.
-                messageDao.setRead(id, true)
-                pushSeenFlagInBackground(params, entity.folder, id)
+    override suspend fun openMessage(id: String): Result<Message> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Route on the body-less projection: a cached, already-read message needs no account, no
+            // credentials, and no network, so it skips the Keystore decrypt + DataStore read that
+            // resolving connection params costs (issue #186). Only the fetch / SEEN-push branches below
+            // pull the account and resolve params, and each does so lazily right where it is needed.
+            val routing = messageDao.getRouting(id) ?: error("Message not found")
+            if (!routing.bodyFetched || !routing.isRead) {
+                val account = accountDao.getById(routing.accountId)?.toDomain()
+                if (account != null && !routing.bodyFetched) {
+                    val params = connectionFactory.imapParamsFor(account)
+                    val content = imapClient.fetchBodyMarkingSeen(params, routing.folder, uidOf(id))
+                    messageDao.updateBody(id, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
+                    attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
+                    messageDao.setRead(id, true)
+                } else if (account != null) {
+                    // Optimistic, local-only: the reader can render as soon as this returns. The SEEN flag
+                    // still needs to reach the server, but that IMAP round trip (connection + STORE) must not
+                    // sit on this path (#148/#186) — the body/attachments are already fully local. Pushed on
+                    // backgroundScope, which outlives this call.
+                    val params = connectionFactory.imapParamsFor(account)
+                    messageDao.setRead(id, true)
+                    pushSeenFlagInBackground(params, routing.folder, id)
+                }
             }
+            // The single full-body read, reserved for the value the reader actually renders (issue #186).
+            messageDao.getById(id)?.toDomain() ?: error("Message not found")
         }
-        messageDao.getById(id)?.toDomain() ?: error("Message not found")
     }
 
     /**
@@ -164,44 +173,77 @@ class MailRepositoryImpl @Inject constructor(
             rows.map { it.toDomain() }
         }
 
-    override suspend fun inlineImages(messageId: String): List<InlineImage> = attachmentDao.getForMessage(messageId)
-        .filter { it.contentId != null }
-        .mapNotNull { row ->
+    override suspend fun inlineImages(messageId: String): List<InlineImage> = withContext(Dispatchers.IO) {
+        // Resolve the message's account/folder once (body-less), then reuse the on-disk cache per cid:
+        // image — no per-image message re-read or attachment re-query (the old downloadAttachment N+1, #186).
+        val routing = messageDao.getRouting(messageId) ?: return@withContext emptyList()
+        val parts = attachmentDao.getForMessage(messageId)
+        parts.filter { it.contentId != null }.mapNotNull { row ->
             // Reuse the on-disk attachment cache (download once, then instant + offline). A failed
             // fetch just omits that image, leaving a broken <img> rather than failing the open.
-            val file = downloadAttachment(messageId, row.partIndex).getOrNull() ?: return@mapNotNull null
+            val file = runCatching {
+                ensureAttachmentFile(messageId, routing.accountId, routing.folder, row.partIndex, row.filename)
+            }.getOrNull() ?: return@mapNotNull null
             InlineImage(contentId = row.contentId!!, mimeType = row.mimeType, bytes = file.readBytes())
         }
-
-    override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> = runCatching {
-        val entity = messageDao.getById(messageId) ?: error("Message not found")
-        val meta = attachmentDao.getForMessage(messageId).firstOrNull { it.partIndex == partIndex }
-        val target = attachmentFile(messageId, partIndex, meta?.filename ?: "attachment")
-        // Reuse a previously downloaded (or pre-fetched) file so it opens instantly and offline.
-        if (target.exists() && target.length() > 0L) return@runCatching target
-        val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
-        val params = connectionFactory.imapParamsFor(account)
-        val downloaded = imapClient.fetchAttachment(params, entity.folder, uidOf(messageId), partIndex)
-        target.parentFile?.mkdirs()
-        target.outputStream().use { it.write(downloaded.bytes) }
-        target
     }
 
-    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> = attachmentDao.getForMessage(messageId)
-        .filter {
-            val file = attachmentFile(messageId, it.partIndex, it.filename)
-            file.exists() && file.length() > 0L
+    override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val routing = messageDao.getRouting(messageId) ?: error("Message not found")
+                val meta = attachmentDao.getForMessage(messageId).firstOrNull { it.partIndex == partIndex }
+                ensureAttachmentFile(
+                    messageId,
+                    routing.accountId,
+                    routing.folder,
+                    partIndex,
+                    meta?.filename ?: "attachment",
+                )
+            }
         }
-        .map { it.partIndex }
-        .toSet()
+
+    /**
+     * Returns the on-disk file for one attachment part, downloading and caching it on first use so it
+     * then opens instantly and offline. Takes the message's already-resolved account/folder so a batch
+     * loop (e.g. [inlineImages]) resolves them once instead of re-reading the message row per part (#186).
+     * Connection params are resolved lazily — only when the file is missing and must be fetched.
+     */
+    private suspend fun ensureAttachmentFile(
+        messageId: String,
+        accountId: String,
+        folder: String,
+        partIndex: Int,
+        filename: String,
+    ): File {
+        val target = attachmentFile(messageId, partIndex, filename)
+        // Reuse a previously downloaded (or pre-fetched) file so it opens instantly and offline.
+        if (target.exists() && target.length() > 0L) return target
+        val account = accountDao.getById(accountId)?.toDomain() ?: error("Account not found")
+        val params = connectionFactory.imapParamsFor(account)
+        val downloaded = imapClient.fetchAttachment(params, folder, uidOf(messageId), partIndex)
+        target.parentFile?.mkdirs()
+        target.outputStream().use { it.write(downloaded.bytes) }
+        return target
+    }
+
+    override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> = withContext(Dispatchers.IO) {
+        attachmentDao.getForMessage(messageId)
+            .filter {
+                val file = attachmentFile(messageId, it.partIndex, it.filename)
+                file.exists() && file.length() > 0L
+            }
+            .map { it.partIndex }
+            .toSet()
+    }
 
     override suspend fun prefetchMessage(messageId: String): Result<Unit> = runCatching {
-        val entity = messageDao.getById(messageId) ?: return@runCatching
-        val account = accountDao.getById(entity.accountId)?.toDomain() ?: return@runCatching
-        val params = connectionFactory.imapParamsFor(account)
+        val routing = messageDao.getRouting(messageId) ?: return@runCatching
+        val account = accountDao.getById(routing.accountId)?.toDomain() ?: return@runCatching
         // Cache the body (peek, so prefetching never marks the message read) and its attachment metadata.
-        if (!entity.bodyFetched) {
-            val content = imapClient.fetchBodyPeek(params, entity.folder, uidOf(messageId))
+        if (!routing.bodyFetched) {
+            val params = connectionFactory.imapParamsFor(account)
+            val content = imapClient.fetchBodyPeek(params, routing.folder, uidOf(messageId))
             messageDao.updateBody(messageId, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
             attachmentDao.replaceForMessage(messageId, content.attachments.map { it.toEntity(messageId) })
         }
@@ -213,12 +255,12 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun setStarred(id: String, starred: Boolean): Result<Unit> = runCatching {
         messageDao.setStarred(id, starred) // optimistic; next sync reconciles on failure
-        val entity = messageDao.getById(id)
-        val account = entity?.let { accountDao.getById(it.accountId)?.toDomain() }
-        if (entity != null && account != null) {
+        val routing = messageDao.getRouting(id)
+        val account = routing?.let { accountDao.getById(it.accountId)?.toDomain() }
+        if (routing != null && account != null) {
             imapClient.setFlag(
                 connectionFactory.imapParamsFor(account),
-                entity.folder,
+                routing.folder,
                 uidOf(id),
                 Flags.Flag.FLAGGED,
                 starred,
@@ -227,11 +269,11 @@ class MailRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteMessage(id: String): Result<Unit> = runCatching {
-        val entity = messageDao.getById(id)
-        val account = entity?.let { accountDao.getById(it.accountId)?.toDomain() }
+        val routing = messageDao.getRouting(id)
+        val account = routing?.let { accountDao.getById(it.accountId)?.toDomain() }
         messageDao.deleteById(id) // optimistic; reappears on next sync if the server delete failed
-        if (entity != null && account != null) {
-            imapClient.deleteMessage(connectionFactory.imapParamsFor(account), entity.folder, uidOf(id))
+        if (routing != null && account != null) {
+            imapClient.deleteMessage(connectionFactory.imapParamsFor(account), routing.folder, uidOf(id))
         }
     }
 
@@ -245,17 +287,17 @@ class MailRepositoryImpl @Inject constructor(
         moveByRole(ids, FolderRole.TRASH, fallbackExpunge = true)
 
     override suspend fun expunge(ids: List<String>): Result<Unit> = runCatching {
-        val entities = ids.mapNotNull { messageDao.getById(it) }
+        val routings = messageDao.getRoutingByIds(ids)
         messageDao.deleteByIds(ids) // optimistic
-        forEachAccountFolder(entities) { params, folder, group ->
+        forEachAccountFolder(routings) { params, folder, group ->
             group.forEach { imapClient.deleteMessage(params, folder, uidOf(it.id)) }
         }
     }
 
     override suspend fun moveToFolder(ids: List<String>, destFolderFullName: String): Result<Unit> = runCatching {
-        val entities = ids.mapNotNull { messageDao.getById(it) }
+        val routings = messageDao.getRoutingByIds(ids)
         messageDao.deleteByIds(ids) // optimistic
-        forEachAccountFolder(entities) { params, folder, group ->
+        forEachAccountFolder(routings) { params, folder, group ->
             if (folder != destFolderFullName) {
                 imapClient.moveMessages(params, folder, group.map { uidOf(it.id) }, destFolderFullName)
             }
@@ -263,17 +305,17 @@ class MailRepositoryImpl @Inject constructor(
     }
 
     override suspend fun buildReplyDraft(messageId: String, mode: ReplyMode): Result<String> = runCatching {
-        val entity = messageDao.getById(messageId) ?: error("Message not found")
-        val account = accountDao.getById(entity.accountId)?.toDomain() ?: error("Account not found")
+        val routing = messageDao.getRouting(messageId) ?: error("Message not found")
+        val account = accountDao.getById(routing.accountId)?.toDomain() ?: error("Account not found")
         val params = connectionFactory.imapParamsFor(account)
-        val context = imapClient.fetchForReply(params, entity.folder, uidOf(messageId))
+        val context = imapClient.fetchForReply(params, routing.folder, uidOf(messageId))
         val content = ReplyBuilder.build(context, mode, account.email)
         // Bake the sending account's default signature into the reply/forward body — above the quoted
         // original — so it round-trips as part of the draft (compose won't re-append for drafts). Both
         // the plaintext and HTML forms are stored so the reply can go out as multipart/alternative.
-        val settings = accountSettingsRepository.get(entity.accountId)
+        val settings = accountSettingsRepository.get(routing.accountId)
         val sig = if (settings.signatureEnabled) {
-            SignatureBlock.of(signatureRepository.getDefault(entity.accountId))
+            SignatureBlock.of(signatureRepository.getDefault(routing.accountId))
         } else {
             SignatureBlock.EMPTY
         }
@@ -281,7 +323,7 @@ class MailRepositoryImpl @Inject constructor(
         saveDraft(
             Draft(
                 id = draftId,
-                accountId = entity.accountId,
+                accountId = routing.accountId,
                 to = content.to,
                 cc = content.cc,
                 subject = content.subject,
@@ -301,11 +343,11 @@ class MailRepositoryImpl @Inject constructor(
      */
     private suspend fun moveByRole(ids: List<String>, role: FolderRole, fallbackExpunge: Boolean): Result<Unit> =
         runCatching {
-            val entities = ids.mapNotNull { messageDao.getById(it) }
+            val routings = messageDao.getRoutingByIds(ids)
             messageDao.deleteByIds(ids) // optimistic
-            val destByAccount = entities.map { it.accountId }.distinct()
+            val destByAccount = routings.map { it.accountId }.distinct()
                 .associateWith { resolveRoleFolder(it, role) }
-            forEachAccountFolder(entities) { params, folder, group ->
+            forEachAccountFolder(routings) { params, folder, group ->
                 when (val dest = destByAccount[group.first().accountId]) {
                     null ->
                         if (fallbackExpunge) {
@@ -318,12 +360,12 @@ class MailRepositoryImpl @Inject constructor(
             }
         }
 
-    /** Groups [entities] by account then source folder and runs [block] once per (account, folder) group. */
+    /** Groups [routings] by account then source folder and runs [block] once per (account, folder) group. */
     private suspend fun forEachAccountFolder(
-        entities: List<MessageEntity>,
-        block: suspend (params: ImapConnectionParams, folder: String, group: List<MessageEntity>) -> Unit,
+        routings: List<MessageRouting>,
+        block: suspend (params: ImapConnectionParams, folder: String, group: List<MessageRouting>) -> Unit,
     ) {
-        entities.groupBy { it.accountId }.forEach { (accountId, accountMessages) ->
+        routings.groupBy { it.accountId }.forEach { (accountId, accountMessages) ->
             val account = accountDao.getById(accountId)?.toDomain() ?: return@forEach
             val params = connectionFactory.imapParamsFor(account)
             accountMessages.groupBy { it.folder }.forEach { (folder, group) -> block(params, folder, group) }
