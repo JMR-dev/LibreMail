@@ -61,6 +61,7 @@ class DatabaseProvisionerTest {
         every { DatabaseEncryption.isEncrypted(any()) } returns false
         every { DatabaseEncryption.ensureEncrypted(any(), any()) } just Runs
         every { DatabaseEncryption.ensurePlaintext(any(), any()) } just Runs
+        every { DatabaseEncryption.ensureNativeLibraryLoaded() } just Runs
         every { settingsRepository.settings } returns flowOf(AppSettings())
 
         coEvery { keyStore.isClearPending() } returns false
@@ -89,6 +90,11 @@ class DatabaseProvisionerTest {
         coVerify(exactly = 1) { keyStore.resolvePassphrase(false) }
         verify(exactly = 1) { DatabaseEncryption.ensureEncrypted(any(), PASSPHRASE) }
         verify(exactly = 0) { DatabaseEncryption.ensurePlaintext(any(), any()) }
+        // Regression (crash-on-launch after upgrade): the encrypted open path MUST load SQLCipher's
+        // native library itself. ensureEncrypted no-ops when the cache is already encrypted, so if the
+        // load only rode on that conversion, Room's keyed open would hit nativeOpen with no .so loaded
+        // and throw UnsatisfiedLinkError on every cold start.
+        verify(exactly = 1) { DatabaseEncryption.ensureNativeLibraryLoaded() }
     }
 
     @Test
@@ -143,6 +149,9 @@ class DatabaseProvisionerTest {
         coVerify(exactly = 0) { keyStore.resolvePassphrase(any()) }
         verify(exactly = 0) { DatabaseEncryption.ensureEncrypted(any(), any()) }
         verify(exactly = 0) { DatabaseEncryption.ensurePlaintext(any(), any()) }
+        // A plaintext cache opens with the framework helper, never SQLCipher, so it must not touch the
+        // native library — the counterpart to the encrypted path's mandatory load above.
+        verify(exactly = 0) { DatabaseEncryption.ensureNativeLibraryLoaded() }
     }
 
     @Test
