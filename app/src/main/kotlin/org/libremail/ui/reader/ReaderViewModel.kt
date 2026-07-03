@@ -67,13 +67,16 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             repository.openMessage(messageId).fold(
                 onSuccess = { message ->
-                    _state.update { it.copy(loading = false, message = message) }
-                    // Resolve inline cid: images so the WebView can embed them. Runs after openMessage
-                    // has cached the parts; skipped for plain-text mail and messages with none.
-                    if (message.isHtml) {
-                        val images = repository.inlineImages(messageId).associateBy { it.contentId }
-                        if (images.isNotEmpty()) _state.update { it.copy(inlineImages = images) }
+                    // Resolve inline cid: images BEFORE the first render and publish them in the SAME
+                    // state update as the body, so the reader's WebView loads exactly once instead of
+                    // rendering with an empty image map and reloading when they arrive (issue #186).
+                    // openMessage has already cached the parts; plain-text mail has none to resolve.
+                    val images = if (message.isHtml) {
+                        repository.inlineImages(messageId).associateBy { it.contentId }
+                    } else {
+                        emptyMap()
                     }
+                    _state.update { it.copy(loading = false, message = message, inlineImages = images) }
                 },
                 onFailure = { e ->
                     _state.update {
