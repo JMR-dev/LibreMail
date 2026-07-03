@@ -89,6 +89,21 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: warn
 
+      # JaCoCo XML + HTML coverage for the JVM unit tests (issue #192). Reporting only — no
+      # threshold gate yet, so a coverage regression does not fail CI (a jacocoTestCoverageVerification
+      # gate is a natural follow-up once there's a baseline to enforce).
+      - name: Generate JaCoCo coverage report
+        if: ${{ !cancelled() }}
+        run: ./gradlew :app:jacocoTestReport --stacktrace
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jacoco-coverage-report
+          path: app/build/reports/jacoco/jacocoTestReport/
+          if-no-files-found: warn
+
   static-analysis:
     name: Static analysis
     runs-on: ubuntu-latest
