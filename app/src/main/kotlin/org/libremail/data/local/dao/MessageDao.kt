@@ -9,6 +9,7 @@ import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageRouting
 import org.libremail.data.local.entity.MessageSummary
 
 @Dao
@@ -88,6 +89,26 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): MessageEntity?
+
+    /**
+     * Body-less routing/flags projection for a single message (issue #186). The open path and the
+     * flag/move callers only need routing and flag columns, so pulling the whole `body` through
+     * SQLite's shared CursorWindow on every such read is pure over-fetch — [getById] (`SELECT *`) is
+     * reserved for the one read that actually returns the body to the reader. Served by the primary-key
+     * lookup, so no new index / migration (mirrors the [MessageSummary] projection).
+     */
+    @Query(
+        "SELECT id, accountId, folder, uid, isRead, isStarred, bodyFetched, isHtml FROM messages " +
+            "WHERE id = :id LIMIT 1",
+    )
+    suspend fun getRouting(id: String): MessageRouting?
+
+    /** Body-less routing/flags projection for a set of messages — batch move/delete/expunge callers. */
+    @Query(
+        "SELECT id, accountId, folder, uid, isRead, isStarred, bodyFetched, isHtml FROM messages " +
+            "WHERE id IN (:ids)",
+    )
+    suspend fun getRoutingByIds(ids: List<String>): List<MessageRouting>
 
     /** Ids of an account's synced rows in [folder] (excludes transient server-search hits). */
     @Query("SELECT id FROM messages WHERE accountId = :accountId AND folder = :folder AND inInbox = 1")
