@@ -64,7 +64,12 @@ enum class MailProvider(
     YAHOO(
         key = "yahoo",
         displayName = "Yahoo Mail",
-        appPasswordHelpUrl = "https://login.yahoo.com/account/security",
+        // Yahoo's own step-by-step "Generate and manage 3rd-party app passwords" article, not
+        // just the generic account-security sign-in page — that page assumes the user already
+        // knows to look for "Create app password" once there (issue #155). Unlike Gmail/iCloud,
+        // this article never lists two-step verification as a prerequisite for generating an app
+        // password, so there is no twoFactorHelpUrl below.
+        appPasswordHelpUrl = "https://my.help.yahoo.com/kb/mail/generate-app-specific-password-sln15241.html",
         imapHost = "imap.mail.yahoo.com",
         smtpHost = "smtp.mail.yahoo.com",
         // Yahoo documents smtp.mail.yahoo.com:465 with implicit SSL/TLS as its outgoing server.

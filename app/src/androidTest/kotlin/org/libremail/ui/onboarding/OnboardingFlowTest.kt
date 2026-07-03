@@ -254,10 +254,11 @@ class OnboardingFlowTest {
         waitForText("Yahoo Mail")
         composeTestRule.onNodeWithText("Yahoo Mail").performClick()
 
-        // Yahoo's setup screen keeps its app-password link…
+        // Yahoo's setup screen keeps its app-password link (now pointing at Yahoo's step-by-step
+        // instructions article instead of the generic account-security page, issue #155)…
         waitForText(string(R.string.app_password_open_page, "Yahoo Mail"))
         // …but gains no two-factor help link: unlike Gmail and iCloud, Yahoo gates nothing on it
-        // (issue #98, #153).
+        // (issue #98, #153, #155).
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help)).assertDoesNotExist()
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help_icloud)).assertDoesNotExist()
     }
