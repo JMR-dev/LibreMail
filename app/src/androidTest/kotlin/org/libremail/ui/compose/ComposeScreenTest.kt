@@ -29,6 +29,7 @@ import org.libremail.R
 import org.libremail.contacts.ContactsRepository
 import org.libremail.data.local.AccountDatabase
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
@@ -89,6 +90,7 @@ class ComposeScreenTest {
             contactsRepository = ContactsRepository(context),
             accountSettingsRepository = AccountSettingsRepository(database.accountSettingsDao()),
             signatureRepository = SignatureRepository(database.signatureDao()),
+            settingsRepository = SettingsRepository(context),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
