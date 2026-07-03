@@ -77,6 +77,12 @@ fun ProblemReportsScreen(
             ) {
                 Text(stringResource(R.string.reports_create))
             }
+            Text(
+                stringResource(R.string.report_auto_delete_notice),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             if (reports.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
