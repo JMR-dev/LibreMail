@@ -191,6 +191,13 @@ private fun FormattingToolbar(
             onClick = { onToggleStyle(RichStyle.Underline) },
         )
         FormatButton(
+            label = "S",
+            description = stringResource(R.string.format_strikethrough),
+            active = RichTextEditing.isStyled(content, start, end, RichStyle.Strikethrough),
+            strikethrough = true,
+            onClick = { onToggleStyle(RichStyle.Strikethrough) },
+        )
+        FormatButton(
             label = "•",
             description = stringResource(R.string.format_bullet_list),
             active = RichTextEditing.hasBlock(content, start, end, BlockMarker.BULLET),
@@ -226,6 +233,7 @@ private fun FormatButton(
     fontWeight: FontWeight? = null,
     fontStyle: FontStyle? = null,
     underline: Boolean = false,
+    strikethrough: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     val background = if (active) colors.secondaryContainer else Color.Transparent
@@ -244,7 +252,11 @@ private fun FormatButton(
             style = LocalTextStyle.current.copy(
                 fontWeight = fontWeight,
                 fontStyle = fontStyle,
-                textDecoration = if (underline) TextDecoration.Underline else null,
+                textDecoration = when {
+                    underline -> TextDecoration.Underline
+                    strikethrough -> TextDecoration.LineThrough
+                    else -> null
+                },
             ),
         )
     }
