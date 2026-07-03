@@ -35,6 +35,9 @@ errorprone = "2.50.0"
 # detekt 2.0 is the only line with Gradle 9 support (stable 1.23.x tops out at Gradle 8.12).
 ktlint = "14.2.0"
 detekt = "2.0.0-alpha.5"
+# JaCoCo coverage agent/report tool (issue #192). Pinned above Gradle's bundled default so the
+# coverage agent understands Kotlin 2.4.0 bytecode on JDK 21.
+jacoco = "0.8.13"
 
 [libraries]
 # AndroidX core / lifecycle / activity / navigation
