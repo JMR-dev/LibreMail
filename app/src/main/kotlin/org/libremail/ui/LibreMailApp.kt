@@ -63,11 +63,13 @@ fun LibreMailApp(
 ) {
     val startDestination by appViewModel.startDestination.collectAsStateWithLifecycle()
     val licenseAccepted by appViewModel.licenseAccepted.collectAsStateWithLifecycle()
+    val hasAccounts by appViewModel.hasAccounts.collectAsStateWithLifecycle()
     // Hold (render nothing) until the account count AND the license-acceptance flag are known, so a
     // cold start never flashes the wrong screen before onboarding-vs-mailbox — and, within onboarding,
     // license-vs-welcome (#172) — is decided.
     val start = startDestination ?: return
     val licenseAlreadyAccepted = licenseAccepted ?: return
+    val hasExistingAccounts = hasAccounts ?: return
     val navController = rememberNavController()
     val pendingCrash by startupViewModel.pendingCrash.collectAsStateWithLifecycle()
 
@@ -75,15 +77,20 @@ fun LibreMailApp(
     // it fires once per intent (and again for a new intent delivered while the app is alive).
     LaunchedEffect(pendingCompose) {
         val prefill = pendingCompose ?: return@LaunchedEffect
-        navController.navigate(
-            Routes.compose(
-                to = prefill.to,
-                subject = prefill.subject,
-                cc = prefill.cc,
-                bcc = prefill.bcc,
-                body = prefill.body,
-            ),
-        )
+        // Don't let a deep-link jump past onboarding — including the license gate (#172), which is why
+        // start == ONBOARDING now also covers an upgrade user who hasn't accepted yet. Consume the
+        // request either way so it isn't replayed. Mirrors the pendingOpenMessageId guard below.
+        if (start != Routes.ONBOARDING) {
+            navController.navigate(
+                Routes.compose(
+                    to = prefill.to,
+                    subject = prefill.subject,
+                    cc = prefill.cc,
+                    bcc = prefill.bcc,
+                    body = prefill.body,
+                ),
+            )
+        }
         onComposeHandled()
     }
 
@@ -100,7 +107,7 @@ fun LibreMailApp(
         navController = navController,
         startDestination = start,
     ) {
-        onboardingGraph(navController, licenseAlreadyAccepted)
+        onboardingGraph(navController, licenseAlreadyAccepted, hasExistingAccounts)
 
         composable(
             route = Routes.MAILBOX_PATTERN,
@@ -295,8 +302,15 @@ private fun CrashReportDialog(onReview: () -> Unit, onLater: () -> Unit, onDisca
  * @param licenseAlreadyAccepted decides the graph's start destination (#172): false routes through
  *   [Routes.ONBOARDING_LICENSE] first; true (the user already agreed on a prior run) skips straight to
  *   [Routes.ONBOARDING_WELCOME], matching this graph's pre-#172 behavior.
+ * @param hasExistingAccounts where to go once the license is accepted from [Routes.ONBOARDING_LICENSE]:
+ *   true (an upgrade from a pre-#172 install that already has accounts) goes straight to the mailbox;
+ *   false (a fresh install) continues into the welcome/add-account flow.
  */
-private fun NavGraphBuilder.onboardingGraph(navController: NavHostController, licenseAlreadyAccepted: Boolean) {
+private fun NavGraphBuilder.onboardingGraph(
+    navController: NavHostController,
+    licenseAlreadyAccepted: Boolean,
+    hasExistingAccounts: Boolean,
+) {
     val onboardingStart = if (licenseAlreadyAccepted) Routes.ONBOARDING_WELCOME else Routes.ONBOARDING_LICENSE
     navigation(startDestination = onboardingStart, route = Routes.ONBOARDING) {
         composable(Routes.ONBOARDING_LICENSE) { entry ->
@@ -305,10 +319,19 @@ private fun NavGraphBuilder.onboardingGraph(navController: NavHostController, li
             LicenseScreen(
                 onAgree = {
                     onboarding.markLicenseAccepted()
-                    // Pop LICENSE off the back stack: it is a one-time gate, so a later back-press
-                    // from the welcome screen must not be able to return to it.
-                    navController.navigate(Routes.ONBOARDING_WELCOME) {
-                        popUpTo(Routes.ONBOARDING_LICENSE) { inclusive = true }
+                    if (hasExistingAccounts) {
+                        // Upgrade path (#172 follow-up): a pre-#172 install with accounts is now forced
+                        // through the license gate too (see AppViewModel.startDestination). Once they
+                        // accept, send them straight to their inbox — ONBOARDING_WELCOME ("add your
+                        // first account") would strand a user who already has accounts. finishOnboarding
+                        // pops the whole onboarding graph, so the one-time license gate is left behind.
+                        navController.finishOnboarding(firstAccountId = null)
+                    } else {
+                        // Fresh install: continue into the add-account flow. Pop LICENSE off the back
+                        // stack so a later back-press from welcome can't return to this one-time gate.
+                        navController.navigate(Routes.ONBOARDING_WELCOME) {
+                            popUpTo(Routes.ONBOARDING_LICENSE) { inclusive = true }
+                        }
                     }
                 },
                 // MainActivity is this app's only Activity (single-activity Compose app), so finish()

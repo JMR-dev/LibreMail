@@ -24,12 +24,12 @@ import org.libremail.ui.navigation.Routes
 import kotlin.test.assertEquals
 
 /**
- * [AppViewModel] decides two independent things, each resolved once at launch: the top-level start
- * destination (onboarding vs. mailbox, from the stored account count) and, since #172, whether the
- * user has already agreed to the license (consulted by `onboardingGraph()` in `LibreMailApp.kt` to
- * pick between `Routes.ONBOARDING_LICENSE` and `Routes.ONBOARDING_WELCOME`). Both repositories are
- * mocked: [AccountRepository] and [SettingsRepository] are interfaces/classes this ViewModel only
- * reads from, and `SettingsRepository` itself needs a real `Context` it doesn't get in a JVM test.
+ * [AppViewModel] resolves, once at launch, the top-level start destination plus the two facts it
+ * derives from: whether any account exists and whether the license has been accepted (#172). The
+ * start destination is onboarding unless the license is accepted AND an account exists — so an upgrade
+ * user with accounts but no acceptance is still routed through the license gate, not the mailbox.
+ * Both repositories are mocked: [AccountRepository] and [SettingsRepository] are types this ViewModel
+ * only reads from, and `SettingsRepository` itself needs a real `Context` it doesn't get in a JVM test.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModelTest {
@@ -60,18 +60,31 @@ class AppViewModelTest {
     }
 
     @Test
-    fun `no accounts resolves onboarding as the start destination`() = runTest(testDispatcher) {
-        val vm = AppViewModel(accountRepository(emptyList()), settingsRepository())
+    fun `no accounts routes to onboarding regardless of license state`() = runTest(testDispatcher) {
+        val unaccepted = AppViewModel(accountRepository(emptyList()), settingsRepository(licenseAccepted = false))
+        val accepted = AppViewModel(accountRepository(emptyList()), settingsRepository(licenseAccepted = true))
 
-        assertEquals(Routes.ONBOARDING, vm.startDestination.value)
+        assertEquals(Routes.ONBOARDING, unaccepted.startDestination.value)
+        assertEquals(Routes.ONBOARDING, accepted.startDestination.value)
     }
 
     @Test
-    fun `an existing account resolves the mailbox as the start destination`() = runTest(testDispatcher) {
-        val vm = AppViewModel(accountRepository(listOf(account())), settingsRepository())
+    fun `existing accounts route to the mailbox once the license is accepted`() = runTest(testDispatcher) {
+        val vm = AppViewModel(accountRepository(listOf(account())), settingsRepository(licenseAccepted = true))
 
         assertEquals(Routes.MAILBOX, vm.startDestination.value)
     }
+
+    @Test
+    fun `existing accounts with an unaccepted license still route to onboarding (upgrade license gate)`() =
+        runTest(testDispatcher) {
+            // Regression for the post-batch review finding: a pre-#172 install already has accounts, so
+            // the old account-count-only rule sent it straight to the mailbox and skipped the license.
+            // The license gate must win, forcing onboarding (which begins at ONBOARDING_LICENSE).
+            val vm = AppViewModel(accountRepository(listOf(account())), settingsRepository(licenseAccepted = false))
+
+            assertEquals(Routes.ONBOARDING, vm.startDestination.value)
+        }
 
     @Test
     fun `license acceptance defaults to not accepted`() = runTest(testDispatcher) {
@@ -87,4 +100,13 @@ class AppViewModelTest {
 
             assertEquals(true, vm.licenseAccepted.value)
         }
+
+    @Test
+    fun `hasAccounts reflects whether any account is stored`() = runTest(testDispatcher) {
+        val empty = AppViewModel(accountRepository(emptyList()), settingsRepository())
+        val withAccount = AppViewModel(accountRepository(listOf(account())), settingsRepository())
+
+        assertEquals(false, empty.hasAccounts.value)
+        assertEquals(true, withAccount.hasAccounts.value)
+    }
 }
