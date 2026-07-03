@@ -333,7 +333,13 @@
     <string name="report_review_title">Review report</string>
     <string name="report_pii_disclaimer_title">May contain personal information</string>
     <string name="report_pii_disclaimer">This report can include email addresses, server names, and other details from your device. Read the whole thing below before sending. Nothing is sent unless you tap Submit.</string>
-    <string name="report_comment_label">What went wrong? (optional)</string>
+    <string name="report_comment_label">What went wrong?</string>
+    <!-- Live "x/200" counter below the comment field; %1$d = characters typed, %2$d = minimum. -->
+    <string name="report_comment_counter">%1$d/%2$d</string>
+    <string name="report_email_label">Your email address</string>
+    <string name="report_email_invalid">Enter a valid email address</string>
+    <!-- Consent copy shown near the email field / submit button (#159) — required verbatim. -->
+    <string name="report_email_consent">By submitting this report and supplying your email, you agree that the maintainers of LibreMail may contact you at the supplied email. Supplying an email and submitting a report does not guarantee reply or resolution to your concern.</string>
     <string name="report_payload_label">Exactly what will be sent</string>
     <string name="report_submit">Submit</string>
     <string name="report_discard">Discard report</string>
