@@ -31,8 +31,8 @@ enum class MailProvider(
     val appPasswordHelpUrl: String,
     /**
      * Setup instructions for the provider's two-factor prerequisite, or null when there isn't one.
-     * Only Gmail refuses to create app passwords until 2-Step Verification is on, so only Gmail
-     * links its setup article; Yahoo and iCloud gate nothing on it.
+     * Gmail and iCloud both refuse to issue app passwords until two-factor auth is on, so both
+     * link their own setup article; Yahoo gates nothing on it.
      */
     val twoFactorHelpUrl: String? = null,
     private val imapHost: String,
@@ -74,7 +74,12 @@ enum class MailProvider(
     ICLOUD(
         key = "icloud",
         displayName = "iCloud Mail",
-        appPasswordHelpUrl = "https://appleid.apple.com",
+        // Apple's own app-specific-password instructions, not just the generic Apple ID sign-in
+        // page — this article also states the two-factor prerequisite below.
+        appPasswordHelpUrl = "https://support.apple.com/en-us/102654",
+        // Like Gmail, Apple won't issue an app-specific password until two-factor authentication
+        // is on, so link Apple's dedicated setup article too (issue #153).
+        twoFactorHelpUrl = "https://support.apple.com/en-us/102660",
         imapHost = "imap.mail.me.com",
         smtpHost = "smtp.mail.me.com",
         // Apple documents smtp.mail.me.com:587 with STARTTLS for iCloud Mail.
