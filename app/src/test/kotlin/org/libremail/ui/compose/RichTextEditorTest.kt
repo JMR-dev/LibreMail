@@ -19,6 +19,7 @@ import org.libremail.richtext.RichSpan
 import org.libremail.richtext.RichStyle
 import org.libremail.richtext.RichTextContent
 import org.libremail.richtext.RichTextEditing
+import org.libremail.richtext.RichTextHtml
 import org.libremail.richtext.imageToken
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -207,6 +208,14 @@ class RichTextEditorTest {
         assertEquals(colored.annotatedString.toRichContent().spans, result.annotatedString.toRichContent().spans)
     }
 
+    @Test
+    fun `clearStyle removes a font size span regardless of its value`() {
+        val value = field("hello", TextRange(0, 5))
+        val sized = applyStyle(value, RichStyle.FontSize(18), linkColor)
+        val cleared = clearStyle(sized, RichStyle.FontSize::class.java, linkColor)
+        assertTrue(cleared.annotatedString.toRichContent().spans.isEmpty())
+    }
+
     // --- applyBlock ---
 
     @Test
@@ -230,6 +239,19 @@ class RichTextEditorTest {
         val value = field("• a\n• b", TextRange(0, 7))
         val result = applyBlock(value, BlockMarker.ORDERED, linkColor, noFont)
         assertEquals("1. a\n2. b", result.annotatedString.text)
+    }
+
+    @Test
+    fun `applyBlock bullet on an end-of-text caret marks the line and serializes to ul li html`() {
+        // The JVM-layer twin of ComposeScreenTest.formattingToolbar_bulletButtonMarksTheLineAndSendsItAsHtml:
+        // a bullet tap on the end-of-text caret that typing leaves must mark the whole line and serialize
+        // to a real list. Pinning it here catches a regression in the block-toggle/HTML flow without an
+        // emulator; the instrumented test additionally guards that the toolbar button stays tappable.
+        val value = field("Buy milk", TextRange(8))
+        val bulleted = applyBlock(value, BlockMarker.BULLET, linkColor, noFont)
+        val content = bulleted.annotatedString.toRichContent()
+        assertEquals("• Buy milk", content.text)
+        assertEquals("<ul><li>Buy milk</li></ul>", RichTextHtml.toHtml(content))
     }
 
     // --- applyLink ---

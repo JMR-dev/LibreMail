@@ -121,6 +121,9 @@
     <string name="format_highlight_green">Green</string>
     <string name="format_highlight_cyan">Cyan</string>
     <string name="format_highlight_pink">Pink</string>
+    <string name="format_size">Font size</string>
+    <string name="format_size_default">Default</string>
+    <string name="format_size_pt">%1$d pt</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>
@@ -210,6 +213,7 @@
     <string name="app_password_open_failed">Couldn\'t open your browser</string>
     <string name="app_password_email">Email address</string>
     <string name="app_password_field">App password</string>
+    <string name="app_password_field_disclaimer">Do not try to use your account password. It will not work. You must use an app password.</string>
     <string name="app_password_show_servers">Server settings</string>
     <string name="app_password_server_imap">Incoming (IMAP): %1$s:%2$d (%3$s)</string>
     <string name="app_password_server_smtp">Outgoing (SMTP): %1$s:%2$d (%3$s)</string>
