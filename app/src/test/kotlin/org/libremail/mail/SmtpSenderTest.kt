@@ -117,7 +117,7 @@ class SmtpSenderTest {
                 body = "Body",
                 bodyHtml = "<p><b>Body</b></p>",
             ),
-            attachments = listOf(file),
+            attachments = listOf(SendableAttachment(file)),
         )
 
         greenMail.waitForIncomingEmail(1)
@@ -128,6 +128,42 @@ class SmtpSenderTest {
         assertTrue(raw.contains(file.name), "missing attachment")
         assertTrue(raw.contains("<b>Body</b>"), "missing html body")
         file.delete()
+    }
+
+    @Test
+    fun `an inline image is sent as multipart related with a matching Content-ID`() = runTest {
+        val image = File.createTempFile("libremail-inline", ".png").apply { writeText("PNGDATA") }
+        val params = SmtpParams(
+            host = "127.0.0.1",
+            port = greenMail.smtp.port,
+            security = MailSecurity.NONE,
+            username = "sender@example.org",
+            secret = "secret",
+            useXoauth2 = false,
+        )
+
+        sender.send(
+            params = params,
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                subject = "Inline",
+                body = "See image",
+                bodyHtml = "<p>See <img src=\"cid:logo@libremail\" alt=\"logo\"></p>",
+            ),
+            attachments = listOf(SendableAttachment(image, contentId = "logo@libremail", isInline = true)),
+        )
+
+        greenMail.waitForIncomingEmail(1)
+        val received = greenMail.receivedMessages.single()
+        assertTrue(received.contentType.contains("multipart/related", ignoreCase = true), received.contentType)
+        val raw = GreenMailUtil.getWholeMessage(received)
+        // The HTML's cid reference and the image part's Content-ID must name the same content id.
+        assertTrue(raw.contains("cid:logo@libremail"), "html must reference the cid")
+        assertTrue(raw.contains("<logo@libremail>"), "inline part must carry a matching Content-ID")
+        assertTrue(raw.contains("multipart/alternative", ignoreCase = true), "the body stays an alternative")
+        image.delete()
     }
 
     @Test
@@ -151,7 +187,7 @@ class SmtpSenderTest {
                 subject = "With file",
                 body = "See the attached report.",
             ),
-            attachments = listOf(file),
+            attachments = listOf(SendableAttachment(file)),
         )
 
         greenMail.waitForIncomingEmail(1)

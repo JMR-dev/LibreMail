@@ -19,4 +19,11 @@ data class OutboxEntity(
     val lastError: String? = null,
     /** HTML form of [body] when composed with formatting; null sends `text/plain` only. */
     val bodyHtml: String? = null,
+    /**
+     * JSON metadata for the staged attachments, in staging-index order (the same
+     * `{uri, name, contentId?, isInline?}` shape drafts use), or "" when there are none. The bytes
+     * live on disk under `cacheDir/outbox/<id>/<index>/`; this column carries each part's `Content-ID`
+     * and inline flag so the send worker can pair an inline image's cid with its file.
+     */
+    @ColumnInfo(defaultValue = "") val attachments: String = "",
 )

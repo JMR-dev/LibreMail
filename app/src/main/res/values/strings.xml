@@ -129,6 +129,7 @@
     <string name="format_align_end">Align end</string>
     <string name="format_font">Font</string>
     <string name="format_font_default">Default</string>
+    <string name="format_image">Insert image</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>

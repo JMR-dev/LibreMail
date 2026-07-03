@@ -232,4 +232,27 @@ class RichTextEditingTest {
     fun `alignmentAt treats a plain paragraph as START`() {
         assertEquals(RichAlign.START, RichTextEditing.alignmentAt(RichTextContent("plain"), 0, 5))
     }
+
+    // --- insertImage ---
+
+    @Test
+    fun `insertImage drops a token and RichImage at the caret and shifts later spans`() {
+        val base = RichTextContent("ab", spans = listOf(RichSpan(1, 2, RichStyle.Bold)))
+        val result = RichTextEditing.insertImage(base, 1, "cid1@x", "pic")
+        val token = imageToken("pic")
+        assertEquals("a${token}b", result.content.text)
+        assertEquals(listOf(RichImage(1, 1 + token.length, "cid1@x", "pic")), result.content.images)
+        // The bold run that began at the caret shifts entirely past the inserted token.
+        assertEquals(listOf(RichSpan(1 + token.length, 2 + token.length, RichStyle.Bold)), result.content.spans)
+        assertEquals(1 + token.length, result.selectionStart)
+        assertEquals(1 + token.length, result.selectionEnd)
+    }
+
+    @Test
+    fun `insertImage output round-trips its image through html`() {
+        val result = RichTextEditing.insertImage(RichTextContent("hi"), 2, "c@x", "cat.png")
+        val restored = RichTextHtml.fromHtml(RichTextHtml.toHtml(result.content))
+        assertEquals(result.content.text, restored.text)
+        assertEquals(result.content.images, restored.images)
+    }
 }

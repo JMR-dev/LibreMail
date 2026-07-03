@@ -344,3 +344,18 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
         db.execSQL("ALTER TABLE `attachments` ADD COLUMN `contentId` TEXT")
     }
 }
+
+/**
+ * v17 -> v18: inline-image support for outgoing mail (issue #77; preserves existing data). Adds an
+ * `attachments` column to `outbox` holding JSON metadata (`{uri, name, contentId?, isInline?}`, one
+ * entry per staged file in index order) so the send worker can pair an inline image's `Content-ID`
+ * with its staged file. `DEFAULT ''` matches the entity's `@ColumnInfo(defaultValue = "")` so the
+ * fresh-install schema validates identically to the migrated one (the MIGRATION_9_10 `bccAddresses`
+ * pattern); a message queued before the upgrade reads back "" and its staged files are still sent as
+ * plain attachments (the send worker's positional fallback).
+ */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `outbox` ADD COLUMN `attachments` TEXT NOT NULL DEFAULT ''")
+    }
+}

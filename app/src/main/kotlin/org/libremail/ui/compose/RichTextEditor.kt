@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +103,9 @@ fun RichTextBodyField(
     label: String,
     modifier: Modifier = Modifier,
     resolveFont: (String) -> FontFamily? = { null },
+    onPickImage: (() -> Unit)? = null,
+    pendingImage: PendingInlineImage? = null,
+    onImageInserted: () -> Unit = {},
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val seed = remember { seedContent(body, bodyHtml) }
@@ -132,6 +136,16 @@ fun RichTextBodyField(
     var showFontColorPicker by remember { mutableStateOf(false) }
     var showHighlightPicker by remember { mutableStateOf(false) }
 
+    // A picked image (chosen in ComposeScreen) is inserted here at the live caret — the editor owns the
+    // cursor — then reported handled so the caller clears it. Keyed on the image so re-picking the same
+    // file (a new instance) still fires.
+    LaunchedEffect(pendingImage) {
+        pendingImage?.let { image ->
+            emit(applyImageInsert(value, image.contentId, image.name, linkColor, resolveFont))
+            onImageInserted()
+        }
+    }
+
     Column(modifier) {
         FormattingToolbar(
             value = value,
@@ -140,6 +154,7 @@ fun RichTextBodyField(
             onLink = { showLinkDialog = true },
             onFontColor = { showFontColorPicker = true },
             onHighlight = { showHighlightPicker = true },
+            onInsertImage = onPickImage,
             onFontSize = { pt ->
                 emit(
                     if (pt != null) {
@@ -245,6 +260,7 @@ private fun FormattingToolbar(
     onFontSize: (Int?) -> Unit,
     onAlignment: (RichAlign) -> Unit,
     onFont: (String?) -> Unit,
+    onInsertImage: (() -> Unit)?,
 ) {
     val content = value.annotatedString.toRichContent()
     val start = value.selection.min
@@ -339,6 +355,16 @@ private fun FormattingToolbar(
             selected = RichTextEditing.alignmentAt(content, start, end),
             onSelect = onAlignment,
         )
+        // The image button is appended last (like the other trailing controls) so it never shifts the
+        // block buttons the compose E2E taps without scrolling. Only shown when the host wires a picker.
+        if (onInsertImage != null) {
+            FormatButton(
+                label = "🖼",
+                description = stringResource(R.string.format_image),
+                active = false,
+                onClick = onInsertImage,
+            )
+        }
     }
 }
 
@@ -532,6 +558,26 @@ internal fun applyAlignment(
         align,
     )
     return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
+}
+
+/** Inserts an inline-image token at the caret and lands the selection just past it (for toolbar wiring). */
+internal fun applyImageInsert(
+    value: TextFieldValue,
+    contentId: String,
+    name: String,
+    linkColor: Color,
+    resolveFont: (String) -> FontFamily? = { null },
+): TextFieldValue {
+    val result = RichTextEditing.insertImage(
+        value.annotatedString.toRichContent(),
+        value.selection.min,
+        contentId,
+        name,
+    )
+    return TextFieldValue(
+        result.content.toAnnotatedString(linkColor, resolveFont),
+        TextRange(result.selectionStart, result.selectionEnd),
+    )
 }
 
 /**

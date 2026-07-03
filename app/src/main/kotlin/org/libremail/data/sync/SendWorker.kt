@@ -12,12 +12,15 @@ import dagger.assisted.AssistedInject
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.toDomain
+import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
+import org.libremail.mail.SendableAttachment
 import org.libremail.mail.SmtpSender
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
@@ -69,15 +72,15 @@ class SendWorker @AssistedInject constructor(
                     body = entity.body,
                     bodyHtml = entity.bodyHtml,
                 )
-                val files = orderedAttachments(attachmentDir)
+                val attachments = stagedAttachments(attachmentDir, entity.attachments.toOutgoingAttachments())
                 if (account.authType == AuthType.OAUTH_OUTLOOK) {
-                    sendOutlook(connectionFactory, account, message, files)
+                    sendOutlook(connectionFactory, account, message, attachments)
                 } else {
                     smtpSender.send(
                         connectionFactory.smtpParamsFor(account),
                         from = account.email,
                         message = message,
-                        attachments = files,
+                        attachments = attachments,
                     )
                 }
             }.fold(
@@ -114,18 +117,18 @@ class SendWorker @AssistedInject constructor(
         connectionFactory: MailConnectionFactory,
         account: Account,
         message: OutgoingMessage,
-        files: List<File>,
+        attachments: List<SendableAttachment>,
     ) {
         try {
             val token = connectionFactory.graphTokenFor(account)
-            graphSender.send(token, message, files)
+            graphSender.send(token, message, attachments)
         } catch (e: GraphSendException) {
             if (e.mayHaveSent) throw e
             smtpSender.send(
                 connectionFactory.smtpParamsFor(account),
                 from = account.email,
                 message = message,
-                attachments = files,
+                attachments = attachments,
             )
         } catch (e: CancellationException) {
             throw e
@@ -136,13 +139,30 @@ class SendWorker @AssistedInject constructor(
                 connectionFactory.smtpParamsFor(account),
                 from = account.email,
                 message = message,
-                attachments = files,
+                attachments = attachments,
             )
         }
     }
 
+    /**
+     * Pairs each staged file with its [metadata] entry by staging index, so an inline image keeps its
+     * `Content-ID`/inline flag alongside its file. A missing file (a copy that failed) is skipped.
+     * When [metadata] is empty — a message queued before the outbox carried attachment metadata, or a
+     * genuinely attachment-less one — falls back to restoring the staged files positionally as plain
+     * attachments, so an in-flight message from before the upgrade still sends its files.
+     */
+    private fun stagedAttachments(dir: File, metadata: List<OutgoingAttachment>): List<SendableAttachment> {
+        if (metadata.isEmpty()) {
+            return orderedAttachmentFiles(dir).map { SendableAttachment(it) }
+        }
+        return metadata.mapIndexedNotNull { index, meta ->
+            val file = File(dir, index.toString()).listFiles()?.firstOrNull() ?: return@mapIndexedNotNull null
+            SendableAttachment(file, contentId = meta.contentId, isInline = meta.isInline)
+        }
+    }
+
     /** Attachments are staged one-per-indexed-subdirectory so their original order is preserved. */
-    private fun orderedAttachments(dir: File): List<File> = dir.listFiles()
+    private fun orderedAttachmentFiles(dir: File): List<File> = dir.listFiles()
         ?.filter { it.isDirectory }
         ?.sortedBy { it.name.toIntOrNull() ?: Int.MAX_VALUE }
         ?.mapNotNull { it.listFiles()?.firstOrNull() }

@@ -32,6 +32,7 @@ import org.libremail.data.local.entity.MessageRouting
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
+import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.MailConnectionFactory
@@ -404,6 +405,9 @@ class MailRepositoryImpl @Inject constructor(
                 body = outgoing.body,
                 createdAt = System.currentTimeMillis(),
                 bodyHtml = outgoing.bodyHtml,
+                // Persist the cid↔file pairing (in staging-index order) so the send worker can attach
+                // an inline image with its Content-ID even though the files are looked up by index.
+                attachments = outgoing.attachments.toOutgoingAttachmentsJson(),
             ),
         )
         sendScheduler.sendNow()
