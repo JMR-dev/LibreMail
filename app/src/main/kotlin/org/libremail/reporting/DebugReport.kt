@@ -31,12 +31,19 @@ data class DebugReport(
     val userComment: String = "",
     /** Reply-to address the user supplied when submitting (see #159); required for online submit. */
     val userEmail: String = "",
+    /**
+     * Whether the startup crash prompt has already auto-offered this report (see #255). Internal
+     * bookkeeping only: persisted with the report but deliberately kept out of [toSubmissionPayload]
+     * so it never leaks into what the user reviews or submits. A missing flag (older stored reports)
+     * reads as `false` — not yet surfaced.
+     */
+    val surfaced: Boolean = false,
 ) {
     /** The exact text shown for review, copied, saved to a file, and POSTed on submit. */
     fun toSubmissionPayload(): String = toJson().toString(JSON_INDENT)
 
-    /** Compact form used for on-disk persistence. */
-    fun toStorageJson(): String = toJson().toString()
+    /** Compact form used for on-disk persistence; adds the internal [surfaced] bookkeeping flag. */
+    fun toStorageJson(): String = toJson().put("surfaced", surfaced).toString()
 
     private fun toJson(): JSONObject {
         val app = JSONObject()
@@ -92,6 +99,7 @@ data class DebugReport(
                 logs = logs,
                 userComment = json.optString("userComment", ""),
                 userEmail = json.optString("userEmail", ""),
+                surfaced = json.optBoolean("surfaced", false),
             )
         }
     }

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.reporting
 
+import org.json.JSONObject
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -92,5 +94,31 @@ class DebugReportTest {
         val payload = sample().copy(userEmail = "reporter@example.com").toSubmissionPayload()
 
         assertTrue(payload.contains("reporter@example.com"))
+    }
+
+    @Test
+    fun `surfaced flag round-trips through storage json`() {
+        val original = sample().copy(surfaced = true)
+
+        val restored = DebugReport.fromStorageJson(original.toStorageJson())
+
+        assertTrue(restored.surfaced)
+        assertEquals(original, restored)
+    }
+
+    @Test
+    fun `a legacy stored report without the surfaced flag reads as not surfaced`() {
+        val legacy = JSONObject(sample().toStorageJson()).apply { remove("surfaced") }.toString()
+
+        val restored = DebugReport.fromStorageJson(legacy)
+
+        assertFalse(restored.surfaced)
+    }
+
+    @Test
+    fun `the internal surfaced flag never appears in the submission payload`() {
+        val payload = sample().copy(surfaced = true).toSubmissionPayload()
+
+        assertFalse(payload.contains("surfaced"))
     }
 }
