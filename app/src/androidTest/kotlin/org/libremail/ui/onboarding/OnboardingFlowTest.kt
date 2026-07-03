@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.onboarding
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -18,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.rule.GrantPermissionRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,6 +56,19 @@ class OnboardingFlowTest {
 
     @get:Rule
     val composeTestRule = createAndroidComposeRule<ComponentActivity>()
+
+    // OnboardingWelcomeScreen requests POST_NOTIFICATIONS when it first composes (#151). On API 33+
+    // that runtime dialog would pop over the test, backgrounding the activity and leaving the compose
+    // rule with "No compose hierarchies found". Pre-grant it so the flow runs uninterrupted; the
+    // permission only exists on API 33+, so below TIRAMISU grant nothing (granting a nonexistent
+    // permission errors on older devices).
+    @get:Rule
+    val notificationPermission: GrantPermissionRule =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            GrantPermissionRule.grant()
+        }
 
     private fun string(resId: Int, vararg args: Any) = composeTestRule.activity.getString(resId, *args)
 
@@ -208,8 +224,10 @@ class OnboardingFlowTest {
         // add" button sit below the fold of this scrolling screen, and a positional click on an
         // off-screen button is a silent no-op (which is why this passed only on API 37's taller AVD).
         waitForText(string(R.string.app_password_email))
-        // Gmail requires 2-Step Verification before app passwords, so its screen (and only its
-        // screen — see yahooSetup_hasNoTwoFactorHelpLink) links Google's setup article (issue #98).
+        // Gmail requires 2-Step Verification before app passwords, so its screen links Google's
+        // setup article (issue #98). iCloud gets the same kind of link, in Apple's own terminology
+        // (see icloudSetup_hasTwoFactorHelpLink); Yahoo does not (see
+        // yahooSetup_hasNoTwoFactorHelpLink).
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help))
             .performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.app_password_email))
@@ -238,7 +256,27 @@ class OnboardingFlowTest {
 
         // Yahoo's setup screen keeps its app-password link…
         waitForText(string(R.string.app_password_open_page, "Yahoo Mail"))
-        // …but gains no 2-Step Verification link: that prerequisite is Gmail-specific (issue #98).
+        // …but gains no two-factor help link: unlike Gmail and iCloud, Yahoo gates nothing on it
+        // (issue #98, #153).
         composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help)).assertDoesNotExist()
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help_icloud)).assertDoesNotExist()
+    }
+
+    @Test
+    fun icloudSetup_hasTwoFactorHelpLink() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText("iCloud Mail")
+        composeTestRule.onNodeWithText("iCloud Mail").performClick()
+
+        // Apple also won't issue an app-specific password until two-factor authentication is on,
+        // so iCloud's screen links Apple's own setup article too — using Apple's terminology for
+        // the button ("Two-Factor Authentication"), not Google's "2-Step Verification" (issue #153).
+        waitForText(string(R.string.app_password_2fa_help_icloud))
+        composeTestRule.onNodeWithText(string(R.string.app_password_2fa_help_icloud))
+            .performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.app_password_open_page, "iCloud Mail"))
+            .assertIsDisplayed()
     }
 }

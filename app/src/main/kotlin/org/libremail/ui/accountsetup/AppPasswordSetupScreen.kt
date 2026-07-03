@@ -151,15 +151,16 @@ fun AppPasswordSetupScreen(
             )
 
             Spacer(Modifier.height(12.dp))
-            // Only Gmail has a two-factor prerequisite (see MailProvider.twoFactorHelpUrl): its
-            // app-passwords page rejects accounts without 2-Step Verification, so point users
-            // there first instead of sending them to the app-passwords page's dead end.
+            // Gmail and iCloud both have a two-factor prerequisite (see
+            // MailProvider.twoFactorHelpUrl): neither will issue an app password until it's on, so
+            // point users there first instead of sending them to the app-passwords page's dead
+            // end. Yahoo has no twoFactorHelpUrl, so this renders nothing for it.
             provider.twoFactorHelpUrl?.let { twoFactorHelpUrl ->
                 OutlinedButton(
                     onClick = { openUrl(twoFactorHelpUrl) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.app_password_2fa_help))
+                    Text(stringResource(twoFactorHelpLabel(provider)))
                 }
                 Spacer(Modifier.height(8.dp))
             }
@@ -267,6 +268,16 @@ private fun providerIntro(provider: MailProvider): Int = when (provider) {
     MailProvider.GMAIL -> R.string.app_password_intro_gmail
     MailProvider.YAHOO -> R.string.app_password_intro_yahoo
     MailProvider.ICLOUD -> R.string.app_password_intro_icloud
+}
+
+/**
+ * Button copy for the two-factor prerequisite link, in each provider's own terminology — Google
+ * calls it "2-Step Verification", Apple "Two-Factor Authentication". Only reached for providers
+ * that expose [MailProvider.twoFactorHelpUrl]; Yahoo has none, so its branch here is unused.
+ */
+private fun twoFactorHelpLabel(provider: MailProvider): Int = when (provider) {
+    MailProvider.ICLOUD -> R.string.app_password_2fa_help_icloud
+    MailProvider.GMAIL, MailProvider.YAHOO -> R.string.app_password_2fa_help
 }
 
 private fun MailSecurity.label(): String = when (this) {
