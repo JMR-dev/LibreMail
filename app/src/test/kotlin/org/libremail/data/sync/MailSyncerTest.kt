@@ -44,6 +44,9 @@ class MailSyncerTest {
     /** The IMAP client of the most recently built [syncer], for verifying the fetch window size. */
     private lateinit var lastImapClient: ImapClient
 
+    /** The MessageDao of the most recently built [syncer], for verifying what got persisted. */
+    private lateinit var lastMessageDao: MessageDao
+
     /** A syncer whose header sync is a no-op (no server messages) so tests focus on the prefetch step. */
     private fun syncer(
         policy: FetchPolicy,
@@ -52,14 +55,16 @@ class MailSyncerTest {
         accountSettings: AccountSettings = AccountSettings("acct"),
         globalSettings: AppSettings = AppSettings(),
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
+        fetched: List<FetchedMessage> = emptyList(),
     ): MailSyncer {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getById("acct") } returns account
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.getSyncedIds(any(), any()) } returns emptyList()
         coEvery { messageDao.getUnfetchedIds("acct", "INBOX") } returns listOf("acct:INBOX:1")
+        lastMessageDao = messageDao
         val imapClient = mockk<ImapClient>()
-        coEvery { imapClient.fetchRecent(any(), any(), any()) } returns emptyList()
+        coEvery { imapClient.fetchRecent(any(), any(), any()) } returns fetched
         lastImapClient = imapClient
         val connectionFactory = mockk<MailConnectionFactory>()
         coEvery { connectionFactory.imapParamsFor(any()) } returns mockk<ImapConnectionParams>()
@@ -133,6 +138,30 @@ class MailSyncerTest {
             .syncFolder("acct", "INBOX")
 
         coVerify { lastImapClient.fetchRecent(any(), "INBOX", 50) }
+    }
+
+    @Test
+    fun `age retention does not re-insert fetched messages older than the cutoff`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val now = System.currentTimeMillis()
+        val day = 24L * 60 * 60 * 1000
+        val recentTs = now - 10 * day // well within a 6-month window
+        val oldTs = now - 400 * day // well past a 6-month window — the pruner would delete it
+        val fetched = listOf(
+            FetchedMessage("2", "New", "new@example.org", "recent", recentTs, isRead = true, isFlagged = false),
+            FetchedMessage("1", "Old", "old@example.org", "stale", oldTs, isRead = true, isFlagged = false),
+        )
+
+        syncer(
+            FetchPolicy.ON_DEMAND,
+            repo,
+            accountSettings = AccountSettings("acct", retentionMonths = 6),
+            fetched = fetched,
+        ).syncFolder("acct", "INBOX")
+
+        // Only the in-window message is persisted; the past-cutoff one is never re-inserted, so the age
+        // pruner won't just delete it again next cycle (#193 — no re-download/re-prune churn loop).
+        coVerify { lastMessageDao.insertNew(match { batch -> batch.map { it.timestampMillis } == listOf(recentTs) }) }
     }
 
     @Test
