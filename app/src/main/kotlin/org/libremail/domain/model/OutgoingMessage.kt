@@ -33,3 +33,12 @@ data class OutgoingAttachment(
     val contentId: String? = null,
     val isInline: Boolean = false,
 )
+
+/**
+ * Sanitizes a picked or received attachment display name before it becomes an on-disk filename or a
+ * MIME `Content-Disposition` filename: drops any path prefix and strips ISO control characters
+ * (including CR/LF), so a crafted name can neither traverse directories nor inject header lines.
+ * Falls back to `"attachment"` when nothing usable remains.
+ */
+fun sanitizeAttachmentName(raw: String): String =
+    raw.substringAfterLast('/').substringAfterLast('\\').filterNot { it.isISOControl() }.ifBlank { "attachment" }

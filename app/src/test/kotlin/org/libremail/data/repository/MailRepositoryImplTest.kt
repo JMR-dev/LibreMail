@@ -79,6 +79,8 @@ class MailRepositoryImplTest {
         sendScheduler = mockk(),
         accountSettingsRepository = accountSettingsRepository,
         signatureRepository = signatureRepository,
+        // Grant-release wiring (deleteDraft / cancelOutboxMessage) is covered by MailRepositoryGrantsTest.
+        attachmentUriGrants = mockk(relaxed = true),
     )
 
     @Test

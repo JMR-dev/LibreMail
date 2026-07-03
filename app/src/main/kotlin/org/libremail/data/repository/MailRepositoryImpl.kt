@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
 import org.libremail.data.Snippet
+import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -32,6 +33,7 @@ import org.libremail.data.local.entity.MessageRouting
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
+import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
@@ -49,6 +51,7 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.UnreadCount
+import org.libremail.domain.model.sanitizeAttachmentName
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import java.io.File
@@ -70,6 +73,7 @@ class MailRepositoryImpl @Inject constructor(
     private val sendScheduler: SendScheduler,
     private val accountSettingsRepository: AccountSettingsRepository,
     private val signatureRepository: SignatureRepository,
+    private val attachmentUriGrants: AttachmentUriGrants,
 ) : MailRepository {
 
     // Application-lifetime scope for fire-and-forget server pushes that must outlive the caller — e.g.
@@ -421,7 +425,7 @@ class MailRepositoryImpl @Inject constructor(
     private fun copyAttachments(outboxId: String, attachments: List<OutgoingAttachment>) {
         if (attachments.isEmpty()) return
         attachments.forEachIndexed { index, attachment ->
-            val safeName = attachment.name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+            val safeName = sanitizeAttachmentName(attachment.name)
             val dir = File(context.cacheDir, "outbox/$outboxId/$index").apply { mkdirs() }
             runCatching {
                 context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { input ->
@@ -437,15 +441,24 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun saveDraft(draft: Draft) = draftDao.upsert(draft.toEntity())
 
-    override suspend fun deleteDraft(id: String) = draftDao.delete(id)
+    override suspend fun deleteDraft(id: String) {
+        // Capture the draft's attachment URIs before the row is gone, then release any persistable grant
+        // no other live draft/outbox row still needs (security review): a deleted draft can never reopen.
+        val uris = draftDao.getById(id)?.attachments?.toOutgoingAttachments()?.map { it.uri }.orEmpty()
+        draftDao.delete(id)
+        attachmentUriGrants.releaseUnreferenced(uris)
+    }
 
     override fun observeOutbox(): Flow<List<OutboxMessage>> = outboxDao.observeAll().map { rows ->
         rows.map { it.toDomain() }
     }
 
     override suspend fun cancelOutboxMessage(id: String) {
+        val uris = outboxDao.getById(id)?.attachments?.toOutgoingAttachments()?.map { it.uri }.orEmpty()
         outboxDao.delete(id)
         File(context.cacheDir, "outbox/$id").deleteRecursively()
+        // The queued copy is gone; release any picked-URI grant no other live draft/outbox row needs.
+        attachmentUriGrants.releaseUnreferenced(uris)
     }
 
     override suspend fun retryOutbox() = sendScheduler.sendNow()
@@ -484,7 +497,7 @@ class MailRepositoryImpl @Inject constructor(
      * and avoids filename collisions between messages.
      */
     private fun attachmentFile(messageId: String, partIndex: Int, filename: String): File {
-        val safeName = filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+        val safeName = sanitizeAttachmentName(filename)
         return File(attachmentCacheDir(context.cacheDir, messageId), "$partIndex/$safeName")
     }
 }

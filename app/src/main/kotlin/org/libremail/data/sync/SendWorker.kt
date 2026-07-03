@@ -9,8 +9,10 @@ import androidx.work.WorkerParameters
 import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.security.EncryptedCacheGuard
@@ -39,6 +41,8 @@ class SendWorker @AssistedInject constructor(
     private val graphSender: GraphSender,
     private val connectionFactory: Lazy<MailConnectionFactory>,
     private val cacheGuard: EncryptedCacheGuard,
+    // Lazy for the same reason as the DAOs above: resolving it touches the Room DB.
+    private val attachmentUriGrants: Lazy<AttachmentUriGrants>,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private companion object {
@@ -50,6 +54,7 @@ class SendWorker @AssistedInject constructor(
         val outboxDao = this.outboxDao.get()
         val accountDao = this.accountDao.get()
         val connectionFactory = this.connectionFactory.get()
+        val attachmentUriGrants = this.attachmentUriGrants.get()
         val pending = outboxDao.getAll()
         if (pending.isEmpty()) return Result.success()
 
@@ -60,6 +65,7 @@ class SendWorker @AssistedInject constructor(
             if (account == null) {
                 outboxDao.delete(entity.id) // account removed — drop the queued message
                 attachmentDir.deleteRecursively()
+                attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
                 continue
             }
             runCatching {
@@ -87,6 +93,9 @@ class SendWorker @AssistedInject constructor(
                 onSuccess = {
                     outboxDao.delete(entity.id)
                     attachmentDir.deleteRecursively()
+                    // The picked bytes were staged at enqueue; with the row sent, drop the persistable
+                    // grant unless a live draft/outbox row still references the same URI (security review).
+                    attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
                 },
                 onFailure = { e ->
                     if (e is GraphSendException && e.mayHaveSent) {
@@ -167,4 +176,7 @@ class SendWorker @AssistedInject constructor(
         ?.sortedBy { it.name.toIntOrNull() ?: Int.MAX_VALUE }
         ?.mapNotNull { it.listFiles()?.firstOrNull() }
         .orEmpty()
+
+    /** The picked content-URIs this queued message was built from, for releasing their persistable grants. */
+    private fun OutboxEntity.attachmentUris(): List<String> = attachments.toOutgoingAttachments().map { it.uri }
 }

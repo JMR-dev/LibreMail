@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.collect
 import org.libremail.R
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.OutgoingAttachment
+import org.libremail.domain.model.sanitizeAttachmentName
 import org.libremail.ui.compose.format.FontRegistry
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -410,7 +411,9 @@ private fun queryFileName(context: Context, uri: Uri): String {
     val name = context.contentResolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-    return name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
+    // Strip path separators / control chars so a crafted display name can't traverse dirs or inject
+    // into the on-disk name or the MIME Content-Disposition filename (security review).
+    return sanitizeAttachmentName(name ?: uri.lastPathSegment.orEmpty())
 }
 
 @Composable
