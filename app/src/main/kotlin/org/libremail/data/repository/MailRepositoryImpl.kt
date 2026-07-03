@@ -106,14 +106,14 @@ class MailRepositoryImpl @Inject constructor(
         mailboxPager { messageDao.pagingFolderSummaries(accountId, folder) }
 
     override fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>> =
-        mailboxPager { messageDao.pagingUnifiedFolderSearchSummaries(folder, likePattern(query)) }
+        mailboxPager { messageDao.pagingUnifiedFolderSearchSummaries(folder, likePattern(query.lowercase())) }
 
     override fun pagedFolderSearchMessages(
         accountId: String,
         folder: String,
         query: String,
     ): Flow<PagingData<Message>> =
-        mailboxPager { messageDao.pagingFolderSearchSummaries(accountId, folder, likePattern(query)) }
+        mailboxPager { messageDao.pagingFolderSearchSummaries(accountId, folder, likePattern(query.lowercase())) }
 
     /**
      * Shared [Pager] for the per-account and search mailbox lists (issue #214). Same window sizing as
