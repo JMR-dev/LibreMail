@@ -10,6 +10,7 @@ import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -18,6 +19,8 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.AppSettings
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AccountSettings
@@ -66,6 +69,7 @@ class ComposeViewModelTest {
         signatures: Map<String, Signature> = emptyMap(),
         settings: Map<String, AccountSettings> = emptyMap(),
         mailRepository: MailRepository = mockk(relaxed = true),
+        defaultAccountId: String? = null,
     ): ComposeViewModel {
         val accountRepository = mockk<AccountRepository>()
         every { accountRepository.observeAccounts() } returns MutableStateFlow(accounts)
@@ -76,6 +80,8 @@ class ComposeViewModelTest {
         }
         val signatureRepository = mockk<SignatureRepository>()
         coEvery { signatureRepository.getDefault(any()) } answers { signatures[firstArg<String>()] }
+        val settingsRepository = mockk<SettingsRepository>()
+        every { settingsRepository.settings } returns flowOf(AppSettings(defaultAccountId = defaultAccountId))
         return ComposeViewModel(
             savedStateHandle = savedState,
             mailRepository = mailRepository,
@@ -83,6 +89,7 @@ class ComposeViewModelTest {
             contactsRepository = mockk(relaxed = true),
             accountSettingsRepository = accountSettingsRepository,
             signatureRepository = signatureRepository,
+            settingsRepository = settingsRepository,
         )
     }
 
@@ -118,6 +125,40 @@ class ComposeViewModelTest {
         vm.selectFrom("imap:b")
 
         assertEquals("\n\n-- \nBest, Bob", vm.state.value.body)
+    }
+
+    @Test
+    fun `uses the persisted default account when no explicit from-account is given`() = runTest(testDispatcher) {
+        val vm = viewModel(accounts = listOf(alice, bob), defaultAccountId = bob.id)
+
+        assertEquals(bob.id, vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `falls back to the first account when the persisted default no longer exists`() = runTest(testDispatcher) {
+        // Simulates a default that outlived its account (deletion, or a Backup restore onto a device
+        // that never had it) — must fall back to the incidental first-alphabetically account, not crash.
+        val vm = viewModel(accounts = listOf(alice, bob), defaultAccountId = "imap:deleted-account")
+
+        assertEquals(alice.id, vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `falls back to the first account when no default is set`() = runTest(testDispatcher) {
+        val vm = viewModel(accounts = listOf(alice, bob), defaultAccountId = null)
+
+        assertEquals(alice.id, vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `an explicit from-account wins over the persisted default`() = runTest(testDispatcher) {
+        val vm = viewModel(
+            accounts = listOf(alice, bob),
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_FROM to alice.id)),
+            defaultAccountId = bob.id,
+        )
+
+        assertEquals(alice.id, vm.state.value.fromAccountId)
     }
 
     @Test
