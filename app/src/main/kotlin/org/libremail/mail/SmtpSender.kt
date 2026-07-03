@@ -121,7 +121,9 @@ class SmtpSender @Inject constructor() {
     /** An inline image part: attached bytes, a `Content-ID` the HTML's `cid:` matches, inline disposition. */
     private fun inlinePart(attachment: SendableAttachment): MimeBodyPart = MimeBodyPart().apply {
         attachFile(attachment.file)
-        contentID = "<${attachment.contentId}>"
+        // Sanitize before it becomes a header value: a CR/LF in the content id would otherwise inject
+        // additional MIME header lines into this part (issue #204, defense-in-depth).
+        contentID = "<${sanitizeContentId(attachment.contentId)}>"
         setDisposition(MimeBodyPart.INLINE)
     }
 

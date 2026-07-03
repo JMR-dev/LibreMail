@@ -127,4 +127,21 @@ class GraphSenderTest {
             image.delete()
         }
     }
+
+    @Test
+    fun `an inline image contentId is stripped of control characters in the payload`() {
+        val image = File.createTempFile("graph-inline", ".png").apply { writeText("PNGDATA") }
+        try {
+            val message = message(to = "a@x.com").copy(bodyHtml = "<p><img src=\"cid:logo@libremail\"></p>")
+            // A crafted content id with CR/LF and a control char; only the printable text must remain.
+            val inline = SendableAttachment(image, contentId = "logo@libremail\r\nevil", isInline = true)
+            val contentId = JSONObject(buildSendMailPayload(message, listOf(inline)))
+                .getJSONObject("message").getJSONArray("attachments").getJSONObject(0)
+                .getString("contentId")
+            assertEquals("logo@libremailevil", contentId)
+            assertFalse('\r' in contentId || '\n' in contentId, "contentId=$contentId")
+        } finally {
+            image.delete()
+        }
+    }
 }

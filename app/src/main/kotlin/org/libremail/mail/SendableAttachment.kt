@@ -14,3 +14,12 @@ data class SendableAttachment(val file: File, val contentId: String? = null, val
     /** True only for a genuine inline image (inline flag set and a content id to reference it by). */
     val isInlineImage: Boolean get() = isInline && contentId != null
 }
+
+/**
+ * Strips CR/LF and other ISO control characters from a [SendableAttachment.contentId] before it is
+ * emitted as a MIME `Content-ID` header ([SmtpSender]) or a Graph JSON field ([GraphSender]), so a
+ * contentId that ever became attacker-influenced could not inject a header line. Today's ids are
+ * app-generated (`img-<uuid>@libremail`) and contain none, so this is a no-op for them — it is
+ * defense-in-depth against a future change letting external values reach [contentId] (issue #204).
+ */
+internal fun sanitizeContentId(raw: String?): String = raw.orEmpty().filterNot { it.isISOControl() }
