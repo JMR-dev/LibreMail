@@ -28,6 +28,8 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.richtext.RichBaseStyle
+import org.libremail.richtext.RichStyle
 import org.libremail.richtext.RichTextContent
 import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.navigation.Routes
@@ -122,16 +124,20 @@ class ComposeViewModel @Inject constructor(
             // signature. Reply/forward drafts already carry theirs, so they take the draft branch above.
             viewModelScope.launch {
                 val available = accountRepository.observeAccounts().first { it.isNotEmpty() }
+                val settings = settingsRepository.settings.first()
                 // The persisted default (#163) only counts if it still names an account that exists.
                 // Deleting the default account normally clears this via
                 // SettingsRepository.clearDefaultAccountId, but a stale id could still reach here (e.g.
                 // a Backup restore onto a device that never had the account) — validate rather than
                 // trust it, so it just falls through to the incidental "first account alphabetically"
                 // behavior instead of crashing or composing from a nonexistent account.
-                val defaultAccountId = settingsRepository.settings.first().defaultAccountId
-                val validDefaultAccountId = defaultAccountId?.takeIf { id -> available.any { it.id == id } }
+                val validDefaultAccountId = settings.defaultAccountId?.takeIf { id -> available.any { it.id == id } }
                 val effectiveId = _state.value.fromAccountId ?: validDefaultAccountId ?: available.first().id
                 applySignature(effectiveId)
+                // Seed the message-wide default font (#78) after the signature is applied, so the whole
+                // body — including the signature just appended — picks it up. New compositions only:
+                // replies/forwards resume as drafts and take the branch above, left untouched.
+                seedRememberedFont(settings.lastFontCss, settings.lastFontSizePt)
             }
         }
     }
@@ -201,6 +207,45 @@ class ComposeViewModel @Inject constructor(
     /** Keeps an HTML body only when it actually carries formatting, so plaintext stays plaintext. */
     private fun normalizedHtml(html: String): String? =
         if (html.isBlank() || !RichTextHtml.fromHtml(html).hasFormatting()) null else html
+
+    /**
+     * Seeds a brand-new composition with the last-remembered font (#78) by wrapping the current body
+     * in a [RichBaseStyle], so the whole message — including any signature just applied — defaults to
+     * it. A no-op when nothing has been remembered yet, so a message that would otherwise stay
+     * plaintext-only isn't forced into an HTML body for no visible reason (an empty [RichBaseStyle]
+     * still flips [RichTextContent.hasFormatting]).
+     */
+    private fun seedRememberedFont(fontCss: String?, fontSizePt: Int?) {
+        if (fontCss == null && fontSizePt == null) return
+        _state.update { s ->
+            val content = (s.bodyHtml?.let(RichTextHtml::fromHtml) ?: RichTextContent(text = s.body))
+                .copy(baseStyle = RichBaseStyle(fontCss, fontSizePt))
+            s.copy(bodyHtml = RichTextHtml.toHtml(content))
+        }
+    }
+
+    /**
+     * Remembers the font used in a just-sent formatted message (#78): the message-wide base style if
+     * one is set, else the last `FontFamily`/`FontSize` span in the body (the formatting nearest the
+     * end of the message). A no-op for a plaintext send ([bodyHtml] null) or a formatted one that never
+     * touched the font — an unrelated send must never clear a previously remembered preference.
+     */
+    private suspend fun rememberFontPreference(bodyHtml: String?) {
+        val html = bodyHtml ?: return
+        val (fontCss, fontSizePt) = lastFontIn(RichTextHtml.fromHtml(html)) ?: return
+        settingsRepository.setLastFont(fontCss, fontSizePt)
+    }
+
+    /** The base style if set, else the last matching inline font span; null when neither is present. */
+    private fun lastFontIn(content: RichTextContent): Pair<String?, Int?>? {
+        content.baseStyle?.let { return it.fontCss to it.fontSizePt }
+        val css = content.spans.lastOrNull { it.style is RichStyle.FontFamily }
+            ?.let { (it.style as RichStyle.FontFamily).css }
+        val sizePt = content.spans.lastOrNull { it.style is RichStyle.FontSize }
+            ?.let { (it.style as RichStyle.FontSize).pt }
+        return if (css != null || sizePt != null) css to sizePt else null
+    }
+
     fun addAttachments(items: List<OutgoingAttachment>) =
         _state.update { it.copy(attachments = it.attachments + items) }
     fun removeAttachment(uri: String) = _state.update {
@@ -331,6 +376,7 @@ class ComposeViewModel @Inject constructor(
             ),
         ).fold(
             onSuccess = {
+                rememberFontPreference(s.bodyHtml)
                 draftId?.let { mailRepository.deleteDraft(it) }
                 _state.update { it.copy(sending = false) }
                 finish()
