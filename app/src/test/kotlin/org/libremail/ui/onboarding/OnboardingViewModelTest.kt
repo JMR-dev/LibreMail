@@ -135,6 +135,17 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun `marking the license accepted persists the flag`() = runTest(testDispatcher) {
+        val repo = settingsRepository()
+        coEvery { repo.setLicenseAccepted(any()) } just Runs
+        val vm = viewModel(settings = repo)
+
+        vm.markLicenseAccepted()
+
+        coVerify { repo.setLicenseAccepted(true) }
+    }
+
+    @Test
     fun `marking the contacts prompt handled persists the flag`() = runTest(testDispatcher) {
         val repo = settingsRepository()
         coEvery { repo.setContactsPromptHandled(any()) } just Runs

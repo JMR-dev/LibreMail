@@ -99,6 +99,12 @@ class OnboardingFlowTest {
         // Real collaborators are cheap here: the manager just wraps PowerManager and the repository
         // reads the on-device settings DataStore. This test drives its own nav graph (without the
         // battery step), so the onboarding view model's battery decision is inert for this flow.
+        //
+        // This hand-rolled graph starts at ONBOARDING_WELCOME directly, deliberately bypassing the
+        // GPL-3.0 license gate (#172) that precedes it in the real onboardingGraph() in
+        // LibreMailApp.kt: this test owns the picker → setup → finish tail, not the license screen's
+        // own contract (scroll-to-agree, decline-exits, hard-gating), which LicenseScreenTest covers
+        // in isolation instead.
         val appContext = composeTestRule.activity.applicationContext
         val onboarding = OnboardingViewModel(
             BatteryOptimizationManager(appContext),

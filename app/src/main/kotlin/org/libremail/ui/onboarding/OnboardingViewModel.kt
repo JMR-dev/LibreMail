@@ -101,6 +101,11 @@ class OnboardingViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setBatteryPromptHandled(true) }
     }
 
+    /** Record that the user agreed to the license (#172) so onboarding never shows it again. */
+    fun markLicenseAccepted() {
+        viewModelScope.launch { settingsRepository.setLicenseAccepted(true) }
+    }
+
     /** Re-read the live `READ_CONTACTS` grant; call when the contacts step resumes. */
     fun refreshContactsStatus() {
         _contactsGranted.value = contactsPermissionManager.hasPermission()
