@@ -272,6 +272,26 @@ class RichTextEditorTest {
         assertTrue(result.annotatedString.toRichContent().links.isEmpty())
     }
 
+    // --- applyAlignment ---
+
+    @Test
+    fun `applyAlignment centers the selection's paragraphs and keeps the selection`() {
+        val value = field("a\nb", TextRange(0, 3))
+        val result = applyAlignment(value, RichAlign.CENTER, linkColor, noFont)
+        assertEquals(TextRange(0, 3), result.selection)
+        assertEquals(
+            listOf(RichAlignment(0, 3, RichAlign.CENTER)),
+            result.annotatedString.toRichContent().alignments,
+        )
+    }
+
+    @Test
+    fun `applyAlignment start clears an existing alignment`() {
+        val centered = applyAlignment(field("hello", TextRange(0, 5)), RichAlign.CENTER, linkColor, noFont)
+        val cleared = applyAlignment(centered, RichAlign.START, linkColor, noFont)
+        assertTrue(cleared.annotatedString.toRichContent().alignments.isEmpty())
+    }
+
     // --- applyBaseStyle ---
 
     @Test
