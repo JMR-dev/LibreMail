@@ -269,8 +269,6 @@ private fun FormattingToolbar(
             strikethrough = true,
             onClick = { onToggleStyle(RichStyle.Strikethrough) },
         )
-        val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
-        FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
         val fontColorArgb = RichTextEditing.styleAt(content, start, end, RichStyle.FontColor::class.java)?.argb
         FormatButton(
             label = "A",
@@ -311,6 +309,14 @@ private fun FormattingToolbar(
             active = false,
             onClick = onLink,
         )
+        // The font-size dropdown trails every glyph button on purpose. The toolbar overflows the
+        // screen width and scrolls horizontally, and the compose E2E taps the "•" bullet button
+        // *without* scrolling first (see ComposeScreenTest.formattingToolbar_bulletButtonMarksTheLine...),
+        // so its click lands on the button's on-screen center. Any control inserted *before* the block
+        // buttons shifts them right and can push the bullet past the viewport, making that tap miss —
+        // so this wider control is appended last, leaving every pre-existing button in its tested spot.
+        val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
+        FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
     }
 }
 
