@@ -178,9 +178,10 @@ detekt {
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
 }
 
-// Pin a modern JaCoCo so the coverage agent understands Kotlin 2.4.0 bytecode on JDK 21.
+// Pin a modern JaCoCo (version catalog) so the coverage agent understands Kotlin 2.4.0 bytecode
+// on JDK 21.
 jacoco {
-    toolVersion = "0.8.13"
+    toolVersion = libs.versions.jacoco.get()
 }
 
 // Unit-test coverage report (issue #192). Reads the exec data the base `jacoco` plugin records for
@@ -198,24 +199,38 @@ tasks.register<JacocoReport>("jacocoTestReport") {
         html.required.set(true)
     }
 
-    // Strip generated code from the denominator so the % reflects hand-written Kotlin: Room (*_Impl*),
-    // Hilt/Dagger, Compose singletons/synthetics, and Android BuildConfig/R/Manifest scaffolding.
+    // Strip generated code from the denominator so the % reflects hand-written Kotlin. Verified
+    // against an actual compileDebugKotlin output tree: Room's KSP-generated `_Impl` DAOs/database
+    // and the Compose compiler's per-file ComposableSingletons holders are the only generated code
+    // that actually lands in classDirectories below (Room's KSP output is added as an extra Kotlin
+    // source root on the *same* compile task, so it comes out the same door as hand-written code).
+    // Hilt/Dagger's generated Java (Hilt_*, Dagger*_HiltComponents*, *_GeneratedInjector, *_Factory,
+    // *_MembersInjector, hilt_aggregated_deps) and AGP's BuildConfig/R/Manifest are compiled by a
+    // separate javac task (hiltJavaCompileDebug / compileDebugJavaWithJavac) into a directory this
+    // report never reads, so those patterns are conventional belt-and-suspenders in case that ever
+    // changes. DataBinding isn't enabled in this module (no buildFeatures.dataBinding/viewBinding),
+    // so there's nothing generated for it to exclude; if it's turned on later, add "**/BR.class",
+    // "**/DataBinderMapperImpl*.class" and "**/*Binding.class".
+    //
+    // Deliberately NOT excluded: Kotlin's own `$$inlined$` synthetic classes (e.g. for
+    // `Flow.map { ... }` in the repositories) — those hold real hand-written transform logic, not
+    // generated boilerplate, so stripping them would silently shrink the measured surface.
     val generated = listOf(
         "**/R.class",
         "**/R\$*.class",
         "**/BuildConfig.*",
         "**/Manifest*.*",
+        "**/Hilt_*.class",
+        "**/Dagger*.class",
         "**/*_Hilt*",
+        "**/*_GeneratedInjector.class",
         "**/hilt_aggregated_deps/**",
         "**/dagger/**",
         "**/*_Factory*",
         "**/*_MembersInjector*",
         "**/*_Provide*",
-        "**/*_Impl_*",
         "**/*_Impl*",
         "**/ComposableSingletons*",
-        "**/*\$\$*",
-        "**/*\$*Lambda*",
     )
 
     // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output). All hand-written

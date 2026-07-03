@@ -16,6 +16,7 @@ Use a **JDK 17–21** for the Gradle daemon. AGP 9.2 does **not** support JDK 25
 ./gradlew :app:testDebugUnitTest    # JVM unit tests
 ./gradlew :app:lintDebug            # Android lint
 ./gradlew :app:ktlintCheck :app:detekt   # static analysis (CI's "Static analysis" gate)
+./gradlew :app:jacocoTestReport     # JVM unit-test coverage (XML+HTML under app/build/reports/jacoco/)
 # single unit test:
 ./gradlew :app:testDebugUnitTest --tests "org.libremail.data.SomeClassTest"
 ```
