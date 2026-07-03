@@ -268,16 +268,18 @@ private fun providerIntro(provider: MailProvider): Int = when (provider) {
     MailProvider.GMAIL -> R.string.app_password_intro_gmail
     MailProvider.YAHOO -> R.string.app_password_intro_yahoo
     MailProvider.ICLOUD -> R.string.app_password_intro_icloud
+    MailProvider.AOL -> R.string.app_password_intro_aol
 }
 
 /**
  * Button copy for the two-factor prerequisite link, in each provider's own terminology — Google
  * calls it "2-Step Verification", Apple "Two-Factor Authentication". Only reached for providers
- * that expose [MailProvider.twoFactorHelpUrl]; Yahoo has none, so its branch here is unused.
+ * that expose [MailProvider.twoFactorHelpUrl]; Yahoo and AOL have none, so their branches here are
+ * unused.
  */
 private fun twoFactorHelpLabel(provider: MailProvider): Int = when (provider) {
     MailProvider.ICLOUD -> R.string.app_password_2fa_help_icloud
-    MailProvider.GMAIL, MailProvider.YAHOO -> R.string.app_password_2fa_help
+    MailProvider.GMAIL, MailProvider.YAHOO, MailProvider.AOL -> R.string.app_password_2fa_help
 }
 
 private fun MailSecurity.label(): String = when (this) {
