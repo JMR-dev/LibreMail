@@ -128,6 +128,36 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
                 label = { Text(stringResource(R.string.report_comment_label)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
+                isError = !state.isCommentLongEnough,
+                supportingText = {
+                    Text(
+                        stringResource(
+                            R.string.report_comment_counter,
+                            state.comment.length,
+                            ReportSubmissionRules.MIN_COMMENT_LENGTH,
+                        ),
+                    )
+                },
+            )
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = state.email,
+                onValueChange = viewModel::updateEmail,
+                label = { Text(stringResource(R.string.report_email_label)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                isError = !state.isEmailValid,
+                supportingText = {
+                    if (!state.isEmailValid) {
+                        Text(stringResource(R.string.report_email_invalid))
+                    }
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.report_email_consent),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(16.dp))
             Text(
@@ -141,7 +171,9 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
             Spacer(Modifier.height(16.dp))
             Button(
                 onClick = viewModel::submit,
-                enabled = state.submit != SubmitUiState.SUBMITTING,
+                enabled = state.submit != SubmitUiState.SUBMITTING &&
+                    state.isCommentLongEnough &&
+                    state.isEmailValid,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.report_submit))
