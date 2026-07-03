@@ -30,6 +30,7 @@ import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageRouting
 import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
@@ -176,6 +177,7 @@ class MailRepositoryImplTest {
     @Test
     fun `openMessage fetches the body from the message's own folder, not the inbox`() = runTest {
         val id = "acct:Archive:5"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "Archive")
         coEvery { messageDao.getById(id) } returns messageEntity(id, "Archive")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -194,6 +196,7 @@ class MailRepositoryImplTest {
     @Test
     fun `openMessage derives a readable plain-text snippet from an HTML body`() = runTest {
         val id = "acct:INBOX:20"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -224,6 +227,7 @@ class MailRepositoryImplTest {
         // (CompletableDeferred.complete), and JUnit4 requires @Test methods to return void/Unit.
         runBlocking {
             val id = "acct:INBOX:40"
+            coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX", bodyFetched = true)
             coEvery { messageDao.getById(id) } returns
                 messageEntity(id, "INBOX", bodyFetched = true) // isRead = false
             coEvery { accountDao.getById("acct") } returns accountEntity()
@@ -252,6 +256,7 @@ class MailRepositoryImplTest {
     @Test
     fun `a failed SEEN-flag push is retried in the background`() = runBlocking {
         val id = "acct:INBOX:41"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX", bodyFetched = true)
         coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX", bodyFetched = true)
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -268,11 +273,34 @@ class MailRepositoryImplTest {
     }
 
     @Test
+    fun `openMessage does no credential, network, or second full read for a cached read message`() = runTest {
+        val id = "acct:INBOX:42"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX", bodyFetched = true, isRead = true)
+        coEvery { messageDao.getById(id) } returns
+            messageEntity(id, "INBOX", bodyFetched = true, isRead = true, body = "Cached body")
+
+        val result = repository.openMessage(id)
+
+        // The reader still gets the stored body back...
+        assertEquals("Cached body", result.getOrThrow().body)
+        // ...but a cached, already-read open resolves no account/credentials, touches no network, and
+        // never re-marks the row read (issue #186 — the Keystore decrypt + DataStore read are skipped).
+        coVerify(exactly = 0) { accountDao.getById(any()) }
+        coVerify(exactly = 0) { connectionFactory.imapParamsFor(any()) }
+        coVerify(exactly = 0) { imapClient.fetchBodyMarkingSeen(any(), any(), any()) }
+        coVerify(exactly = 0) { imapClient.setFlag(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { messageDao.setRead(any(), any()) }
+        // Routing used the body-less projection; the only full-body read is the single returned value.
+        coVerify(exactly = 1) { messageDao.getRouting(id) }
+        coVerify(exactly = 1) { messageDao.getById(id) }
+    }
+
+    @Test
     fun `prefetchMessage leaves a plain-text body's literal angle brackets in the snippet`() = runTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:21"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "21") } returns
@@ -290,7 +318,7 @@ class MailRepositoryImplTest {
     @Test
     fun `archive moves messages to the account's archive folder and drops the local rows`() = runTest {
         val id = "acct:INBOX:5"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(listOf(id)) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -306,7 +334,7 @@ class MailRepositoryImplTest {
     @Test
     fun `trash falls back to a permanent delete when the account has no trash folder`() = runTest {
         val id = "acct:INBOX:7"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -324,7 +352,7 @@ class MailRepositoryImplTest {
     @Test
     fun `archive fails when the account has no archive folder`() = runTest {
         val id = "acct:INBOX:9"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -338,7 +366,7 @@ class MailRepositoryImplTest {
     @Test
     fun `expunge permanently deletes each message from its own folder`() = runTest {
         val id = "acct:Trash:3"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "Trash")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "Trash"))
         coEvery { messageDao.deleteByIds(listOf(id)) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -351,7 +379,7 @@ class MailRepositoryImplTest {
     @Test
     fun `moveToFolder moves messages to the chosen destination`() = runTest {
         val id = "acct:INBOX:11"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(listOf(id)) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -364,7 +392,7 @@ class MailRepositoryImplTest {
     @Test
     fun `buildReplyDraft fetches the original and saves a prefilled draft`() = runTest {
         val id = "acct:INBOX:2"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
         coEvery { signatureRepository.getDefault(any()) } returns null
@@ -393,7 +421,7 @@ class MailRepositoryImplTest {
     @Test
     fun `buildReplyDraft bakes the account default signature above the quote`() = runTest {
         val id = "acct:INBOX:3"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { accountSettingsRepository.get(any()) } returns AccountSettings("acct")
         coEvery { signatureRepository.getDefault("acct") } returns org.libremail.domain.model.Signature(
@@ -429,7 +457,7 @@ class MailRepositoryImplTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:4"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { attachmentDao.getForMessage(id) } returns listOf(attachmentEntity(id, 0, "report.pdf"))
         val cached = File(cache, "attachments/acct_INBOX_4/0/report.pdf").apply {
             parentFile?.mkdirs()
@@ -447,7 +475,7 @@ class MailRepositoryImplTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:6"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { attachmentDao.getForMessage(id) } returns listOf(attachmentEntity(id, 0, "a.txt"))
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -482,7 +510,7 @@ class MailRepositoryImplTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:30"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
         coEvery { attachmentDao.getForMessage(id) } returns listOf(
             AttachmentEntity(id, 0, "logo.png", "image/png", 4, contentId = "logo1"),
             AttachmentEntity(id, 1, "invoice.pdf", "application/pdf", 10, contentId = null),
@@ -508,7 +536,7 @@ class MailRepositoryImplTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:10"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX") // bodyFetched = false
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX") // bodyFetched = false
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "10") } returns
@@ -533,8 +561,10 @@ class MailRepositoryImplTest {
     fun `archive resolves a separate destination folder for each account`() = runTest {
         val id1 = "acct:INBOX:1"
         val id2 = "acct2:INBOX:1"
-        coEvery { messageDao.getById(id1) } returns messageEntity(id1, "INBOX", accountId = "acct")
-        coEvery { messageDao.getById(id2) } returns messageEntity(id2, "INBOX", accountId = "acct2")
+        coEvery { messageDao.getRoutingByIds(listOf(id1, id2)) } returns listOf(
+            messageRouting(id1, "INBOX", accountId = "acct"),
+            messageRouting(id2, "INBOX", accountId = "acct2"),
+        )
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity(id = "acct")
         coEvery { accountDao.getById("acct2") } returns accountEntity(id = "acct2", email = "bob@example.org")
@@ -554,7 +584,7 @@ class MailRepositoryImplTest {
         val cache = Files.createTempDirectory("attach").toFile()
         every { context.cacheDir } returns cache
         val id = "acct:INBOX:12"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX", bodyFetched = true)
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX", bodyFetched = true)
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
         coEvery { attachmentDao.getForMessage(id) } returns listOf(attachmentEntity(id, 0, "f.bin"))
@@ -570,7 +600,7 @@ class MailRepositoryImplTest {
     @Test
     fun `archive refreshes folders once and retries when the archive folder is initially missing`() = runTest {
         val id = "acct:INBOX:14"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -590,7 +620,7 @@ class MailRepositoryImplTest {
     @Test
     fun `reportSpam prefers the special-use spam folder when the user folder is listed first`() = runTest {
         val id = "acct:INBOX:16"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -610,7 +640,7 @@ class MailRepositoryImplTest {
     @Test
     fun `reportSpam prefers the special-use spam folder when it is listed first`() = runTest {
         val id = "acct:INBOX:18"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -629,7 +659,7 @@ class MailRepositoryImplTest {
     @Test
     fun `reportSpam keeps the first listed folder when no special-use folder holds the role`() = runTest {
         val id = "acct:INBOX:20"
-        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
         coEvery { messageDao.deleteByIds(any()) } just Runs
         coEvery { accountDao.getById("acct") } returns accountEntity()
         coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
@@ -658,21 +688,44 @@ class MailRepositoryImplTest {
     private fun attachmentEntity(messageId: String, partIndex: Int, filename: String) =
         AttachmentEntity(messageId, partIndex, filename, "application/octet-stream", 10L)
 
-    private fun messageEntity(id: String, folder: String, accountId: String = "acct", bodyFetched: Boolean = false) =
-        MessageEntity(
-            id = id,
-            accountId = accountId,
-            sender = "Ada",
-            senderEmail = "ada@example.org",
-            subject = "Hi",
-            snippet = "snippet",
-            body = "",
-            timestampMillis = 1_000L,
-            isRead = false,
-            isStarred = false,
-            folder = folder,
-            bodyFetched = bodyFetched,
-        )
+    private fun messageEntity(
+        id: String,
+        folder: String,
+        accountId: String = "acct",
+        bodyFetched: Boolean = false,
+        isRead: Boolean = false,
+        body: String = "",
+    ) = MessageEntity(
+        id = id,
+        accountId = accountId,
+        sender = "Ada",
+        senderEmail = "ada@example.org",
+        subject = "Hi",
+        snippet = "snippet",
+        body = body,
+        timestampMillis = 1_000L,
+        isRead = isRead,
+        isStarred = false,
+        folder = folder,
+        bodyFetched = bodyFetched,
+    )
+
+    private fun messageRouting(
+        id: String,
+        folder: String,
+        accountId: String = "acct",
+        bodyFetched: Boolean = false,
+        isRead: Boolean = false,
+    ) = MessageRouting(
+        id = id,
+        accountId = accountId,
+        folder = folder,
+        uid = id.substringAfterLast(':').toLongOrNull() ?: 0L,
+        isRead = isRead,
+        isStarred = false,
+        bodyFetched = bodyFetched,
+        isHtml = false,
+    )
 
     private fun messageSummary(id: String, folder: String, accountId: String = "acct", bodyFetched: Boolean = false) =
         MessageSummary(
