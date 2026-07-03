@@ -39,6 +39,7 @@ fun AccountSettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val signatureCount by viewModel.signatureCount.collectAsStateWithLifecycle()
     val defaultSignatureName by viewModel.defaultSignatureName.collectAsStateWithLifecycle()
+    val isDefaultAccount by viewModel.isDefaultAccount.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val fallbackTitle = stringResource(R.string.settings_account_title)
 
@@ -63,6 +64,14 @@ fun AccountSettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            SwitchRow(
+                title = stringResource(R.string.settings_account_set_default),
+                checked = isDefaultAccount,
+                onCheckedChange = viewModel::setDefaultAccount,
+                subtitle = stringResource(R.string.settings_account_set_default_summary),
+            )
+            HorizontalDivider()
+
             SectionHeader(stringResource(R.string.settings_signature))
             SwitchRow(
                 title = stringResource(R.string.settings_signature_enable),
