@@ -11,6 +11,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.libremail.data.settings.SettingsRepository
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Covers [CrashReporter.install]: the installed handler must persist the crash locally AND still chain
@@ -62,5 +63,27 @@ class CrashReporterInstallTest {
         assertEquals(ReportKind.CRASH, store.reports.value.single().kind)
         // ...and the OS's original handler still ran, so the system crash still surfaces.
         verify { previous.uncaughtException(thread, crash) }
+    }
+
+    @Test
+    fun `only a genuine uncaught exception creates a crash report - update, force-stop, swipe-away do not`() {
+        Thread.setDefaultUncaughtExceptionHandler(mockk(relaxed = true))
+        val store = ReportStore(tempFolder.root)
+        val buffer = RingLogBuffer()
+        val collector = DiagnosticsCollector(appVersion, settingsRepository, buffer)
+        val reporter = CrashReporter(collector, store, buffer)
+        reporter.install()
+        val installed = requireNotNull(Thread.getDefaultUncaughtExceptionHandler())
+
+        // An app update (killDueToPackageUpdate), a force-stop, and a user swipe-away/task-removal all
+        // end the process WITHOUT delivering an uncaught throwable to this handler, so none of them
+        // creates a report and the startup prompt stays silent (#255 criterion 3). Reports come solely
+        // from a genuine uncaught crash routing through the installed handler.
+        assertTrue(store.reports.value.isEmpty())
+
+        installed.uncaughtException(Thread.currentThread(), IllegalStateException("real crash"))
+
+        assertEquals(1, store.reports.value.size)
+        assertEquals(ReportKind.CRASH, store.reports.value.single().kind)
     }
 }

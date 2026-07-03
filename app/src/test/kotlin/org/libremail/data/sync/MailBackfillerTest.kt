@@ -332,6 +332,27 @@ class MailBackfillerTest {
         coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), match { it <= 1L }, any()) }
     }
 
+    /**
+     * A backfilled page whose ids already exist (e.g. former search-only rows) must be *refreshed*
+     * (markSynced + header update), not just IGNORE-inserted — this covers persistBatch's
+     * pre-existing-row branch, which the all-brand-new happy paths above never hit.
+     */
+    @Test
+    fun `re-inserting a pre-existing header refreshes it rather than only inserting`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+        val backfiller = backfiller(AccountSettings("acct"))
+        // Report every offered id as already present, so persistBatch takes the refresh branch.
+        coEvery { lastMessageDao!!.existingIds(any()) } answers { firstArg() }
+
+        backfiller.runBackfill()
+
+        coVerify(atLeast = 1) { lastMessageDao!!.markSynced(any()) }
+        coVerify(atLeast = 1) {
+            lastMessageDao!!.updateHeaderContent(any(), any(), any(), any(), any(), any())
+        }
+    }
+
     private fun fetchedMessage(uid: String) = FetchedMessage(
         uid = uid,
         sender = "Sender",
