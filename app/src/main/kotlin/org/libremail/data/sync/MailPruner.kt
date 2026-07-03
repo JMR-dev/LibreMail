@@ -25,6 +25,11 @@ import javax.inject.Singleton
  * Precedence with the #12 backfill is guaranteed two ways: backfill stops paging at the same
  * retention floor this pruner deletes below (their working sets are disjoint), and both jobs share
  * [MailMaintenanceGate] so they never run at once.
+ *
+ * Foreground sync ([MailSyncer]) is aligned the same way in BOTH retention modes so it never
+ * re-inserts what this pruner deletes: it caps its fetch window to the retention count AND drops
+ * anything older than the age cutoff before persisting (#193). The two limits are independent, so
+ * both bounds apply together.
  */
 @Singleton
 class MailPruner @Inject constructor(
