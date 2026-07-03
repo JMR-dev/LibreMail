@@ -362,6 +362,7 @@
     <string name="reports_create">Create a report</string>
     <string name="report_kind_crash">Crash report</string>
     <string name="report_kind_manual">Manual report</string>
+    <string name="report_auto_delete_notice">Reports are automatically deleted from this device after 1 month.</string>
     <string name="report_review_title">Review report</string>
     <string name="report_pii_disclaimer_title">May contain personal information</string>
     <string name="report_pii_disclaimer">This report can include email addresses, server names, and other details from your device. Read the whole thing below before sending. Nothing is sent unless you tap Submit.</string>

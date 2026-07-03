@@ -99,4 +99,19 @@ class ReportStoreTest {
 
         assertEquals(listOf("valid"), store.reports.value.map { it.id })
     }
+
+    @Test
+    fun `purgeOlderThan deletes reports strictly older than the cutoff`() {
+        val store = ReportStore(tempFolder.root)
+        store.save(report("old", createdAt = 1_000L))
+        store.save(report("boundary", createdAt = 3_000L))
+        store.save(report("recent", createdAt = 5_000L))
+
+        val purged = store.purgeOlderThan(cutoffMillis = 3_000L)
+
+        assertEquals(1, purged)
+        assertNull(store.find("old"))
+        // A report exactly at the cutoff is kept (strictly-older purge); list stays newest-first.
+        assertEquals(listOf("recent", "boundary"), store.reports.value.map { it.id })
+    }
 }
