@@ -73,6 +73,170 @@ class MigrationTest {
         db.close()
     }
 
+    /** v7 -> v8: pre-upgrade messages are filed under INBOX and the folders table appears. */
+    @Test
+    fun migrate7To8_filesExistingMessagesUnderInboxAndAddsFoldersTable() {
+        helper.createDatabase(TEST_DB, 7).apply {
+            insertAccount()
+            execSQL(
+                "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+                    "timestampMillis, isRead, isStarred, inInbox, bodyFetched) VALUES " +
+                    "('acct:1', 'acct', 'Ada', 'ada@example.org', 'Hi', '', '', 0, 1000, 0, 0, 1, 1)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 8, true, MIGRATION_7_8)
+
+        db.query("SELECT folder FROM messages WHERE id = 'acct:1'").use { c ->
+            assertTrue("the pre-upgrade message must survive", c.moveToFirst())
+            assertEquals("7->8 files pre-upgrade rows under INBOX", "INBOX", c.getString(0))
+        }
+        // The new folders table exists and accepts a row.
+        db.execSQL(
+            "INSERT INTO folders (accountId, fullName, displayName, role, selectable, sortOrder) " +
+                "VALUES ('acct', 'INBOX', 'INBOX', 'INBOX', 1, 0)",
+        )
+        assertEquals(1, db.count("folders"))
+        db.close()
+    }
+
+    /** v8 -> v9: a default per-account settings row is backfilled for every existing account. */
+    @Test
+    fun migrate8To9_backfillsADefaultSettingsRowPerAccount() {
+        helper.createDatabase(TEST_DB, 8).apply {
+            insertAccount()
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, MIGRATION_8_9)
+
+        db.query("SELECT signature, signatureEnabled, notificationsEnabled FROM account_settings").use { c ->
+            assertTrue("8->9 must backfill a settings row for the existing account", c.moveToFirst())
+            assertEquals("", c.getString(0))
+            assertEquals(1, c.getInt(1))
+            assertEquals(1, c.getInt(2))
+            assertFalse("exactly one settings row per account", c.moveToNext())
+        }
+        db.close()
+    }
+
+    /** v9 -> v10: `outbox`/`drafts` gain an empty `bccAddresses` and queued/saved rows survive. */
+    @Test
+    fun migrate9To10_addsEmptyBccToOutboxAndDrafts() {
+        helper.createDatabase(TEST_DB, 9).apply {
+            execSQL(
+                "INSERT INTO outbox (id, accountId, toAddresses, ccAddresses, subject, body, createdAt, " +
+                    "lastError) VALUES ('out-1', 'acct', 'bob@example.org', '', 'Queued', 'Body', 3000, NULL)",
+            )
+            execSQL(
+                "INSERT INTO drafts (id, accountId, toAddresses, ccAddresses, subject, body, updatedAt, " +
+                    "attachments) VALUES ('draft-1', 'acct', 'bob@example.org', '', 'Draft', 'Text', 4000, '')",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 10, true, MIGRATION_9_10)
+
+        db.query("SELECT bccAddresses FROM outbox WHERE id = 'out-1'").use { c ->
+            assertTrue("the queued outbox row must survive", c.moveToFirst())
+            assertEquals("existing outbox rows read an empty bcc", "", c.getString(0))
+        }
+        db.query("SELECT bccAddresses FROM drafts WHERE id = 'draft-1'").use { c ->
+            assertTrue("the saved draft must survive", c.moveToFirst())
+            assertEquals("existing draft rows read an empty bcc", "", c.getString(0))
+        }
+        db.close()
+    }
+
+    /** v10 -> v11: nullable `bodyHtml` appears and a legacy per-account signature is carried across. */
+    @Test
+    fun migrate10To11_addsNullableBodyHtmlAndBackfillsTheDefaultSignature() {
+        helper.createDatabase(TEST_DB, 10).apply {
+            insertAccount()
+            execSQL(
+                "INSERT INTO account_settings (accountId, signature, signatureEnabled, notificationsEnabled) " +
+                    "VALUES ('acct', 'Cheers,' || char(10) || 'Ada', 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO outbox (id, accountId, toAddresses, ccAddresses, bccAddresses, subject, body, " +
+                    "createdAt, lastError) VALUES ('out-1', 'acct', 'bob@example.org', '', '', 'Q', 'B', 1, NULL)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, MIGRATION_10_11)
+
+        // The v9 signature becomes the account's default rich-text signature (newlines -> <br>).
+        db.query("SELECT name, contentHtml, isDefault FROM signatures WHERE accountId = 'acct'").use { c ->
+            assertTrue("10->11 must backfill the legacy per-account signature", c.moveToFirst())
+            assertEquals("Signature", c.getString(0))
+            assertEquals("Cheers,<br>Ada", c.getString(1))
+            assertEquals(1, c.getInt(2))
+            assertFalse("exactly one signature row must be backfilled", c.moveToNext())
+        }
+        // bodyHtml is added nullable and reads back null for a message composed before formatting.
+        db.query("SELECT bodyHtml FROM outbox WHERE id = 'out-1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue("bodyHtml must default to null (plaintext-only)", c.isNull(0))
+        }
+        db.close()
+    }
+
+    /** v13 -> v14: snippets are re-derived per `isHtml`; only fetched-body rows are touched. */
+    @Test
+    fun migrate13To14_reDerivesSnippetsRespectingIsHtmlAndSkipsUnfetchedRows() {
+        helper.createDatabase(TEST_DB, 13).apply {
+            insertV13Message(
+                id = "html",
+                isHtml = 1,
+                body = "<style>p{color:red}</style><p>Hello world</p>",
+                snippet = "STALE",
+                bodyFetched = 1,
+            )
+            insertV13Message(
+                id = "plain",
+                isHtml = 0,
+                body = "keep <not a tag> literal",
+                snippet = "STALE",
+                bodyFetched = 1,
+            )
+            insertV13Message(id = "unfetched", isHtml = 0, body = "", snippet = "UNTOUCHED", bodyFetched = 0)
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, MIGRATION_13_14)
+
+        val htmlSnippet = snippetOf(db, "html")
+        assertTrue("HTML snippet keeps visible text", htmlSnippet.contains("Hello world"))
+        assertFalse("HTML snippet drops leaked <style> content", htmlSnippet.contains("color"))
+        assertFalse("the stale snippet is replaced", htmlSnippet.contains("STALE"))
+        // A plain-text body keeps its literal angle brackets (no markup handling).
+        assertTrue("plain snippet keeps literal markup", snippetOf(db, "plain").contains("<not a tag>"))
+        // Rows whose body was never fetched keep their existing snippet.
+        assertEquals("UNTOUCHED", snippetOf(db, "unfetched"))
+        db.close()
+    }
+
+    private fun snippetOf(db: SupportSQLiteDatabase, id: String): String =
+        db.query("SELECT snippet FROM messages WHERE id = ?", arrayOf<Any>(id)).use { c ->
+            assertTrue("row $id must exist", c.moveToFirst())
+            c.getString(0)
+        }
+
+    private fun SupportSQLiteDatabase.insertV13Message(
+        id: String,
+        isHtml: Int,
+        body: String,
+        snippet: String,
+        bodyFetched: Int,
+    ) = execSQL(
+        "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+            "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched, uid) " +
+            "VALUES (?, 'acct', 'Ada', 'ada@example.org', 'Hi', ?, ?, ?, 1000, 0, 0, 'INBOX', 1, ?, 1)",
+        arrayOf<Any>(id, snippet, body, isHtml, bodyFetched),
+    )
+
     /** v14 -> v15 (issue #66): `folders.hierarchyDelimiter` appears defaulting to NULL; data survives. */
     @Test
     fun migrate14To15_addsNullHierarchyDelimiterToFolders() {

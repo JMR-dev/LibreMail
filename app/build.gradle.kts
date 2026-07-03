@@ -324,4 +324,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.room.testing)
+    // Instrumented DatabaseProvisioner test: fakes the security/settings collaborators and spies the
+    // DatabaseEncryption object to regression-guard the SQLCipher native-lib load before a keyed open.
+    androidTestImplementation(libs.mockk.android)
 }
