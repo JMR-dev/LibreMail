@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.collect
 import org.libremail.R
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.OutgoingAttachment
+import org.libremail.ui.compose.format.FontRegistry
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -186,6 +187,7 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     onBodyChange = viewModel::onBodyChange,
                     label = stringResource(R.string.compose_body),
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    resolveFont = FontRegistry::resolveFontFamily,
                 )
             }
 
