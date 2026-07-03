@@ -62,17 +62,23 @@ fun HtmlBody(
             dark = isDark,
         )
     }
-    // A mutable holder the WebViewClient reads on the (background) interception thread, kept current
-    // by the update block so inline images that arrive after the first composition are resolvable.
+    // A mutable, thread-visible holder the WebViewClient reads on the (background) interception thread.
+    // The reader now resolves inline images before the first render (issue #186), so the holder is
+    // already populated when the page first loads; keeping it current across recompositions just means
+    // any later change stays resolvable without forcing a reload.
     val imageHolder = remember { InlineImageHolder() }
     imageHolder.images = inlineImages
-    // Tracks the content actually loaded so recompositions (star/attachment state changes) don't
-    // reload the page and throw away the user's scroll position. Keyed on the fully wrapped
-    // document so a theme (light/dark) change still re-renders with the new colors, and on the set
-    // of available cid: keys so the page reloads once when inline images finish resolving.
-    val lastLoaded = remember { mutableStateOf<Triple<String, Boolean, Set<String>>?>(null) }
+    // Tracks the content actually loaded so recompositions (star/attachment/inline-image state changes)
+    // don't reload the page and throw away the user's scroll position. Keyed on the fully wrapped
+    // document (so a theme light/dark change re-renders with the new colors) and the remote-images
+    // toggle. Inline images are deliberately NOT part of the key: they are resolved before the first
+    // render and served from [imageHolder], so a late inline-image update must not reload the page.
+    val lastLoaded = remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     AndroidView(
         modifier = modifier,
+        // TODO(#186): pool/pre-warm a WebView across reader opens instead of constructing one per open.
+        // Deferred as leak-prone — a pooled WebView must never retain an Activity Context or outlive its
+        // use. The single-render fix below already removes the dominant double-render cost.
         factory = { ctx ->
             WebView(ctx).apply {
                 with(settings) {
@@ -118,13 +124,16 @@ fun HtmlBody(
                 }
             }
         },
+        // A WebView retains its Context and is not collected promptly; destroy it when the reader leaves
+        // composition so neither the page nor its Context leaks (issue #186 lifecycle guard).
+        onRelease = { it.destroy() },
         update = { webView ->
             // Re-apply theme-dependent state so toggling light/dark while the reader is open updates
             // the chrome behind the (padding of the) page as well as the content.
             webView.setBackgroundColor(surfaceArgb)
             webView.applyAlgorithmicDarkening(isDark)
             webView.settings.blockNetworkLoads = !loadRemoteImages
-            val key = Triple(document, loadRemoteImages, inlineImages.keys.toSet())
+            val key = document to loadRemoteImages
             if (lastLoaded.value != key) {
                 lastLoaded.value = key
                 webView.loadDataWithBaseURL(null, document, "text/html", "UTF-8", null)

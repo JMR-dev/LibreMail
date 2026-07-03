@@ -96,13 +96,23 @@ class MailProviderTest {
         // generic Apple ID sign-in page (issue #153).
         assertEquals("https://support.apple.com/en-us/102660", MailProvider.ICLOUD.twoFactorHelpUrl)
 
-        // Yahoo gates nothing on two-factor, so it must not grow the extra link.
+        // Yahoo gates nothing on two-factor — reconfirmed directly against Yahoo's own help docs,
+        // which never list two-step verification as a prerequisite for generating an app password
+        // (issue #155) — so it must not grow the extra link.
         assertNull(MailProvider.YAHOO.twoFactorHelpUrl)
     }
 
     @Test
     fun `icloud app-password help points at Apple's specific instructions, not the generic sign-in page`() {
         assertEquals("https://support.apple.com/en-us/102654", MailProvider.ICLOUD.appPasswordHelpUrl)
+    }
+
+    @Test
+    fun `yahoo app-password help points at Yahoo's step-by-step instructions, not the generic sign-in page`() {
+        assertEquals(
+            "https://my.help.yahoo.com/kb/mail/generate-app-specific-password-sln15241.html",
+            MailProvider.YAHOO.appPasswordHelpUrl,
+        )
     }
 
     @Test

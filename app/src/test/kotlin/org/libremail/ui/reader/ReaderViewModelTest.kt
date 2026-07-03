@@ -19,6 +19,7 @@ import org.junit.Test
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Attachment
+import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
@@ -65,6 +66,28 @@ class ReaderViewModelTest {
 
         assertEquals(setOf(0), vm.state.value.downloaded)
     }
+
+    @Test
+    fun `inline images resolve into the same state update as the body so the reader renders once`() =
+        runTest(dispatcher) {
+            val htmlMessage = message.copy(isHtml = true, body = "<img src=\"cid:logo\">")
+            val image = InlineImage("logo", "image/png", byteArrayOf(1, 2, 3))
+            val repo = mockk<MailRepository>(relaxed = true)
+            coEvery { repo.openMessage(messageId) } returns Result.success(htmlMessage)
+            coEvery { repo.inlineImages(messageId) } returns listOf(image)
+            every { repo.observeAttachments(messageId) } returns flowOf(emptyList())
+            coEvery { repo.downloadedAttachmentParts(messageId) } returns emptySet()
+
+            val vm = viewModel(repo)
+            advanceUntilIdle()
+
+            val state = vm.state.value
+            // The body and its inline cid: image land together (loading already false), so HtmlBody
+            // first composes with the image in place and loads the WebView exactly once (issue #186).
+            assertEquals(false, state.loading)
+            assertEquals(htmlMessage, state.message)
+            assertEquals(setOf("logo"), state.inlineImages.keys)
+        }
 
     @Test
     fun `downloading an attachment adds its part to the downloaded set`() = runTest(dispatcher) {
