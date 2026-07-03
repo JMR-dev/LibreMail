@@ -260,6 +260,7 @@
     <string name="settings_new_mail">New mail notifications</string>
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
+    <string name="account_reorder_handle">Long-press and drag to reorder account</string>
     <string name="account_remove">Remove account</string>
 
     <!-- Backup -->

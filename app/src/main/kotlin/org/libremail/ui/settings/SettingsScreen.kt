@@ -125,9 +125,11 @@ fun SettingsScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             } else {
-                accounts.forEach { account ->
-                    ClickRow(title = account.email, onClick = { onOpenAccount(account.id) })
-                }
+                AccountReorderList(
+                    accounts = accounts,
+                    onOpenAccount = onOpenAccount,
+                    onReorder = viewModel::reorderAccounts,
+                )
             }
             ClickRow(title = stringResource(R.string.settings_add_account), onClick = onAddAccount)
             HorizontalDivider()
