@@ -7,7 +7,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.libremail.domain.model.OutgoingMessage
-import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -30,48 +29,51 @@ class GraphSendException(message: String, val mayHaveSent: Boolean, cause: Throw
 @Singleton
 class GraphSender @Inject constructor() {
 
-    suspend fun send(accessToken: String, message: OutgoingMessage, attachments: List<File> = emptyList()) =
-        withContext(Dispatchers.IO) {
-            val payload = buildSendMailPayload(message, attachments)
-            val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = TIMEOUT_MS
-                readTimeout = TIMEOUT_MS
-                doOutput = true
-                setRequestProperty("Authorization", "Bearer $accessToken")
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
-            try {
-                // Failure here means the request never reached Graph — safe to fall back/retry.
-                try {
-                    connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-                } catch (e: IOException) {
-                    throw GraphSendException("Graph sendMail could not be transmitted", mayHaveSent = false, cause = e)
-                }
-                // The request was fully sent; if we can't read the response, Graph may already have
-                // accepted and sent it — do not fall back to SMTP or the message would be duplicated.
-                val code = try {
-                    connection.responseCode
-                } catch (e: IOException) {
-                    throw GraphSendException(
-                        "Graph sendMail sent but no response received",
-                        mayHaveSent = true,
-                        cause = e,
-                    )
-                }
-                if (code !in HTTP_OK_MIN..HTTP_OK_MAX) {
-                    val body = (connection.errorStream ?: connection.inputStream)
-                        ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                    // An explicit non-2xx means Graph rejected (did not send) — safe to fall back.
-                    throw GraphSendException(
-                        "Graph sendMail failed (HTTP $code): ${body.take(ERROR_BODY_LIMIT)}",
-                        mayHaveSent = false,
-                    )
-                }
-            } finally {
-                connection.disconnect()
-            }
+    suspend fun send(
+        accessToken: String,
+        message: OutgoingMessage,
+        attachments: List<SendableAttachment> = emptyList(),
+    ) = withContext(Dispatchers.IO) {
+        val payload = buildSendMailPayload(message, attachments)
+        val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = TIMEOUT_MS
+            readTimeout = TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $accessToken")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
         }
+        try {
+            // Failure here means the request never reached Graph — safe to fall back/retry.
+            try {
+                connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            } catch (e: IOException) {
+                throw GraphSendException("Graph sendMail could not be transmitted", mayHaveSent = false, cause = e)
+            }
+            // The request was fully sent; if we can't read the response, Graph may already have
+            // accepted and sent it — do not fall back to SMTP or the message would be duplicated.
+            val code = try {
+                connection.responseCode
+            } catch (e: IOException) {
+                throw GraphSendException(
+                    "Graph sendMail sent but no response received",
+                    mayHaveSent = true,
+                    cause = e,
+                )
+            }
+            if (code !in HTTP_OK_MIN..HTTP_OK_MAX) {
+                val body = (connection.errorStream ?: connection.inputStream)
+                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
+                // An explicit non-2xx means Graph rejected (did not send) — safe to fall back.
+                throw GraphSendException(
+                    "Graph sendMail failed (HTTP $code): ${body.take(ERROR_BODY_LIMIT)}",
+                    mayHaveSent = false,
+                )
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     private companion object {
         const val SEND_MAIL_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
@@ -83,7 +85,7 @@ class GraphSender @Inject constructor() {
 }
 
 /** Builds the Graph `sendMail` JSON body (a pure function, so it is unit-testable without a network). */
-internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<File>): String {
+internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<SendableAttachment>): String {
     // Graph carries a single body object: send HTML when the message was formatted (Outlook renders
     // it and derives its own plaintext), otherwise plain text so unformatted mail is unchanged.
     val body = if (message.bodyHtml != null) {
@@ -103,13 +105,17 @@ internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<Fi
     }
     if (attachments.isNotEmpty()) {
         val items = JSONArray()
-        attachments.forEach { file ->
-            items.put(
-                JSONObject()
-                    .put("@odata.type", "#microsoft.graph.fileAttachment")
-                    .put("name", file.name)
-                    .put("contentBytes", Base64.getEncoder().encodeToString(file.readBytes())),
-            )
+        attachments.forEach { attachment ->
+            val obj = JSONObject()
+                .put("@odata.type", "#microsoft.graph.fileAttachment")
+                .put("name", attachment.file.name)
+                .put("contentBytes", Base64.getEncoder().encodeToString(attachment.file.readBytes()))
+            // An inline image the HTML references as `cid:contentId` — Graph renders it in the body
+            // rather than listing it as a downloadable attachment.
+            if (attachment.isInlineImage) {
+                obj.put("isInline", true).put("contentId", attachment.contentId)
+            }
+            items.put(obj)
         }
         mail.put("attachments", items)
     }

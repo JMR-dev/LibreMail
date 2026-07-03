@@ -60,7 +60,16 @@ data class ComposeUiState(
     val showAttachmentPrompt: Boolean = false,
     /** Draw the eye to the attach button — the user answered the attachment prompt with "Yes". */
     val highlightAttach: Boolean = false,
+    /**
+     * A just-picked inline image waiting for the editor to drop its token at the caret. The editor
+     * consumes it (via [ComposeViewModel.onInlineImageInserted]) once inserted; a transient signal, so
+     * it is excluded from the autosaved [DraftContent].
+     */
+    val pendingInlineImage: PendingInlineImage? = null,
 )
+
+/** A picked inline image the editor should insert: the token to show and the [contentId] to link it by. */
+data class PendingInlineImage(val contentId: String, val name: String)
 
 /** The persisted draft fields; autosave fires only when one of these actually changes (#177). */
 private data class DraftContent(
@@ -198,8 +207,42 @@ class ComposeViewModel @Inject constructor(
      * The rich editor reports the current body in both forms: [plain] (also the plaintext fallback)
      * and [html], which is null when the content carries no formatting so the message stays
      * plaintext-only. Both are held for sending and for saving the draft.
+     *
+     * Inline images are reconciled against the body here: an inline attachment is kept only while its
+     * `cid:` is still referenced by the HTML (or is the one currently being inserted), so deleting an
+     * image's `[image: …]` token drops the image itself. Regular attachments are never touched.
      */
-    fun onBodyChange(plain: String, html: String?) = _state.update { it.copy(body = plain, bodyHtml = html) }
+    fun onBodyChange(plain: String, html: String?) = _state.update { s ->
+        val referenced = referencedContentIds(html)
+        val keptAttachments = s.attachments.filter { attachment ->
+            !attachment.isInline ||
+                attachment.contentId in referenced ||
+                attachment.contentId == s.pendingInlineImage?.contentId
+        }
+        s.copy(body = plain, bodyHtml = html, attachments = keptAttachments)
+    }
+
+    /** The content ids the body's HTML still references (`cid:…`), used to prune deleted inline images. */
+    private fun referencedContentIds(html: String?): Set<String> =
+        html?.let { RichTextHtml.fromHtml(it).images.mapTo(mutableSetOf()) { image -> image.contentId } }.orEmpty()
+
+    /**
+     * A picked inline image: track it as an inline attachment (alongside regular ones) and hand the
+     * editor a [PendingInlineImage] to drop at the caret. The generated content id ties the body's
+     * `cid:` reference to the attachment the sender emits with a matching `Content-ID`.
+     */
+    fun onImagePicked(uri: String, name: String) {
+        val contentId = "img-${UUID.randomUUID()}@libremail"
+        _state.update {
+            it.copy(
+                attachments = it.attachments + OutgoingAttachment(uri, name, contentId, isInline = true),
+                pendingInlineImage = PendingInlineImage(contentId, name),
+            )
+        }
+    }
+
+    /** The editor has inserted the pending image's token; clear the transient signal. */
+    fun onInlineImageInserted() = _state.update { it.copy(pendingInlineImage = null) }
 
     fun selectFrom(accountId: String) {
         viewModelScope.launch { applySignature(accountId) }

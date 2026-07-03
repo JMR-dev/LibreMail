@@ -218,25 +218,41 @@ internal fun Draft.toEntity(): DraftEntity = DraftEntity(
     subject = subject,
     body = body,
     updatedAt = updatedAt,
-    attachments = attachments.toJson(),
+    attachments = attachments.toOutgoingAttachmentsJson(),
     bodyHtml = bodyHtml,
 )
 
-/** Serializes draft attachments as a JSON array of {uri, name} objects ("" when empty). */
-private fun List<OutgoingAttachment>.toJson(): String {
+/**
+ * Serializes outgoing attachments as a JSON array of `{uri, name, contentId?, isInline?}` objects
+ * ("" when empty). Shared by the drafts column and the outbox column, so an inline image's
+ * cid↔file pairing survives a draft save/reopen and a queued send alike. The two optional keys are
+ * omitted for a plain attachment, so an old draft (written before inline images) reads back with
+ * `contentId = null` / `isInline = false`.
+ */
+internal fun List<OutgoingAttachment>.toOutgoingAttachmentsJson(): String {
     if (isEmpty()) return ""
     val array = JSONArray()
-    forEach { array.put(JSONObject().put("uri", it.uri).put("name", it.name)) }
+    forEach { attachment ->
+        val obj = JSONObject().put("uri", attachment.uri).put("name", attachment.name)
+        attachment.contentId?.let { obj.put("contentId", it) }
+        if (attachment.isInline) obj.put("isInline", true)
+        array.put(obj)
+    }
     return array.toString()
 }
 
-private fun String.toOutgoingAttachments(): List<OutgoingAttachment> {
+internal fun String.toOutgoingAttachments(): List<OutgoingAttachment> {
     if (isBlank()) return emptyList()
     return runCatching {
         val array = JSONArray(this)
         (0 until array.length()).map { i ->
             val obj = array.getJSONObject(i)
-            OutgoingAttachment(obj.getString("uri"), obj.optString("name"))
+            OutgoingAttachment(
+                uri = obj.getString("uri"),
+                name = obj.optString("name"),
+                contentId = obj.optString("contentId").takeIf { it.isNotEmpty() },
+                isInline = obj.optBoolean("isInline", false),
+            )
         }
     }.getOrDefault(emptyList())
 }

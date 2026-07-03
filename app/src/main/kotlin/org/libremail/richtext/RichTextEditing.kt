@@ -141,6 +141,32 @@ object RichTextEditing {
         }
         return aligns.distinct().singleOrNull()
     }
+
+    /**
+     * Inserts an inline image at [at]: a visible [imageToken] backed by a [RichImage] carrying
+     * [contentId] and [name]. Every span/link/alignment/image at or after the insertion point shifts
+     * by the token's length (a run the caret sits inside grows to keep covering the same text), and
+     * the returned selection lands just past the inserted token. Deleting the token later removes the
+     * [RichImage] with it, since the model derives its images from the tokens in the text.
+     */
+    fun insertImage(content: RichTextContent, at: Int, contentId: String, name: String): EditResult {
+        val pos = at.coerceIn(0, content.text.length)
+        val token = imageToken(name)
+        val len = token.length
+        val newText = content.text.substring(0, pos) + token + content.text.substring(pos)
+        fun shiftStart(o: Int): Int = if (o >= pos) o + len else o
+        fun shiftEnd(o: Int): Int = if (o > pos) o + len else o
+        val shiftedImages = content.images.map { it.copy(start = shiftStart(it.start), end = shiftEnd(it.end)) }
+        val images = (shiftedImages + RichImage(pos, pos + len, contentId, name)).sortedBy { it.start }
+        val updated = content.copy(
+            text = newText,
+            spans = content.spans.map { it.copy(start = shiftStart(it.start), end = shiftEnd(it.end)) },
+            links = content.links.map { it.copy(start = shiftStart(it.start), end = shiftEnd(it.end)) },
+            alignments = content.alignments.map { it.copy(start = shiftStart(it.start), end = shiftEnd(it.end)) },
+            images = images,
+        )
+        return EditResult(updated, pos + len, pos + len)
+    }
 }
 
 private fun insertFor(marker: BlockMarker, ordinal: Int): String = when (marker) {
