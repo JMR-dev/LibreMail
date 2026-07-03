@@ -27,6 +27,20 @@ class ReportStore(private val directory: File) {
 
     fun find(id: String): DebugReport? = _reports.value.firstOrNull { it.id == id }
 
+    /**
+     * Persistently marks a report as auto-surfaced so the startup crash prompt offers it at most once
+     * across launches (see #255). The report itself stays in the store (still listed under Problem
+     * Reports); only [delete] removes it. No-op if the report is missing or already surfaced.
+     */
+    fun markSurfaced(id: String) {
+        synchronized(lock) {
+            val report = _reports.value.firstOrNull { it.id == id } ?: return
+            if (report.surfaced) return
+            File(directory, fileName(id)).writeText(report.copy(surfaced = true).toStorageJson())
+            _reports.value = scan()
+        }
+    }
+
     fun delete(id: String) {
         synchronized(lock) {
             File(directory, fileName(id)).delete()

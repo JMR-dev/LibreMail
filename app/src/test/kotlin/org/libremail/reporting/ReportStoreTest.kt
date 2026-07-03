@@ -70,6 +70,27 @@ class ReportStoreTest {
     }
 
     @Test
+    fun `markSurfaced flags the report and persists across a fresh instance`() {
+        val store = ReportStore(tempFolder.root)
+        store.save(report("a"))
+
+        store.markSurfaced("a")
+
+        assertTrue(store.find("a")!!.surfaced)
+        // Survives a fresh instance over the same directory (the next launch reads it as surfaced).
+        assertTrue(ReportStore(tempFolder.root).find("a")!!.surfaced)
+    }
+
+    @Test
+    fun `markSurfaced is a no-op for a missing report`() {
+        val store = ReportStore(tempFolder.root)
+
+        store.markSurfaced("missing")
+
+        assertTrue(store.reports.value.isEmpty())
+    }
+
+    @Test
     fun `ignores unparseable files`() {
         File(tempFolder.root, "garbage.json").writeText("not json at all")
         val store = ReportStore(tempFolder.root)
