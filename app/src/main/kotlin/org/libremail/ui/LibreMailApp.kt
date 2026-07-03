@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -38,6 +39,7 @@ import org.libremail.ui.navigation.Routes
 import org.libremail.ui.onboarding.AddAnotherAccountScreen
 import org.libremail.ui.onboarding.BatteryOptimizationScreen
 import org.libremail.ui.onboarding.ContactsAccessScreen
+import org.libremail.ui.onboarding.LicenseScreen
 import org.libremail.ui.onboarding.OnboardingViewModel
 import org.libremail.ui.onboarding.OnboardingWelcomeScreen
 import org.libremail.ui.outbox.OutboxScreen
@@ -60,9 +62,12 @@ fun LibreMailApp(
     onOpenMessageHandled: () -> Unit = {},
 ) {
     val startDestination by appViewModel.startDestination.collectAsStateWithLifecycle()
-    // Hold (render nothing) until the account count is known, so a cold start never flashes the
-    // wrong screen before onboarding-vs-mailbox is decided.
+    val licenseAccepted by appViewModel.licenseAccepted.collectAsStateWithLifecycle()
+    // Hold (render nothing) until the account count AND the license-acceptance flag are known, so a
+    // cold start never flashes the wrong screen before onboarding-vs-mailbox — and, within onboarding,
+    // license-vs-welcome (#172) — is decided.
     val start = startDestination ?: return
+    val licenseAlreadyAccepted = licenseAccepted ?: return
     val navController = rememberNavController()
     val pendingCrash by startupViewModel.pendingCrash.collectAsStateWithLifecycle()
 
@@ -95,7 +100,7 @@ fun LibreMailApp(
         navController = navController,
         startDestination = start,
     ) {
-        onboardingGraph(navController)
+        onboardingGraph(navController, licenseAlreadyAccepted)
 
         composable(
             route = Routes.MAILBOX_PATTERN,
@@ -286,9 +291,31 @@ private fun CrashReportDialog(onReview: () -> Unit, onLater: () -> Unit, onDisca
  * first account added this session. The picker/setup screens are the same composables used by the
  * top-level "Add account" routes; here, a successful add routes to the "add another?" prompt instead
  * of popping back.
+ *
+ * @param licenseAlreadyAccepted decides the graph's start destination (#172): false routes through
+ *   [Routes.ONBOARDING_LICENSE] first; true (the user already agreed on a prior run) skips straight to
+ *   [Routes.ONBOARDING_WELCOME], matching this graph's pre-#172 behavior.
  */
-private fun NavGraphBuilder.onboardingGraph(navController: NavHostController) {
-    navigation(startDestination = Routes.ONBOARDING_WELCOME, route = Routes.ONBOARDING) {
+private fun NavGraphBuilder.onboardingGraph(navController: NavHostController, licenseAlreadyAccepted: Boolean) {
+    val onboardingStart = if (licenseAlreadyAccepted) Routes.ONBOARDING_WELCOME else Routes.ONBOARDING_LICENSE
+    navigation(startDestination = onboardingStart, route = Routes.ONBOARDING) {
+        composable(Routes.ONBOARDING_LICENSE) { entry ->
+            val onboarding = onboardingViewModel(navController, entry)
+            val activity = LocalActivity.current
+            LicenseScreen(
+                onAgree = {
+                    onboarding.markLicenseAccepted()
+                    // Pop LICENSE off the back stack: it is a one-time gate, so a later back-press
+                    // from the welcome screen must not be able to return to it.
+                    navController.navigate(Routes.ONBOARDING_WELCOME) {
+                        popUpTo(Routes.ONBOARDING_LICENSE) { inclusive = true }
+                    }
+                },
+                // MainActivity is this app's only Activity (single-activity Compose app), so finish()
+                // is sufficient to exit outright (#172).
+                onDecline = { activity?.finish() },
+            )
+        }
         composable(Routes.ONBOARDING_WELCOME) {
             OnboardingWelcomeScreen(onAddAccount = { navController.navigate(Routes.ONBOARDING_PICKER) })
         }

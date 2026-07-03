@@ -35,7 +35,9 @@ import org.libremail.R
 
 /**
  * First-run welcome. Invites the user to connect their first mailbox and hands off to the vendor
- * picker. Shown as the onboarding start destination when the app launches with no accounts.
+ * picker. Shown once the user has agreed to the GPL-3.0 license (see `LicenseScreen.kt`, #172): the
+ * onboarding graph's start destination when no accounts exist and the license hasn't been accepted
+ * yet; an already-accepted user lands here directly, same as before #172.
  */
 @Composable
 fun OnboardingWelcomeScreen(onAddAccount: () -> Unit) {
@@ -43,6 +45,12 @@ fun OnboardingWelcomeScreen(onAddAccount: () -> Unit) {
     // once this screen (with onboarding context behind it) is actually visible instead of racing
     // the cold-start/splash transition (#151). Already-onboarded users skip onboarding entirely, so
     // this composable — and the request — never runs for them.
+    //
+    // #172 inserted the license-agreement screen ahead of this one, so this is now the SECOND
+    // onboarding screen, not the first — but the request stays here rather than moving earlier: it
+    // must fire only once onboarding context is visible, which now additionally means only after the
+    // user has agreed to the license. Do not call NotificationPermissionEffect() from
+    // LicenseScreen.kt.
     NotificationPermissionEffect()
     Scaffold { padding ->
         WelcomeContent(
