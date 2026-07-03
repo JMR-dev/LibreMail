@@ -93,7 +93,8 @@ class GraphSenderTest {
     fun `payload omits cc and bcc when blank and encodes attachments as base64`() {
         val file = File.createTempFile("graph-att", ".txt").apply { writeText("hello") }
         try {
-            val msg = JSONObject(buildSendMailPayload(message(to = "a@x.com"), listOf(file))).getJSONObject("message")
+            val msg = JSONObject(buildSendMailPayload(message(to = "a@x.com"), listOf(SendableAttachment(file))))
+                .getJSONObject("message")
             assertFalse(msg.has("ccRecipients"))
             assertFalse(msg.has("bccRecipients"))
 
@@ -103,8 +104,44 @@ class GraphSenderTest {
             assertEquals("#microsoft.graph.fileAttachment", attachment.getString("@odata.type"))
             assertEquals(file.name, attachment.getString("name"))
             assertEquals("aGVsbG8=", attachment.getString("contentBytes")) // base64("hello")
+            // A plain attachment carries no inline markers.
+            assertFalse(attachment.has("isInline"))
+            assertFalse(attachment.has("contentId"))
         } finally {
             file.delete()
+        }
+    }
+
+    @Test
+    fun `an inline image attachment is marked isInline with its contentId`() {
+        val image = File.createTempFile("graph-inline", ".png").apply { writeText("PNGDATA") }
+        try {
+            val message = message(to = "a@x.com").copy(bodyHtml = "<p><img src=\"cid:logo@libremail\"></p>")
+            val inline = SendableAttachment(image, contentId = "logo@libremail", isInline = true)
+            val attachment = JSONObject(buildSendMailPayload(message, listOf(inline)))
+                .getJSONObject("message").getJSONArray("attachments").getJSONObject(0)
+            assertEquals(image.name, attachment.getString("name"))
+            assertTrue(attachment.getBoolean("isInline"))
+            assertEquals("logo@libremail", attachment.getString("contentId"))
+        } finally {
+            image.delete()
+        }
+    }
+
+    @Test
+    fun `an inline image contentId is stripped of control characters in the payload`() {
+        val image = File.createTempFile("graph-inline", ".png").apply { writeText("PNGDATA") }
+        try {
+            val message = message(to = "a@x.com").copy(bodyHtml = "<p><img src=\"cid:logo@libremail\"></p>")
+            // A crafted content id with CR/LF and a control char; only the printable text must remain.
+            val inline = SendableAttachment(image, contentId = "logo@libremail\r\nevil", isInline = true)
+            val contentId = JSONObject(buildSendMailPayload(message, listOf(inline)))
+                .getJSONObject("message").getJSONArray("attachments").getJSONObject(0)
+                .getString("contentId")
+            assertEquals("logo@libremailevil", contentId)
+            assertFalse('\r' in contentId || '\n' in contentId, "contentId=$contentId")
+        } finally {
+            image.delete()
         }
     }
 }

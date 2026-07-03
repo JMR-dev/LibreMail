@@ -120,57 +120,32 @@ class MailboxViewModel @Inject constructor(
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
     /**
-     * The list-rendered messages: a per-account folder (SQL-scoped and already flat, issue #86) or —
-     * for the unified inbox — *only* an active search's matches across accounts. The unified **browse**
-     * list is paged instead (see [pagedMessages], issue #124), so this flow stays empty while browsing
-     * the unified inbox and the whole cache is never pulled into memory on each write.
-     */
-    val messages: StateFlow<List<Message>> =
-        combine(_selectedAccountId, _selectedFolder) { accountId, folder -> accountId to folder }
-            .distinctUntilChanged()
-            .flatMapLatest { (accountId, folder) ->
-                if (accountId != null) {
-                    // Per-account+folder: the SQL-scoped, already-flat list. The one client-side pass
-                    // distinguishes the normal list (synced rows) from an active search (any matching
-                    // row, including transient server-search hits) over the small folder-scoped set.
-                    combine(mailRepository.observeFolderMessages(accountId, folder), _searchQuery) { rows, query ->
-                        val q = query.trim()
-                        rows.filter { if (q.isEmpty()) it.inInbox else it.matchesSearch(q) }
-                    }
-                } else {
-                    // Unified inbox: browse is paged via [pagedMessages]; this backs only an active
-                    // search over the folder's rows across accounts (bounded by the per-account search
-                    // limit), staying empty while browsing so the whole inbox is never materialized.
-                    _searchQuery.flatMapLatest { query ->
-                        val q = query.trim()
-                        if (q.isEmpty()) {
-                            flowOf(emptyList())
-                        } else {
-                            mailRepository.observeUnifiedFolderMessages(folder)
-                                .map { rows -> rows.filter { it.matchesSearch(q) } }
-                        }
-                    }
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /**
-     * The unified "All inboxes" browse list as a paged stream (issue #124): folder-synced rows across
-     * every account, newest-first, loaded a window at a time so query/mapping/recomposition cost scale
-     * with the screen, not the total cache. Emits empty paging data whenever a concrete account is
-     * selected or a search is active (those render from [messages]).
+     * The mailbox list as a single paged stream (issues #124, #214), loaded a window at a time so the
+     * query, mapping, and recomposition cost scale with the screen, not the whole cache. One flow backs
+     * every mode — unified browse, per-account browse, and search (unified or per-account) — dispatching
+     * to the matching repository pager by the current (account, folder, query). Browse shows only
+     * folder-synced rows; search re-pages on each keystroke and (via its DAO query) also surfaces the
+     * transient server-search hits. `cachedIn` so the loaded window survives configuration changes and
+     * the selection's "select all" can read it.
      */
     val pagedMessages: Flow<PagingData<Message>> =
-        combine(
-            _selectedAccountId,
-            _selectedFolder,
-            _searchQuery.map { it.isBlank() }.distinctUntilChanged(),
-        ) { accountId, folder, browsing -> Triple(accountId, folder, browsing) }
+        combine(_selectedAccountId, _selectedFolder, _searchQuery) { accountId, folder, query ->
+            Triple(accountId, folder, query.trim())
+        }
             .distinctUntilChanged()
-            .flatMapLatest { (accountId, folder, browsing) ->
-                if (accountId == null && browsing) {
-                    mailRepository.pagedUnifiedFolderMessages(folder)
+            .flatMapLatest { (accountId, folder, query) ->
+                if (query.isEmpty()) {
+                    if (accountId == null) {
+                        mailRepository.pagedUnifiedFolderMessages(folder)
+                    } else {
+                        mailRepository.pagedFolderMessages(accountId, folder)
+                    }
                 } else {
-                    flowOf(PagingData.empty())
+                    if (accountId == null) {
+                        mailRepository.pagedUnifiedSearchMessages(folder, query)
+                    } else {
+                        mailRepository.pagedFolderSearchMessages(accountId, folder, query)
+                    }
                 }
             }
             .cachedIn(viewModelScope)
@@ -474,9 +449,3 @@ private fun withInbox(accountId: String, folders: List<Folder>): List<Folder> =
     } else {
         listOf(Folder(accountId, INBOX, INBOX, FolderRole.INBOX, selectable = true)) + folders
     }
-
-/** Local match over the always-populated header fields (and snippet, once a body is cached). */
-private fun Message.matchesSearch(query: String): Boolean = sender.contains(query, ignoreCase = true) ||
-    senderEmail.contains(query, ignoreCase = true) ||
-    subject.contains(query, ignoreCase = true) ||
-    snippet.contains(query, ignoreCase = true)

@@ -15,6 +15,9 @@ interface OutboxDao {
     @Query("SELECT * FROM outbox ORDER BY createdAt")
     suspend fun getAll(): List<OutboxEntity>
 
+    @Query("SELECT * FROM outbox WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): OutboxEntity?
+
     @Query("SELECT * FROM outbox ORDER BY createdAt")
     fun observeAll(): Flow<List<OutboxEntity>>
 

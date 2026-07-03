@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.paging.PagingSource
 import androidx.paging.map
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
@@ -20,6 +21,7 @@ import kotlinx.coroutines.withContext
 import org.libremail.data.ReplyBuilder
 import org.libremail.data.SignatureBlock
 import org.libremail.data.Snippet
+import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -29,9 +31,12 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageRouting
+import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
+import org.libremail.data.local.toOutgoingAttachments
+import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.MailConnectionFactory
@@ -48,6 +53,7 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.model.UnreadCount
+import org.libremail.domain.model.sanitizeAttachmentName
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import java.io.File
@@ -69,6 +75,7 @@ class MailRepositoryImpl @Inject constructor(
     private val sendScheduler: SendScheduler,
     private val accountSettingsRepository: AccountSettingsRepository,
     private val signatureRepository: SignatureRepository,
+    private val attachmentUriGrants: AttachmentUriGrants,
 ) : MailRepository {
 
     // Application-lifetime scope for fire-and-forget server pushes that must outlive the caller — e.g.
@@ -76,12 +83,6 @@ class MailRepositoryImpl @Inject constructor(
     // pattern as LibreMailApplication.appScope / IdleService.scope: this class is @Singleton (bound to
     // Hilt's SingletonComponent), so the scope's lifetime is the process's, not any one caller's coroutine.
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
-        messageDao.observeFolderSummaries(accountId, folder).map { rows -> rows.map { it.toDomain() } }
-
-    override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
-        messageDao.observeUnifiedFolderSummaries(folder).map { rows -> rows.map { it.toDomain() } }
 
     override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> = Pager(
         config = PagingConfig(
@@ -92,9 +93,44 @@ class MailRepositoryImpl @Inject constructor(
             pageSize = MAILBOX_PAGE_SIZE,
             initialLoadSize = MAILBOX_PAGE_SIZE * 3,
             enablePlaceholders = false,
+            // Bound the in-memory window so a deep scroll can't accumulate the whole (potentially
+            // thousands-of-rows) inbox: keep ~5 pages resident and evict the rest. Must be
+            // >= pageSize + 2*prefetchDistance (40 + 2*40 = 120); with placeholders off, evicted leading
+            // positions drop from the loaded window and the list rendering already null-guards them.
+            maxSize = MAILBOX_PAGE_SIZE * 5,
         ),
         pagingSourceFactory = { messageDao.pagingUnifiedFolderSummaries(folder) },
     ).flow.map { page -> page.map { it.toDomain() } }
+
+    override fun pagedFolderMessages(accountId: String, folder: String): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingFolderSummaries(accountId, folder) }
+
+    override fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingUnifiedFolderSearchSummaries(folder, likePattern(query)) }
+
+    override fun pagedFolderSearchMessages(
+        accountId: String,
+        folder: String,
+        query: String,
+    ): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingFolderSearchSummaries(accountId, folder, likePattern(query)) }
+
+    /**
+     * Shared [Pager] for the per-account and search mailbox lists (issue #214). Same window sizing as
+     * the unified browse pager, plus a bounded `maxSize` so scrolling a long list drops far-offscreen
+     * pages instead of retaining the whole scrolled-through range in memory. Placeholders stay off (the
+     * row height varies, and the list never sizes a scrollbar to the full uncounted result).
+     */
+    private fun mailboxPager(pagingSourceFactory: () -> PagingSource<Int, MessageSummary>): Flow<PagingData<Message>> =
+        Pager(
+            config = PagingConfig(
+                pageSize = MAILBOX_PAGE_SIZE,
+                initialLoadSize = MAILBOX_PAGE_SIZE * 3,
+                enablePlaceholders = false,
+                maxSize = MAILBOX_PAGE_SIZE * 5,
+            ),
+            pagingSourceFactory = pagingSourceFactory,
+        ).flow.map { page -> page.map { it.toDomain() } }
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> =
         folderDao.observeForAccount(accountId).map { rows ->
@@ -404,6 +440,9 @@ class MailRepositoryImpl @Inject constructor(
                 body = outgoing.body,
                 createdAt = System.currentTimeMillis(),
                 bodyHtml = outgoing.bodyHtml,
+                // Persist the cid↔file pairing (in staging-index order) so the send worker can attach
+                // an inline image with its Content-ID even though the files are looked up by index.
+                attachments = outgoing.attachments.toOutgoingAttachmentsJson(),
             ),
         )
         sendScheduler.sendNow()
@@ -417,7 +456,7 @@ class MailRepositoryImpl @Inject constructor(
     private fun copyAttachments(outboxId: String, attachments: List<OutgoingAttachment>) {
         if (attachments.isEmpty()) return
         attachments.forEachIndexed { index, attachment ->
-            val safeName = attachment.name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+            val safeName = sanitizeAttachmentName(attachment.name)
             val dir = File(context.cacheDir, "outbox/$outboxId/$index").apply { mkdirs() }
             runCatching {
                 context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { input ->
@@ -433,15 +472,24 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun saveDraft(draft: Draft) = draftDao.upsert(draft.toEntity())
 
-    override suspend fun deleteDraft(id: String) = draftDao.delete(id)
+    override suspend fun deleteDraft(id: String) {
+        // Capture the draft's attachment URIs before the row is gone, then release any persistable grant
+        // no other live draft/outbox row still needs (security review): a deleted draft can never reopen.
+        val uris = draftDao.getById(id)?.attachments?.toOutgoingAttachments()?.map { it.uri }.orEmpty()
+        draftDao.delete(id)
+        attachmentUriGrants.releaseUnreferenced(uris)
+    }
 
     override fun observeOutbox(): Flow<List<OutboxMessage>> = outboxDao.observeAll().map { rows ->
         rows.map { it.toDomain() }
     }
 
     override suspend fun cancelOutboxMessage(id: String) {
+        val uris = outboxDao.getById(id)?.attachments?.toOutgoingAttachments()?.map { it.uri }.orEmpty()
         outboxDao.delete(id)
         File(context.cacheDir, "outbox/$id").deleteRecursively()
+        // The queued copy is gone; release any picked-URI grant no other live draft/outbox row needs.
+        attachmentUriGrants.releaseUnreferenced(uris)
     }
 
     override suspend fun retryOutbox() = sendScheduler.sendNow()
@@ -480,7 +528,7 @@ class MailRepositoryImpl @Inject constructor(
      * and avoids filename collisions between messages.
      */
     private fun attachmentFile(messageId: String, partIndex: Int, filename: String): File {
-        val safeName = filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "attachment" }
+        val safeName = sanitizeAttachmentName(filename)
         return File(attachmentCacheDir(context.cacheDir, messageId), "$partIndex/$safeName")
     }
 }
@@ -498,3 +546,13 @@ private const val SEEN_FLAG_RETRY_BACKOFF_MS = 2_000L
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
+
+/**
+ * Builds the SQL `LIKE` pattern the paged-search DAO queries take (issue #214), preserving the old
+ * `matchesSearch` literal-substring semantics: escape the LIKE metacharacters (`\ % _`) — the `\`
+ * first, so the escapes just added aren't themselves re-escaped — then wrap the term in wildcards.
+ */
+private fun likePattern(query: String): String {
+    val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return "%$escaped%"
+}

@@ -19,5 +19,26 @@ data class OutgoingMessage(
     val attachments: List<OutgoingAttachment> = emptyList(),
 )
 
-/** A file the user attached, referenced by its content-URI string until it is sent. */
-data class OutgoingAttachment(val uri: String, val name: String)
+/**
+ * A file the user attached, referenced by its content-URI string until it is sent.
+ *
+ * An inline image (inserted into the body, not listed as a separate attachment) has [isInline] true
+ * and a [contentId]: the body's HTML references it as `<img src="cid:contentId">`, and the sender
+ * emits the part with a matching `Content-ID` (SMTP `multipart/related`) or `isInline`+`contentId`
+ * (Graph). A regular attachment leaves both at their defaults.
+ */
+data class OutgoingAttachment(
+    val uri: String,
+    val name: String,
+    val contentId: String? = null,
+    val isInline: Boolean = false,
+)
+
+/**
+ * Sanitizes a picked or received attachment display name before it becomes an on-disk filename or a
+ * MIME `Content-Disposition` filename: drops any path prefix and strips ISO control characters
+ * (including CR/LF), so a crafted name can neither traverse directories nor inject header lines.
+ * Falls back to `"attachment"` when nothing usable remains.
+ */
+fun sanitizeAttachmentName(raw: String): String =
+    raw.substringAfterLast('/').substringAfterLast('\\').filterNot { it.isISOControl() }.ifBlank { "attachment" }

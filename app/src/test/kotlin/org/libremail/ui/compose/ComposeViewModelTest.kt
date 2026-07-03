@@ -2,17 +2,22 @@
 package org.libremail.ui.compose
 
 import androidx.lifecycle.SavedStateHandle
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -33,6 +38,8 @@ import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.Signature
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.richtext.RichBaseStyle
+import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.navigation.Routes
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -70,6 +77,9 @@ class ComposeViewModelTest {
         settings: Map<String, AccountSettings> = emptyMap(),
         mailRepository: MailRepository = mockk(relaxed = true),
         defaultAccountId: String? = null,
+        lastFontCss: String? = null,
+        lastFontSizePt: Int? = null,
+        settingsRepository: SettingsRepository = fakeSettingsRepository(defaultAccountId, lastFontCss, lastFontSizePt),
     ): ComposeViewModel {
         val accountRepository = mockk<AccountRepository>()
         every { accountRepository.observeAccounts() } returns MutableStateFlow(accounts)
@@ -80,8 +90,6 @@ class ComposeViewModelTest {
         }
         val signatureRepository = mockk<SignatureRepository>()
         coEvery { signatureRepository.getDefault(any()) } answers { signatures[firstArg<String>()] }
-        val settingsRepository = mockk<SettingsRepository>()
-        every { settingsRepository.settings } returns flowOf(AppSettings(defaultAccountId = defaultAccountId))
         return ComposeViewModel(
             savedStateHandle = savedState,
             mailRepository = mailRepository,
@@ -91,6 +99,26 @@ class ComposeViewModelTest {
             signatureRepository = signatureRepository,
             settingsRepository = settingsRepository,
         )
+    }
+
+    /**
+     * A [SettingsRepository] mock carrying [AppSettings] built from the given fields, with
+     * [SettingsRepository.setLastFont] stubbed so callers that don't care about it (most tests) don't need to.
+     */
+    private fun fakeSettingsRepository(
+        defaultAccountId: String? = null,
+        lastFontCss: String? = null,
+        lastFontSizePt: Int? = null,
+    ): SettingsRepository {
+        val repository = mockk<SettingsRepository>()
+        val appSettings = AppSettings(
+            defaultAccountId = defaultAccountId,
+            lastFontCss = lastFontCss,
+            lastFontSizePt = lastFontSizePt,
+        )
+        every { repository.settings } returns flowOf(appSettings)
+        coEvery { repository.setLastFont(any(), any()) } just Runs
+        return repository
     }
 
     @Test
@@ -172,6 +200,38 @@ class ComposeViewModelTest {
     }
 
     @Test
+    fun `seeds a brand-new composition with the remembered font`() = runTest(testDispatcher) {
+        // No signature configured, so the body is empty going in — the seeded base style still wraps it.
+        val vm = viewModel(lastFontCss = "Georgia, serif", lastFontSizePt = 14)
+
+        val html = vm.state.value.bodyHtml
+        assertTrue(html != null, "expected a seeded HTML body, was null")
+        assertEquals(RichBaseStyle("Georgia, serif", 14), RichTextHtml.fromHtml(html).baseStyle)
+    }
+
+    @Test
+    fun `seeds the remembered font onto a new message's signature`() = runTest(testDispatcher) {
+        val vm = viewModel(
+            signatures = mapOf("imap:a" to signature("imap:a", "Cheers, Alice")),
+            lastFontCss = "Georgia, serif",
+            lastFontSizePt = null,
+        )
+
+        val content = RichTextHtml.fromHtml(vm.state.value.bodyHtml!!)
+        assertEquals(RichBaseStyle("Georgia, serif", null), content.baseStyle)
+        // The signature text itself must still be present, just wrapped by the base style.
+        assertTrue(content.text.contains("Cheers, Alice"), "text=${content.text}")
+    }
+
+    @Test
+    fun `stays plaintext-only when composing new with no remembered font`() = runTest(testDispatcher) {
+        val vm = viewModel(signatures = mapOf("imap:a" to signature("imap:a", "Cheers, Alice")))
+
+        // No font preference stored: the plain signature must not gain an HTML body just from seeding.
+        assertNull(vm.state.value.bodyHtml)
+    }
+
+    @Test
     fun `does not append a signature when resuming a draft`() = runTest(testDispatcher) {
         val mailRepository = mockk<MailRepository>(relaxed = true)
         coEvery { mailRepository.getDraft("d1") } returns Draft(
@@ -193,6 +253,32 @@ class ComposeViewModelTest {
 
         assertEquals("Draft body", vm.state.value.body)
         // The draft's HTML body is restored so it round-trips back out on send.
+        assertEquals("<p>Draft <b>body</b></p>", vm.state.value.bodyHtml)
+    }
+
+    @Test
+    fun `does not seed the remembered font onto an existing draft`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.getDraft("d1") } returns Draft(
+            id = "d1",
+            accountId = "imap:a",
+            to = "x@example.org",
+            cc = "",
+            subject = "Hi",
+            body = "Draft body",
+            updatedAt = 0L,
+            bodyHtml = "<p>Draft <b>body</b></p>",
+            attachments = emptyList(),
+        )
+        val vm = viewModel(
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_DRAFT to "d1")),
+            mailRepository = mailRepository,
+            lastFontCss = "Georgia, serif",
+            lastFontSizePt = 14,
+        )
+
+        assertEquals("Draft body", vm.state.value.body)
+        // Only brand-new compositions seed the remembered font; a resumed draft's HTML is untouched.
         assertEquals("<p>Draft <b>body</b></p>", vm.state.value.bodyHtml)
     }
 
@@ -230,6 +316,67 @@ class ComposeViewModelTest {
 
         assertEquals("<p>Hello <i>world</i></p>", sent.captured.bodyHtml)
         assertEquals("Hello", sent.captured.body)
+    }
+
+    @Test
+    fun `persists the message-wide base style font on send`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val settingsRepository = fakeSettingsRepository()
+        val vm = viewModel(mailRepository = mailRepository, settingsRepository = settingsRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Hello", "<div style=\"font-family:Georgia, serif;font-size:14pt\"><p>Hello</p></div>")
+        vm.send()
+
+        coVerify { settingsRepository.setLastFont("Georgia, serif", 14) }
+    }
+
+    @Test
+    fun `persists the last font span when the message has no base style`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val settingsRepository = fakeSettingsRepository()
+        val vm = viewModel(mailRepository = mailRepository, settingsRepository = settingsRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange(
+            "Hello there",
+            "<p><span style=\"font-family:Arial\">Hello</span> " +
+                "<span style=\"font-size:18pt\">there</span></p>",
+        )
+        vm.send()
+
+        // Each axis independently takes the last matching span: family from "Hello", size from "there".
+        coVerify { settingsRepository.setLastFont("Arial", 18) }
+    }
+
+    @Test
+    fun `does not persist anything when the sent message has no font styling`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val settingsRepository = fakeSettingsRepository()
+        val vm = viewModel(mailRepository = mailRepository, settingsRepository = settingsRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Hello world", "<p>Hello <b>world</b></p>")
+        vm.send()
+
+        coVerify(exactly = 0) { settingsRepository.setLastFont(any(), any()) }
+    }
+
+    @Test
+    fun `does not persist anything for a plaintext-only send`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val settingsRepository = fakeSettingsRepository()
+        val vm = viewModel(mailRepository = mailRepository, settingsRepository = settingsRepository)
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Hello world", null)
+        vm.send()
+
+        coVerify(exactly = 0) { settingsRepository.setLastFont(any(), any()) }
     }
 
     @Test
@@ -389,5 +536,98 @@ class ComposeViewModelTest {
         assertFalse(vm.state.value.showAttachmentPrompt)
         assertFalse(vm.state.value.highlightAttach)
         coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `rapid edits coalesce into a single debounced autosave`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle() // let init (signature/font seeding) settle before observing autosaves
+
+        vm.onToChange("bob@example.org")
+        vm.onSubjectChange("Hi")
+        vm.onBodyChange("Hello", null)
+        vm.onBodyChange("Hello world", null)
+
+        // Still inside the debounce window: nothing persisted yet.
+        coVerify(exactly = 0) { mailRepository.saveDraft(any()) }
+
+        advanceUntilIdle() // cross the debounce window
+        coVerify(exactly = 1) { mailRepository.saveDraft(any()) }
+    }
+
+    @Test
+    fun `repeated autosaves of a brand-new draft update a single row`() = runTest(testDispatcher) {
+        // Regression test for the draft-id-reuse bug: a brand-new compose (draftId == null) must not
+        // mint a fresh UUID per autosave tick, or each tick would insert a duplicate draft row.
+        val saved = mutableListOf<Draft>()
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.saveDraft(capture(saved)) } just Runs
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onBodyChange("First", null)
+        advanceUntilIdle() // autosave #1
+
+        vm.onBodyChange("First, expanded", null)
+        advanceUntilIdle() // autosave #2
+
+        assertEquals(2, saved.size, "expected two autosaves")
+        assertEquals(saved[0].id, saved[1].id, "autosaves must reuse one draft id, not insert per tick")
+    }
+
+    @Test
+    fun `exiting saves immediately without waiting for the debounce`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onBodyChange("Draft body", null)
+        vm.onExit()
+        runCurrent() // run onExit's coroutine, but do NOT advance past the debounce window
+
+        coVerify(exactly = 1) { mailRepository.saveDraft(any()) }
+    }
+
+    @Test
+    fun `does not autosave while a send is in flight`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val gate = CompletableDeferred<Result<Unit>>()
+        coEvery { mailRepository.sendMessage(any()) } coAnswers { gate.await() }
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Body", null)
+        vm.send() // performSend sets sending = true and suspends on the gate
+
+        // An edit lands mid-send; even past the debounce window it must not autosave.
+        vm.onBodyChange("Body extended", null)
+        advanceUntilIdle()
+        coVerify(exactly = 0) { mailRepository.saveDraft(any()) }
+
+        gate.complete(Result.success(Unit)) // let the send finish cleanly
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `sending after an autosave deletes the autosaved draft`() = runTest(testDispatcher) {
+        // A brand-new compose that autosaved a row must not orphan it once the message is actually sent.
+        val saved = mutableListOf<Draft>()
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.saveDraft(capture(saved)) } just Runs
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Body", null)
+        advanceUntilIdle() // autosave persists the draft
+        val autosavedId = saved.single().id
+
+        vm.send()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { mailRepository.deleteDraft(autosavedId) }
     }
 }

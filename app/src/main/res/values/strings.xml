@@ -107,6 +107,29 @@
     <string name="format_link_apply">Link</string>
     <string name="format_link_needs_selection">Select some text first, then add a link.</string>
     <string name="format_color_none">No color</string>
+    <string name="format_color">Font color</string>
+    <string name="format_color_black">Black</string>
+    <string name="format_color_gray">Gray</string>
+    <string name="format_color_red">Red</string>
+    <string name="format_color_orange">Orange</string>
+    <string name="format_color_yellow">Yellow</string>
+    <string name="format_color_green">Green</string>
+    <string name="format_color_blue">Blue</string>
+    <string name="format_color_purple">Purple</string>
+    <string name="format_highlight">Highlight</string>
+    <string name="format_highlight_yellow">Yellow</string>
+    <string name="format_highlight_green">Green</string>
+    <string name="format_highlight_cyan">Cyan</string>
+    <string name="format_highlight_pink">Pink</string>
+    <string name="format_size">Font size</string>
+    <string name="format_size_default">Default</string>
+    <string name="format_size_pt">%1$d pt</string>
+    <string name="format_align_start">Align start</string>
+    <string name="format_align_center">Align center</string>
+    <string name="format_align_end">Align end</string>
+    <string name="format_font">Font</string>
+    <string name="format_font_default">Default</string>
+    <string name="format_image">Insert image</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>
@@ -140,6 +163,12 @@
     <string name="attachments_see_fewer">See fewer attachments</string>
     <string name="attachments_expand">Expand attachments</string>
     <string name="attachments_collapse">Collapse attachments</string>
+
+    <!-- Onboarding: GPL-3.0 license agreement, the first screen the user ever sees (#172) -->
+    <string name="license_title">License agreement</string>
+    <string name="license_intro">LibreMail is free software, licensed under the GNU General Public License version 3. Please read it below, then Agree to continue or Decline to exit.</string>
+    <string name="license_agree">Agree</string>
+    <string name="license_decline">Decline</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Welcome to LibreMail</string>
@@ -175,12 +204,13 @@
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose your email provider to get started.</string>
 
-    <!-- App-password guided setup (Gmail/Yahoo/iCloud) -->
+    <!-- App-password guided setup (Gmail/Yahoo/iCloud/AOL) -->
     <string name="app_password_title">Connect %1$s</string>
     <string name="app_password_unknown_provider">Unknown email provider.</string>
     <string name="app_password_intro_gmail">To connect Gmail, create an app password in your Google Account. Gmail requires 2-Step Verification to be turned on before you can create one.</string>
     <string name="app_password_intro_yahoo">To connect Yahoo Mail, generate an app password from your Yahoo Account security settings.</string>
     <string name="app_password_intro_icloud">To connect iCloud Mail, create an app-specific password from your Apple ID account page.</string>
+    <string name="app_password_intro_aol">To connect AOL Mail, generate an app password from your AOL Account security settings.</string>
     <string name="app_password_what_is">An app password is a one-off password that lets an app sign in to your account without your main password or a two-factor code.</string>
     <string name="app_password_warning">Store this app password carefully — it grants full access to your email. LibreMail keeps it only on this device.</string>
     <string name="app_password_open_page">Create an app password for %1$s</string>
@@ -189,6 +219,7 @@
     <string name="app_password_open_failed">Couldn\'t open your browser</string>
     <string name="app_password_email">Email address</string>
     <string name="app_password_field">App password</string>
+    <string name="app_password_field_disclaimer">Do not try to use your account password. It will not work. You must use an app password.</string>
     <string name="app_password_show_servers">Server settings</string>
     <string name="app_password_server_imap">Incoming (IMAP): %1$s:%2$d (%3$s)</string>
     <string name="app_password_server_smtp">Outgoing (SMTP): %1$s:%2$d (%3$s)</string>

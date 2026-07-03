@@ -5,13 +5,18 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -28,6 +33,8 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
+import org.libremail.richtext.RichBaseStyle
+import org.libremail.richtext.RichStyle
 import org.libremail.richtext.RichTextContent
 import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.navigation.Routes
@@ -53,8 +60,32 @@ data class ComposeUiState(
     val showAttachmentPrompt: Boolean = false,
     /** Draw the eye to the attach button — the user answered the attachment prompt with "Yes". */
     val highlightAttach: Boolean = false,
+    /**
+     * A just-picked inline image waiting for the editor to drop its token at the caret. The editor
+     * consumes it (via [ComposeViewModel.onInlineImageInserted]) once inserted; a transient signal, so
+     * it is excluded from the autosaved [DraftContent].
+     */
+    val pendingInlineImage: PendingInlineImage? = null,
 )
 
+/** A picked inline image the editor should insert: the token to show and the [contentId] to link it by. */
+data class PendingInlineImage(val contentId: String, val name: String)
+
+/** The persisted draft fields; autosave fires only when one of these actually changes (#177). */
+private data class DraftContent(
+    val to: String,
+    val cc: String,
+    val bcc: String,
+    val subject: String,
+    val body: String,
+    val bodyHtml: String?,
+    val attachments: List<OutgoingAttachment>,
+)
+
+/** Idle window after the last edit before an in-progress compose draft is autosaved (#177). */
+private const val DRAFT_AUTOSAVE_DEBOUNCE_MS = 1_500L
+
+@OptIn(FlowPreview::class)
 @HiltViewModel
 class ComposeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -68,6 +99,17 @@ class ComposeViewModel @Inject constructor(
 
     private val draftId: String? =
         savedStateHandle.get<String>(Routes.COMPOSE_ARG_DRAFT)?.takeIf { it.isNotBlank() }
+
+    /**
+     * The id every save in this session writes under: the resumed draft's [draftId], or — for a
+     * brand-new composition — a single id generated once and reused for every autosave (#177). Without
+     * this, `id = draftId ?: UUID.randomUUID()` minted a fresh id on each call, so periodic autosave
+     * would insert a new duplicate draft row per tick instead of updating the same one.
+     */
+    private val persistedDraftId: String by lazy { draftId ?: UUID.randomUUID().toString() }
+
+    /** Whether a draft row currently exists for this session (resumed, or autosaved at least once). */
+    private var draftPersisted: Boolean = draftId != null
 
     private val _state = MutableStateFlow(
         ComposeUiState(
@@ -122,17 +164,33 @@ class ComposeViewModel @Inject constructor(
             // signature. Reply/forward drafts already carry theirs, so they take the draft branch above.
             viewModelScope.launch {
                 val available = accountRepository.observeAccounts().first { it.isNotEmpty() }
+                val settings = settingsRepository.settings.first()
                 // The persisted default (#163) only counts if it still names an account that exists.
                 // Deleting the default account normally clears this via
                 // SettingsRepository.clearDefaultAccountId, but a stale id could still reach here (e.g.
                 // a Backup restore onto a device that never had the account) — validate rather than
                 // trust it, so it just falls through to the incidental "first account alphabetically"
                 // behavior instead of crashing or composing from a nonexistent account.
-                val defaultAccountId = settingsRepository.settings.first().defaultAccountId
-                val validDefaultAccountId = defaultAccountId?.takeIf { id -> available.any { it.id == id } }
+                val validDefaultAccountId = settings.defaultAccountId?.takeIf { id -> available.any { it.id == id } }
                 val effectiveId = _state.value.fromAccountId ?: validDefaultAccountId ?: available.first().id
                 applySignature(effectiveId)
+                // Seed the message-wide default font (#78) after the signature is applied, so the whole
+                // body — including the signature just appended — picks it up. New compositions only:
+                // replies/forwards resume as drafts and take the branch above, left untouched.
+                seedRememberedFont(settings.lastFontCss, settings.lastFontSizePt)
             }
+        }
+        // Debounced periodic autosave (#177): coalesce rapid edits to the persisted fields into one
+        // write after a short idle window, so an in-progress draft survives a background-kill without
+        // waiting for the explicit back-press save. Keyed only off the fields saveOrDeleteDraft() writes
+        // (from-account and transient UI flags are intentionally excluded).
+        viewModelScope.launch {
+            _state
+                .map { DraftContent(it.to, it.cc, it.bcc, it.subject, it.body, it.bodyHtml, it.attachments) }
+                .distinctUntilChanged()
+                .drop(1)
+                .debounce(DRAFT_AUTOSAVE_DEBOUNCE_MS)
+                .collect { autosaveDraft() }
         }
     }
 
@@ -149,8 +207,42 @@ class ComposeViewModel @Inject constructor(
      * The rich editor reports the current body in both forms: [plain] (also the plaintext fallback)
      * and [html], which is null when the content carries no formatting so the message stays
      * plaintext-only. Both are held for sending and for saving the draft.
+     *
+     * Inline images are reconciled against the body here: an inline attachment is kept only while its
+     * `cid:` is still referenced by the HTML (or is the one currently being inserted), so deleting an
+     * image's `[image: …]` token drops the image itself. Regular attachments are never touched.
      */
-    fun onBodyChange(plain: String, html: String?) = _state.update { it.copy(body = plain, bodyHtml = html) }
+    fun onBodyChange(plain: String, html: String?) = _state.update { s ->
+        val referenced = referencedContentIds(html)
+        val keptAttachments = s.attachments.filter { attachment ->
+            !attachment.isInline ||
+                attachment.contentId in referenced ||
+                attachment.contentId == s.pendingInlineImage?.contentId
+        }
+        s.copy(body = plain, bodyHtml = html, attachments = keptAttachments)
+    }
+
+    /** The content ids the body's HTML still references (`cid:…`), used to prune deleted inline images. */
+    private fun referencedContentIds(html: String?): Set<String> =
+        html?.let { RichTextHtml.fromHtml(it).images.mapTo(mutableSetOf()) { image -> image.contentId } }.orEmpty()
+
+    /**
+     * A picked inline image: track it as an inline attachment (alongside regular ones) and hand the
+     * editor a [PendingInlineImage] to drop at the caret. The generated content id ties the body's
+     * `cid:` reference to the attachment the sender emits with a matching `Content-ID`.
+     */
+    fun onImagePicked(uri: String, name: String) {
+        val contentId = "img-${UUID.randomUUID()}@libremail"
+        _state.update {
+            it.copy(
+                attachments = it.attachments + OutgoingAttachment(uri, name, contentId, isInline = true),
+                pendingInlineImage = PendingInlineImage(contentId, name),
+            )
+        }
+    }
+
+    /** The editor has inserted the pending image's token; clear the transient signal. */
+    fun onInlineImageInserted() = _state.update { it.copy(pendingInlineImage = null) }
 
     fun selectFrom(accountId: String) {
         viewModelScope.launch { applySignature(accountId) }
@@ -201,6 +293,45 @@ class ComposeViewModel @Inject constructor(
     /** Keeps an HTML body only when it actually carries formatting, so plaintext stays plaintext. */
     private fun normalizedHtml(html: String): String? =
         if (html.isBlank() || !RichTextHtml.fromHtml(html).hasFormatting()) null else html
+
+    /**
+     * Seeds a brand-new composition with the last-remembered font (#78) by wrapping the current body
+     * in a [RichBaseStyle], so the whole message — including any signature just applied — defaults to
+     * it. A no-op when nothing has been remembered yet, so a message that would otherwise stay
+     * plaintext-only isn't forced into an HTML body for no visible reason (an empty [RichBaseStyle]
+     * still flips [RichTextContent.hasFormatting]).
+     */
+    private fun seedRememberedFont(fontCss: String?, fontSizePt: Int?) {
+        if (fontCss == null && fontSizePt == null) return
+        _state.update { s ->
+            val content = (s.bodyHtml?.let(RichTextHtml::fromHtml) ?: RichTextContent(text = s.body))
+                .copy(baseStyle = RichBaseStyle(fontCss, fontSizePt))
+            s.copy(bodyHtml = RichTextHtml.toHtml(content))
+        }
+    }
+
+    /**
+     * Remembers the font used in a just-sent formatted message (#78): the message-wide base style if
+     * one is set, else the last `FontFamily`/`FontSize` span in the body (the formatting nearest the
+     * end of the message). A no-op for a plaintext send ([bodyHtml] null) or a formatted one that never
+     * touched the font — an unrelated send must never clear a previously remembered preference.
+     */
+    private suspend fun rememberFontPreference(bodyHtml: String?) {
+        val html = bodyHtml ?: return
+        val (fontCss, fontSizePt) = lastFontIn(RichTextHtml.fromHtml(html)) ?: return
+        settingsRepository.setLastFont(fontCss, fontSizePt)
+    }
+
+    /** The base style if set, else the last matching inline font span; null when neither is present. */
+    private fun lastFontIn(content: RichTextContent): Pair<String?, Int?>? {
+        content.baseStyle?.let { return it.fontCss to it.fontSizePt }
+        val css = content.spans.lastOrNull { it.style is RichStyle.FontFamily }
+            ?.let { (it.style as RichStyle.FontFamily).css }
+        val sizePt = content.spans.lastOrNull { it.style is RichStyle.FontSize }
+            ?.let { (it.style as RichStyle.FontSize).pt }
+        return if (css != null || sizePt != null) css to sizePt else null
+    }
+
     fun addAttachments(items: List<OutgoingAttachment>) =
         _state.update { it.copy(attachments = it.attachments + items) }
     fun removeAttachment(uri: String) = _state.update {
@@ -244,6 +375,23 @@ class ComposeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Immediately flushes any pending draft save — called from ComposeScreen on `ON_STOP` so the last
+     * keystrokes within the debounce window aren't lost if the app is killed while backgrounded (#177).
+     */
+    fun flushDraft() {
+        viewModelScope.launch { autosaveDraft() }
+    }
+
+    /**
+     * Persists (or deletes, when emptied) the draft now — unless a send is in flight or we've already
+     * navigated away. Mirrors onExit()'s "don't save mid-send" guard and never re-creates a draft for
+     * an already-sent message (see [navigated]). Shared by the debounce collector and [flushDraft].
+     */
+    private suspend fun autosaveDraft() {
+        if (!_state.value.sending && !navigated) saveOrDeleteDraft()
+    }
+
     /** Closes the screen exactly once, so send() and a stray back-press can't double-pop. */
     private suspend fun finish() {
         if (navigated) return
@@ -260,21 +408,29 @@ class ComposeViewModel @Inject constructor(
             s.body.isNotBlank() ||
             s.attachments.isNotEmpty()
         when {
-            hasContent -> mailRepository.saveDraft(
-                Draft(
-                    id = draftId ?: UUID.randomUUID().toString(),
-                    accountId = s.fromAccountId,
-                    to = s.to,
-                    cc = s.cc,
-                    bcc = s.bcc,
-                    subject = s.subject,
-                    body = s.body,
-                    updatedAt = System.currentTimeMillis(),
-                    bodyHtml = s.bodyHtml,
-                    attachments = s.attachments,
-                ),
-            )
-            draftId != null -> mailRepository.deleteDraft(draftId) // an existing draft was emptied out
+            hasContent -> {
+                mailRepository.saveDraft(
+                    Draft(
+                        id = persistedDraftId,
+                        accountId = s.fromAccountId,
+                        to = s.to,
+                        cc = s.cc,
+                        bcc = s.bcc,
+                        subject = s.subject,
+                        body = s.body,
+                        updatedAt = System.currentTimeMillis(),
+                        bodyHtml = s.bodyHtml,
+                        attachments = s.attachments,
+                    ),
+                )
+                draftPersisted = true
+            }
+            // The draft was emptied out: drop the persisted row — a resumed draft, or one an earlier
+            // autosave tick created this session — so an empty orphan is never left behind.
+            draftPersisted -> {
+                mailRepository.deleteDraft(persistedDraftId)
+                draftPersisted = false
+            }
         }
     }
 
@@ -331,7 +487,11 @@ class ComposeViewModel @Inject constructor(
             ),
         ).fold(
             onSuccess = {
-                draftId?.let { mailRepository.deleteDraft(it) }
+                rememberFontPreference(s.bodyHtml)
+                // Delete the draft this message was composed from — whether resumed from the drafts list
+                // or created by an autosave tick this session (#177) — so sending never orphans it.
+                if (draftPersisted) mailRepository.deleteDraft(persistedDraftId)
+                draftPersisted = false
                 _state.update { it.copy(sending = false) }
                 finish()
             },

@@ -9,15 +9,20 @@ import androidx.work.WorkerParameters
 import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
+import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
+import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
+import org.libremail.mail.SendableAttachment
 import org.libremail.mail.SmtpSender
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
@@ -36,6 +41,8 @@ class SendWorker @AssistedInject constructor(
     private val graphSender: GraphSender,
     private val connectionFactory: Lazy<MailConnectionFactory>,
     private val cacheGuard: EncryptedCacheGuard,
+    // Lazy for the same reason as the DAOs above: resolving it touches the Room DB.
+    private val attachmentUriGrants: Lazy<AttachmentUriGrants>,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private companion object {
@@ -47,6 +54,7 @@ class SendWorker @AssistedInject constructor(
         val outboxDao = this.outboxDao.get()
         val accountDao = this.accountDao.get()
         val connectionFactory = this.connectionFactory.get()
+        val attachmentUriGrants = this.attachmentUriGrants.get()
         val pending = outboxDao.getAll()
         if (pending.isEmpty()) return Result.success()
 
@@ -57,6 +65,7 @@ class SendWorker @AssistedInject constructor(
             if (account == null) {
                 outboxDao.delete(entity.id) // account removed — drop the queued message
                 attachmentDir.deleteRecursively()
+                attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
                 continue
             }
             runCatching {
@@ -69,21 +78,24 @@ class SendWorker @AssistedInject constructor(
                     body = entity.body,
                     bodyHtml = entity.bodyHtml,
                 )
-                val files = orderedAttachments(attachmentDir)
+                val attachments = stagedAttachments(attachmentDir, entity.attachments.toOutgoingAttachments())
                 if (account.authType == AuthType.OAUTH_OUTLOOK) {
-                    sendOutlook(connectionFactory, account, message, files)
+                    sendOutlook(connectionFactory, account, message, attachments)
                 } else {
                     smtpSender.send(
                         connectionFactory.smtpParamsFor(account),
                         from = account.email,
                         message = message,
-                        attachments = files,
+                        attachments = attachments,
                     )
                 }
             }.fold(
                 onSuccess = {
                     outboxDao.delete(entity.id)
                     attachmentDir.deleteRecursively()
+                    // The picked bytes were staged at enqueue; with the row sent, drop the persistable
+                    // grant unless a live draft/outbox row still references the same URI (security review).
+                    attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
                 },
                 onFailure = { e ->
                     if (e is GraphSendException && e.mayHaveSent) {
@@ -114,18 +126,18 @@ class SendWorker @AssistedInject constructor(
         connectionFactory: MailConnectionFactory,
         account: Account,
         message: OutgoingMessage,
-        files: List<File>,
+        attachments: List<SendableAttachment>,
     ) {
         try {
             val token = connectionFactory.graphTokenFor(account)
-            graphSender.send(token, message, files)
+            graphSender.send(token, message, attachments)
         } catch (e: GraphSendException) {
             if (e.mayHaveSent) throw e
             smtpSender.send(
                 connectionFactory.smtpParamsFor(account),
                 from = account.email,
                 message = message,
-                attachments = files,
+                attachments = attachments,
             )
         } catch (e: CancellationException) {
             throw e
@@ -136,15 +148,35 @@ class SendWorker @AssistedInject constructor(
                 connectionFactory.smtpParamsFor(account),
                 from = account.email,
                 message = message,
-                attachments = files,
+                attachments = attachments,
             )
         }
     }
 
+    /**
+     * Pairs each staged file with its [metadata] entry by staging index, so an inline image keeps its
+     * `Content-ID`/inline flag alongside its file. A missing file (a copy that failed) is skipped.
+     * When [metadata] is empty — a message queued before the outbox carried attachment metadata, or a
+     * genuinely attachment-less one — falls back to restoring the staged files positionally as plain
+     * attachments, so an in-flight message from before the upgrade still sends its files.
+     */
+    private fun stagedAttachments(dir: File, metadata: List<OutgoingAttachment>): List<SendableAttachment> {
+        if (metadata.isEmpty()) {
+            return orderedAttachmentFiles(dir).map { SendableAttachment(it) }
+        }
+        return metadata.mapIndexedNotNull { index, meta ->
+            val file = File(dir, index.toString()).listFiles()?.firstOrNull() ?: return@mapIndexedNotNull null
+            SendableAttachment(file, contentId = meta.contentId, isInline = meta.isInline)
+        }
+    }
+
     /** Attachments are staged one-per-indexed-subdirectory so their original order is preserved. */
-    private fun orderedAttachments(dir: File): List<File> = dir.listFiles()
+    private fun orderedAttachmentFiles(dir: File): List<File> = dir.listFiles()
         ?.filter { it.isDirectory }
         ?.sortedBy { it.name.toIntOrNull() ?: Int.MAX_VALUE }
         ?.mapNotNull { it.listFiles()?.firstOrNull() }
         .orEmpty()
+
+    /** The picked content-URIs this queued message was built from, for releasing their persistable grants. */
+    private fun OutboxEntity.attachmentUris(): List<String> = attachments.toOutgoingAttachments().map { it.uri }
 }

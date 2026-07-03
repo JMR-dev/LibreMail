@@ -200,6 +200,30 @@ class MigrationTest {
         db.close()
     }
 
+    /** v17 -> v18 (issue #77): `outbox.attachments` appears defaulting to '' and the queued row survives. */
+    @Test
+    fun migrate17To18_addsEmptyAttachmentsToOutbox() {
+        helper.createDatabase(TEST_DB, 17).apply {
+            // v16 dropped the account tables, so a bare outbox row is all this migration needs.
+            execSQL(
+                "INSERT INTO outbox (id, accountId, toAddresses, ccAddresses, bccAddresses, subject, body, " +
+                    "createdAt, lastError, bodyHtml) VALUES ('out-1', 'acct', 'bob@example.org', '', '', " +
+                    "'Queued', 'Body', 3000, NULL, NULL)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 18, true, MIGRATION_17_18)
+
+        db.query("SELECT subject, attachments FROM outbox WHERE id = 'out-1'").use { c ->
+            assertTrue("the queued outbox row must survive", c.moveToFirst())
+            assertEquals("Queued", c.getString(0))
+            assertEquals("existing outbox rows read empty attachment metadata", "", c.getString(1))
+            assertFalse("only the one pre-upgrade outbox row must survive", c.moveToNext())
+        }
+        db.close()
+    }
+
     /** The newest schema JSON exported to app/schemas (shipped to the test APK as assets). */
     private fun latestExportedSchemaVersion(): Int {
         val schemaFolder = checkNotNull(LibreMailDatabase::class.java.canonicalName)

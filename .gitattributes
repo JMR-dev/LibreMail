@@ -9,6 +9,8 @@ gradlew text eol=lf
 
 # Treat these as binary.
 *.jar binary
+*.ttf binary
+*.otf binary
 *.png binary
 *.jpg binary
 *.jpeg binary

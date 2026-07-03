@@ -99,6 +99,12 @@ class OnboardingFlowTest {
         // Real collaborators are cheap here: the manager just wraps PowerManager and the repository
         // reads the on-device settings DataStore. This test drives its own nav graph (without the
         // battery step), so the onboarding view model's battery decision is inert for this flow.
+        //
+        // This hand-rolled graph starts at ONBOARDING_WELCOME directly, deliberately bypassing the
+        // GPL-3.0 license gate (#172) that precedes it in the real onboardingGraph() in
+        // LibreMailApp.kt: this test owns the picker → setup → finish tail, not the license screen's
+        // own contract (scroll-to-agree, decline-exits, hard-gating), which LicenseScreenTest covers
+        // in isolation instead.
         val appContext = composeTestRule.activity.applicationContext
         val onboarding = OnboardingViewModel(
             BatteryOptimizationManager(appContext),
@@ -279,5 +285,22 @@ class OnboardingFlowTest {
             .performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.app_password_open_page, "iCloud Mail"))
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun appPasswordSetup_showsAccountPasswordDisclaimerNearField() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText("Gmail")
+        composeTestRule.onNodeWithText("Gmail").performClick()
+
+        // Issue #160: new users unfamiliar with app passwords commonly try their regular account
+        // password first. The disclaimer must render as supporting text directly under the "App
+        // password" field itself (not only in the intro InfoCards above), on every preset provider
+        // screen since they all share this composable.
+        waitForText(string(R.string.app_password_field))
+        composeTestRule.onNodeWithText(string(R.string.app_password_field_disclaimer))
+            .performScrollTo().assertIsDisplayed()
     }
 }

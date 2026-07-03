@@ -19,6 +19,10 @@ interface DraftDao {
     @Query("SELECT * FROM drafts WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DraftEntity?
 
+    /** All drafts, used to check whether an attachment URI is still referenced before releasing its grant. */
+    @Query("SELECT * FROM drafts")
+    suspend fun getAll(): List<DraftEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(draft: DraftEntity)
 

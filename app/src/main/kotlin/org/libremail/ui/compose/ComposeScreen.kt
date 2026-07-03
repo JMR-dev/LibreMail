@@ -74,6 +74,8 @@ import kotlinx.coroutines.flow.collect
 import org.libremail.R
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.OutgoingAttachment
+import org.libremail.domain.model.sanitizeAttachmentName
+import org.libremail.ui.compose.format.FontRegistry
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +98,17 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
         )
     }
 
+    // Inline-image picker (image/*). Mirrors the attachment picker's persistable grant so a draft can
+    // reopen the image later; the ViewModel then hands the editor a token to drop at the caret.
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            viewModel.onImagePicked(it.toString(), queryFileName(context, it))
+        }
+    }
+
     // Reflect the current READ_CONTACTS grant without ever prompting: the request now lives in the
     // onboarding contacts step (#127) and the Settings entry (#129), so compose only reads state.
     // Re-checked on resume so enabling autocomplete later (e.g. from Settings) takes effect the next
@@ -105,6 +118,11 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
                 PackageManager.PERMISSION_GRANTED,
         )
+    }
+    // Flush the pending debounced draft save when the app is backgrounded (#177), so the latest edits
+    // aren't lost if the process is killed before the autosave debounce fires.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.flushDraft()
     }
     LaunchedEffect(Unit) { viewModel.finished.collect { onBack() } }
     BackHandler { viewModel.onExit() }
@@ -173,7 +191,8 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     modifier = Modifier.fillMaxWidth(),
                 )
                 AttachmentsSection(
-                    attachments = state.attachments,
+                    // Inline images live in the body (as tokens), not as separate attachment chips.
+                    attachments = state.attachments.filterNot { it.isInline },
                     highlight = state.highlightAttach,
                     onHighlightShown = viewModel::consumeAttachHighlight,
                     onAttach = { attachmentPicker.launch(arrayOf("*/*")) },
@@ -186,6 +205,10 @@ fun ComposeScreen(onBack: () -> Unit, viewModel: ComposeViewModel = hiltViewMode
                     onBodyChange = viewModel::onBodyChange,
                     label = stringResource(R.string.compose_body),
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    resolveFont = FontRegistry::resolveFontFamily,
+                    onPickImage = { imagePicker.launch(arrayOf("image/*")) },
+                    pendingImage = state.pendingInlineImage,
+                    onImageInserted = viewModel::onInlineImageInserted,
                 )
             }
 
@@ -388,7 +411,9 @@ private fun queryFileName(context: Context, uri: Uri): String {
     val name = context.contentResolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-    return name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
+    // Strip path separators / control chars so a crafted display name can't traverse dirs or inject
+    // into the on-disk name or the MIME Content-Disposition filename (security review).
+    return sanitizeAttachmentName(name ?: uri.lastPathSegment.orEmpty())
 }
 
 @Composable

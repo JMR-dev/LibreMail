@@ -13,7 +13,6 @@ import kotlinx.coroutines.withContext
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.SmtpParams
-import java.io.File
 import java.util.Date
 import java.util.Properties
 import javax.inject.Inject
@@ -27,7 +26,7 @@ class SmtpSender @Inject constructor() {
         params: SmtpParams,
         from: String,
         message: OutgoingMessage,
-        attachments: List<File> = emptyList(),
+        attachments: List<SendableAttachment> = emptyList(),
     ) = withContext(Dispatchers.IO) {
         val protocol = if (params.security == MailSecurity.SSL_TLS) "smtps" else "smtp"
         val props = Properties().apply {
@@ -78,22 +77,54 @@ class SmtpSender @Inject constructor() {
     }
 
     /**
-     * Sets the message body:
+     * Sets the message body and attaches files:
      *  - plaintext-only ([OutgoingMessage.bodyHtml] null): a single `text/plain` part, exactly as
      *    before, so unformatted mail is unchanged on the wire;
      *  - formatted: a `multipart/alternative` of `text/plain` (fallback, first) + `text/html`
      *    (preferred, last, per RFC 2046).
-     * When there are attachments the body is nested inside a `multipart/mixed` as its first part.
+     *
+     * Inline images (referenced by the HTML as `cid:…`) wrap the body in a `multipart/related` so a
+     * client can resolve those references; each carries a `Content-ID` and inline disposition. Regular
+     * attachments keep today's shape — the body (related or plain) becomes the first part of a
+     * `multipart/mixed`, followed by the attachment parts.
      */
-    private fun applyBody(mime: MimeMessage, message: OutgoingMessage, attachments: List<File>) {
-        if (attachments.isEmpty()) {
-            setBody(mime, message)
-            return
+    private fun applyBody(mime: MimeMessage, message: OutgoingMessage, attachments: List<SendableAttachment>) {
+        val inline = attachments.filter { it.isInlineImage }
+        val regular = attachments.filterNot { it.isInlineImage }
+        when {
+            inline.isEmpty() && regular.isEmpty() -> setBody(mime, message)
+            regular.isEmpty() -> mime.setContent(relatedBody(message, inline))
+            else -> {
+                val mixed = MimeMultipart("mixed")
+                mixed.addBodyPart(bodyPart(message, inline))
+                regular.forEach { mixed.addBodyPart(MimeBodyPart().apply { attachFile(it.file) }) }
+                mime.setContent(mixed)
+            }
         }
-        val mixed = MimeMultipart("mixed")
-        mixed.addBodyPart(MimeBodyPart().also { setBody(it, message) })
-        attachments.forEach { file -> mixed.addBodyPart(MimeBodyPart().apply { attachFile(file) }) }
-        mime.setContent(mixed)
+    }
+
+    /** The body part for a `multipart/mixed`: the plain/alternative body, wrapped in related if inline. */
+    private fun bodyPart(message: OutgoingMessage, inline: List<SendableAttachment>): MimeBodyPart =
+        if (inline.isEmpty()) {
+            MimeBodyPart().also { setBody(it, message) }
+        } else {
+            MimeBodyPart().apply { setContent(relatedBody(message, inline)) }
+        }
+
+    /** A `multipart/related`: the body (plain/alternative) followed by each inline image part. */
+    private fun relatedBody(message: OutgoingMessage, inline: List<SendableAttachment>): MimeMultipart =
+        MimeMultipart("related").apply {
+            addBodyPart(MimeBodyPart().also { setBody(it, message) })
+            inline.forEach { addBodyPart(inlinePart(it)) }
+        }
+
+    /** An inline image part: attached bytes, a `Content-ID` the HTML's `cid:` matches, inline disposition. */
+    private fun inlinePart(attachment: SendableAttachment): MimeBodyPart = MimeBodyPart().apply {
+        attachFile(attachment.file)
+        // Sanitize before it becomes a header value: a CR/LF in the content id would otherwise inject
+        // additional MIME header lines into this part (issue #204, defense-in-depth).
+        contentID = "<${sanitizeContentId(attachment.contentId)}>"
+        setDisposition(MimeBodyPart.INLINE)
     }
 
     /** Writes the body onto [part]: plain text, or a text/plain + text/html alternative when formatted. */

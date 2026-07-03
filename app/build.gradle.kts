@@ -94,6 +94,14 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // Ship ARM only — arm64-v8a (64-bit) + armeabi-v7a (32-bit); x86/x86_64 are
+            // intentionally dropped. Scoped to this build type ONLY — do NOT move to defaultConfig
+            // or the debug type: CI's E2E matrix runs the debug build on x86_64 emulators
+            // (.github/workflows/ci.yml) and needs the x86_64 native libs (incl. libsqlcipher.so).
+            // See docs/play-compliance.md and docs/fdroid-compliance.md for the coverage tradeoff.
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
         }
     }
 

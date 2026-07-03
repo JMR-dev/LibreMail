@@ -255,6 +255,40 @@ class RichTextHtmlTest {
     }
 
     @Test
+    fun `an unsafe inline font-family value is dropped instead of injected raw (issue 205)`() {
+        val content = RichTextContent(
+            text = "x",
+            spans = listOf(
+                RichSpan(0, 1, RichStyle.FontFamily("Arial; color:red")),
+                RichSpan(0, 1, RichStyle.Bold),
+            ),
+        )
+        val html = RichTextHtml.toHtml(content)
+        // The smuggled sibling declaration must never reach the emitted style attribute...
+        assertFalse(html.contains("color:red"), html)
+        assertFalse(html.contains("Arial; color:red"), html)
+        assertFalse(html.contains("font-family"), html)
+        // ...but the run's other styling is unaffected.
+        assertTrue(html.contains("<b>x</b>"), html)
+    }
+
+    @Test
+    fun `an unsafe base-style font-family is dropped from the wrapper (issue 205)`() {
+        val content = RichTextContent("hi", baseStyle = RichBaseStyle(fontCss = "Arial: red;}", fontSizePt = 12))
+        val html = RichTextHtml.toHtml(content)
+        assertFalse(html.contains("font-family"), html)
+        // The safe font-size declaration in the same wrapper still emits.
+        assertTrue(html.contains("font-size:12pt"), html)
+    }
+
+    @Test
+    fun `a registry font stack with quotes and commas still emits its font-family (issue 205)`() {
+        // The bundled FontRegistry stacks are all within the safe set, so built-in fonts are unaffected.
+        val content = RichTextContent("x", spans = listOf(RichSpan(0, 1, RichStyle.FontFamily("'Inter', sans-serif"))))
+        assertTrue(RichTextHtml.toHtml(content).contains("font-family:'Inter', sans-serif"))
+    }
+
+    @Test
     fun `base style wrapper adds no stray text or newlines`() {
         val restored = RichTextHtml.fromHtml("<div style=\"font-size:12pt\"><p>a<br>b</p></div>")
         assertEquals("a\nb", restored.text)

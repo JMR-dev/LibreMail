@@ -19,6 +19,7 @@ import org.libremail.richtext.RichSpan
 import org.libremail.richtext.RichStyle
 import org.libremail.richtext.RichTextContent
 import org.libremail.richtext.RichTextEditing
+import org.libremail.richtext.RichTextHtml
 import org.libremail.richtext.imageToken
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -164,6 +165,57 @@ class RichTextEditorTest {
         assertTrue(result.annotatedString.toRichContent().spans.isEmpty())
     }
 
+    // --- clearStyle ---
+
+    @Test
+    fun `clearStyle removes a font color span regardless of its value`() {
+        val value = field("hello", TextRange(0, 5))
+        val colored = applyStyle(value, RichStyle.FontColor(0xFFFF0000.toInt()), linkColor)
+        val cleared = clearStyle(colored, RichStyle.FontColor::class.java, linkColor)
+        assertTrue(cleared.annotatedString.toRichContent().spans.isEmpty())
+    }
+
+    @Test
+    fun `clearStyle splits a span that only partially overlaps the selection`() {
+        val value = field("abcdef", TextRange(0, 6))
+        val colored = applyStyle(value, RichStyle.Highlight(0xFFFFFF00.toInt()), linkColor)
+        val narrowed = colored.copy(selection = TextRange(2, 4))
+        val cleared = clearStyle(narrowed, RichStyle.Highlight::class.java, linkColor)
+        assertEquals(
+            listOf(
+                RichSpan(0, 2, RichStyle.Highlight(0xFFFFFF00.toInt())),
+                RichSpan(4, 6, RichStyle.Highlight(0xFFFFFF00.toInt())),
+            ),
+            cleared.annotatedString.toRichContent().spans,
+        )
+    }
+
+    @Test
+    fun `clearStyle only removes spans of the given kind, leaving other styles intact`() {
+        val value = field("hi", TextRange(0, 2))
+        val bolded = applyStyle(value, RichStyle.Bold, linkColor)
+        val both = applyStyle(bolded, RichStyle.FontColor(0xFF000000.toInt()), linkColor)
+        val cleared = clearStyle(both, RichStyle.FontColor::class.java, linkColor)
+        assertEquals(listOf(RichSpan(0, 2, RichStyle.Bold)), cleared.annotatedString.toRichContent().spans)
+    }
+
+    @Test
+    fun `clearStyle is a no-op with a collapsed selection`() {
+        val value = field("hello", TextRange(0, 5))
+        val colored = applyStyle(value, RichStyle.FontColor(0xFFFF0000.toInt()), linkColor)
+        val collapsed = colored.copy(selection = TextRange(2))
+        val result = clearStyle(collapsed, RichStyle.FontColor::class.java, linkColor)
+        assertEquals(colored.annotatedString.toRichContent().spans, result.annotatedString.toRichContent().spans)
+    }
+
+    @Test
+    fun `clearStyle removes a font size span regardless of its value`() {
+        val value = field("hello", TextRange(0, 5))
+        val sized = applyStyle(value, RichStyle.FontSize(18), linkColor)
+        val cleared = clearStyle(sized, RichStyle.FontSize::class.java, linkColor)
+        assertTrue(cleared.annotatedString.toRichContent().spans.isEmpty())
+    }
+
     // --- applyBlock ---
 
     @Test
@@ -189,6 +241,19 @@ class RichTextEditorTest {
         assertEquals("1. a\n2. b", result.annotatedString.text)
     }
 
+    @Test
+    fun `applyBlock bullet on an end-of-text caret marks the line and serializes to ul li html`() {
+        // The JVM-layer twin of ComposeScreenTest.formattingToolbar_bulletButtonMarksTheLineAndSendsItAsHtml:
+        // a bullet tap on the end-of-text caret that typing leaves must mark the whole line and serialize
+        // to a real list. Pinning it here catches a regression in the block-toggle/HTML flow without an
+        // emulator; the instrumented test additionally guards that the toolbar button stays tappable.
+        val value = field("Buy milk", TextRange(8))
+        val bulleted = applyBlock(value, BlockMarker.BULLET, linkColor, noFont)
+        val content = bulleted.annotatedString.toRichContent()
+        assertEquals("• Buy milk", content.text)
+        assertEquals("<ul><li>Buy milk</li></ul>", RichTextHtml.toHtml(content))
+    }
+
     // --- applyLink ---
 
     @Test
@@ -205,6 +270,26 @@ class RichTextEditorTest {
         val value = field("see here", TextRange(4))
         val result = applyLink(value, "http://example.com", linkColor, noFont)
         assertTrue(result.annotatedString.toRichContent().links.isEmpty())
+    }
+
+    // --- applyAlignment ---
+
+    @Test
+    fun `applyAlignment centers the selection's paragraphs and keeps the selection`() {
+        val value = field("a\nb", TextRange(0, 3))
+        val result = applyAlignment(value, RichAlign.CENTER, linkColor, noFont)
+        assertEquals(TextRange(0, 3), result.selection)
+        assertEquals(
+            listOf(RichAlignment(0, 3, RichAlign.CENTER)),
+            result.annotatedString.toRichContent().alignments,
+        )
+    }
+
+    @Test
+    fun `applyAlignment start clears an existing alignment`() {
+        val centered = applyAlignment(field("hello", TextRange(0, 5)), RichAlign.CENTER, linkColor, noFont)
+        val cleared = applyAlignment(centered, RichAlign.START, linkColor, noFont)
+        assertTrue(cleared.annotatedString.toRichContent().alignments.isEmpty())
     }
 
     // --- applyBaseStyle ---

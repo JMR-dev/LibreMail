@@ -120,6 +120,13 @@ class DatabaseProvisioner internal constructor(
             settings.encryptCache -> {
                 val passphrase = keyStore.resolvePassphrase(appLock)
                 DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+                // Room is about to open the cache with SQLCipher (SupportOpenHelperFactory), so its
+                // native library must already be loaded. ensureEncrypted() above loads it only as a
+                // side effect of an actual plaintext -> encrypted conversion; on a steady-state start
+                // (cache already encrypted, nothing to convert) that no-ops, so without this explicit
+                // load the keyed open reaches SQLiteConnection.nativeOpen with no library loaded and
+                // crashes with UnsatisfiedLinkError on every cold start once encryption is enabled.
+                DatabaseEncryption.ensureNativeLibraryLoaded()
                 CacheOpenMode.Encrypted(passphrase)
             }
 

@@ -28,6 +28,7 @@ import org.libremail.data.settings.SettingsRepository
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * [DatabaseProvisioner] holds the one-time startup sequence that `DatabaseModule.provideDatabase` used
@@ -61,6 +62,7 @@ class DatabaseProvisionerTest {
         every { DatabaseEncryption.isEncrypted(any()) } returns false
         every { DatabaseEncryption.ensureEncrypted(any(), any()) } just Runs
         every { DatabaseEncryption.ensurePlaintext(any(), any()) } just Runs
+        every { DatabaseEncryption.ensureNativeLibraryLoaded() } just Runs
         every { settingsRepository.settings } returns flowOf(AppSettings())
 
         coEvery { keyStore.isClearPending() } returns false
@@ -89,6 +91,33 @@ class DatabaseProvisionerTest {
         coVerify(exactly = 1) { keyStore.resolvePassphrase(false) }
         verify(exactly = 1) { DatabaseEncryption.ensureEncrypted(any(), PASSPHRASE) }
         verify(exactly = 0) { DatabaseEncryption.ensurePlaintext(any(), any()) }
+        // Regression (crash-on-launch after upgrade): the encrypted open path MUST load SQLCipher's
+        // native library itself. ensureEncrypted no-ops when the cache is already encrypted, so if the
+        // load only rode on that conversion, Room's keyed open would hit nativeOpen with no .so loaded
+        // and throw UnsatisfiedLinkError on every cold start.
+        verify(exactly = 1) { DatabaseEncryption.ensureNativeLibraryLoaded() }
+    }
+
+    @Test
+    fun `prepareCache suspends on the auth-bound passphrase until it resolves`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = true))
+        val enteredResolve = CompletableDeferred<Unit>()
+        val releasePassphrase = CompletableDeferred<String>()
+        // Model the auth-sealed key: resolvePassphrase parks until the user authenticates. Keeping this
+        // await off a background thread is exactly why the pre-auth DB entry points gate on
+        // EncryptedCacheGuard — this pins that prepareCache really does block on it.
+        coEvery { keyStore.resolvePassphrase(true) } coAnswers {
+            enteredResolve.complete(Unit)
+            releasePassphrase.await()
+        }
+
+        val prepared = async { provisioner().prepareCache() }
+        enteredResolve.await() // the startup sequence has reached the passphrase await
+
+        assertFalse(prepared.isCompleted, "prepareCache must not complete while the passphrase is unresolved")
+
+        releasePassphrase.complete(PASSPHRASE)
+        assertEquals(CacheOpenMode.Encrypted(PASSPHRASE), prepared.await())
     }
 
     @Test
@@ -143,6 +172,9 @@ class DatabaseProvisionerTest {
         coVerify(exactly = 0) { keyStore.resolvePassphrase(any()) }
         verify(exactly = 0) { DatabaseEncryption.ensureEncrypted(any(), any()) }
         verify(exactly = 0) { DatabaseEncryption.ensurePlaintext(any(), any()) }
+        // A plaintext cache opens with the framework helper, never SQLCipher, so it must not touch the
+        // native library — the counterpart to the encrypted path's mandatory load above.
+        verify(exactly = 0) { DatabaseEncryption.ensureNativeLibraryLoaded() }
     }
 
     @Test

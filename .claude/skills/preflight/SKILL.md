@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + lintDebug + ktlintCheck + detekt) before pushing or opening a PR. Mirrors the merge gate; does NOT run emulator E2E. Use before treating a change as done.
+description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + compileDebugAndroidTestKotlin + lintDebug + ktlintCheck + detekt) before pushing or opening a PR. Mirrors the merge gate; does NOT run emulator E2E. Use before treating a change as done.
 ---
 
 # /preflight
@@ -21,9 +21,15 @@ Run these, stopping at the first failure:
 ```bash
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
+./gradlew :app:compileDebugAndroidTestKotlin
 ./gradlew :app:lintDebug
 ./gradlew :app:ktlintCheck :app:detekt
 ```
+
+`compileDebugAndroidTestKotlin` compiles the `androidTest` source set — the E2E/instrumented
+tests — without needing an emulator. `assembleDebug`, `testDebugUnitTest`, and `lintDebug` never
+compile that source set, so a change that breaks it (e.g. an instrumented test calling a UI API
+that just changed signature) passes the rest of this gate locally yet fails CI.
 
 `ktlintCheck` + `detekt` are exactly what CI's **Static analysis** job runs — they cover the
 `test`/`androidTest` source sets that `lintDebug` does not, so a style violation there fails the

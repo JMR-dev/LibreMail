@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +57,11 @@ import org.libremail.richtext.RichStyle
 import org.libremail.richtext.RichTextContent
 import org.libremail.richtext.RichTextEditing
 import org.libremail.richtext.RichTextHtml
+import org.libremail.ui.compose.format.ColorSwatch
+import org.libremail.ui.compose.format.ColorSwatchRow
+import org.libremail.ui.compose.format.FontPicker
+import org.libremail.ui.compose.format.FontSizePicker
+import org.libremail.ui.compose.format.ParagraphAlignmentControl
 
 /** String-annotation tag the editor uses to carry a span's link target inside the [AnnotatedString]. */
 private const val URL_TAG = "libremail:url"
@@ -71,15 +77,20 @@ internal const val STYLE_TAG = "libremail:style"
 internal const val IMAGE_TAG = "libremail:image"
 
 /**
- * A rich-text body editor: a formatting toolbar (bold / italic / underline, bulleted + numbered
- * lists, block quote, and link) above a rounded [OutlinedTextField]. It converts its
- * [AnnotatedString] to the app's [RichTextContent] model and reports both the plaintext form and its
- * HTML — or null HTML when nothing is formatted, so an unformatted message stays plaintext-only and
- * feels exactly like the old editor.
+ * A rich-text body editor: a formatting toolbar (bold / italic / underline / strikethrough, font
+ * family + size, font color and highlight, bulleted + numbered lists, block quote, link, and
+ * paragraph alignment) above a rounded [OutlinedTextField]. It converts its [AnnotatedString] to the
+ * app's [RichTextContent] model and reports both the plaintext form and its HTML — or null HTML when
+ * nothing is formatted, so an unformatted message stays plaintext-only and feels exactly like the
+ * old editor.
  *
  * The field is a normal Compose text field, so TalkBack, text selection, and large system fonts all
  * work as usual; each toolbar button exposes its accessible action label via `onClickLabel` on its
  * [Modifier.clickable] (not a `contentDescription`), and still carries toggle state for accessibility.
+ * The font-color and highlight buttons open a [ColorPickerDialog] built on the shared
+ * [ColorSwatchRow], whose individual swatches carry their own `contentDescription` instead; the font
+ * size button opens the self-contained [FontSizePicker] dropdown and the trailing
+ * [ParagraphAlignmentControl] carries the three alignment buttons.
  *
  * [resolveFont] maps a CSS font-family stack to a Compose [FontFamily] for display; the default
  * resolves nothing, leaving the system font (the model still round-trips the CSS value untouched).
@@ -92,6 +103,9 @@ fun RichTextBodyField(
     label: String,
     modifier: Modifier = Modifier,
     resolveFont: (String) -> FontFamily? = { null },
+    onPickImage: (() -> Unit)? = null,
+    pendingImage: PendingInlineImage? = null,
+    onImageInserted: () -> Unit = {},
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val seed = remember { seedContent(body, bodyHtml) }
@@ -119,6 +133,18 @@ fun RichTextBodyField(
     }
 
     var showLinkDialog by remember { mutableStateOf(false) }
+    var showFontColorPicker by remember { mutableStateOf(false) }
+    var showHighlightPicker by remember { mutableStateOf(false) }
+
+    // A picked image (chosen in ComposeScreen) is inserted here at the live caret — the editor owns the
+    // cursor — then reported handled so the caller clears it. Keyed on the image so re-picking the same
+    // file (a new instance) still fires.
+    LaunchedEffect(pendingImage) {
+        pendingImage?.let { image ->
+            emit(applyImageInsert(value, image.contentId, image.name, linkColor, resolveFont))
+            onImageInserted()
+        }
+    }
 
     Column(modifier) {
         FormattingToolbar(
@@ -126,6 +152,28 @@ fun RichTextBodyField(
             onToggleStyle = { style -> emit(applyStyle(value, style, linkColor, resolveFont)) },
             onToggleBlock = { marker -> emit(applyBlock(value, marker, linkColor, resolveFont)) },
             onLink = { showLinkDialog = true },
+            onFontColor = { showFontColorPicker = true },
+            onHighlight = { showHighlightPicker = true },
+            onInsertImage = onPickImage,
+            onFontSize = { pt ->
+                emit(
+                    if (pt != null) {
+                        applyStyle(value, RichStyle.FontSize(pt), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontSize::class.java, linkColor, resolveFont)
+                    },
+                )
+            },
+            onAlignment = { align -> emit(applyAlignment(value, align, linkColor, resolveFont)) },
+            onFont = { css ->
+                emit(
+                    if (css != null) {
+                        applyStyle(value, RichStyle.FontFamily(css), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontFamily::class.java, linkColor, resolveFont)
+                    },
+                )
+            },
         )
         OutlinedTextField(
             value = value,
@@ -149,6 +197,56 @@ fun RichTextBodyField(
             },
         )
     }
+
+    if (showFontColorPicker) {
+        val current = RichTextEditing.styleAt(
+            value.annotatedString.toRichContent(),
+            value.selection.min,
+            value.selection.max,
+            RichStyle.FontColor::class.java,
+        )
+        ColorPickerDialog(
+            title = stringResource(R.string.format_color),
+            swatches = fontColorSwatches(),
+            selectedArgb = current?.argb,
+            onDismiss = { showFontColorPicker = false },
+            onSelect = { argb ->
+                emit(
+                    if (argb != null) {
+                        applyStyle(value, RichStyle.FontColor(argb), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontColor::class.java, linkColor, resolveFont)
+                    },
+                )
+                showFontColorPicker = false
+            },
+        )
+    }
+
+    if (showHighlightPicker) {
+        val current = RichTextEditing.styleAt(
+            value.annotatedString.toRichContent(),
+            value.selection.min,
+            value.selection.max,
+            RichStyle.Highlight::class.java,
+        )
+        ColorPickerDialog(
+            title = stringResource(R.string.format_highlight),
+            swatches = highlightSwatches(),
+            selectedArgb = current?.argb,
+            onDismiss = { showHighlightPicker = false },
+            onSelect = { argb ->
+                emit(
+                    if (argb != null) {
+                        applyStyle(value, RichStyle.Highlight(argb), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.Highlight::class.java, linkColor, resolveFont)
+                    },
+                )
+                showHighlightPicker = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -157,6 +255,12 @@ private fun FormattingToolbar(
     onToggleStyle: (RichStyle) -> Unit,
     onToggleBlock: (BlockMarker) -> Unit,
     onLink: () -> Unit,
+    onFontColor: () -> Unit,
+    onHighlight: () -> Unit,
+    onFontSize: (Int?) -> Unit,
+    onAlignment: (RichAlign) -> Unit,
+    onFont: (String?) -> Unit,
+    onInsertImage: (() -> Unit)?,
 ) {
     val content = value.annotatedString.toRichContent()
     val start = value.selection.min
@@ -197,6 +301,22 @@ private fun FormattingToolbar(
             strikethrough = true,
             onClick = { onToggleStyle(RichStyle.Strikethrough) },
         )
+        val fontColorArgb = RichTextEditing.styleAt(content, start, end, RichStyle.FontColor::class.java)?.argb
+        FormatButton(
+            label = "A",
+            description = stringResource(R.string.format_color),
+            active = fontColorArgb != null,
+            tint = fontColorArgb?.let { Color(it) },
+            onClick = onFontColor,
+        )
+        val highlightArgb = RichTextEditing.styleAt(content, start, end, RichStyle.Highlight::class.java)?.argb
+        FormatButton(
+            label = "H",
+            description = stringResource(R.string.format_highlight),
+            active = false,
+            swatchColor = highlightArgb?.let { Color(it) },
+            onClick = onHighlight,
+        )
         FormatButton(
             label = "•",
             description = stringResource(R.string.format_bullet_list),
@@ -221,6 +341,30 @@ private fun FormattingToolbar(
             active = false,
             onClick = onLink,
         )
+        // The font-size dropdown trails every glyph button on purpose. The toolbar overflows the
+        // screen width and scrolls horizontally, and the compose E2E taps the "•" bullet button
+        // *without* scrolling first (see ComposeScreenTest.formattingToolbar_bulletButtonMarksTheLine...),
+        // so its click lands on the button's on-screen center. Any control inserted *before* the block
+        // buttons shifts them right and can push the bullet past the viewport, making that tap miss —
+        // so these wider controls are appended last, leaving every pre-existing button in its tested spot.
+        val fontCss = RichTextEditing.styleAt(content, start, end, RichStyle.FontFamily::class.java)?.css
+        FontPicker(selectedCss = fontCss, onSelect = onFont)
+        val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
+        FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
+        ParagraphAlignmentControl(
+            selected = RichTextEditing.alignmentAt(content, start, end),
+            onSelect = onAlignment,
+        )
+        // The image button is appended last (like the other trailing controls) so it never shifts the
+        // block buttons the compose E2E taps without scrolling. Only shown when the host wires a picker.
+        if (onInsertImage != null) {
+            FormatButton(
+                label = "🖼",
+                description = stringResource(R.string.format_image),
+                active = false,
+                onClick = onInsertImage,
+            )
+        }
     }
 }
 
@@ -234,10 +378,12 @@ private fun FormatButton(
     fontStyle: FontStyle? = null,
     underline: Boolean = false,
     strikethrough: Boolean = false,
+    tint: Color? = null,
+    swatchColor: Color? = null,
 ) {
     val colors = MaterialTheme.colorScheme
-    val background = if (active) colors.secondaryContainer else Color.Transparent
-    val textColor = if (active) colors.onSecondaryContainer else colors.onSurfaceVariant
+    val background = swatchColor ?: if (active) colors.secondaryContainer else Color.Transparent
+    val textColor = tint ?: if (active) colors.onSecondaryContainer else colors.onSurfaceVariant
     Box(
         modifier = Modifier
             .clip(MaterialTheme.shapes.small)
@@ -291,6 +437,59 @@ private fun LinkDialog(enabled: Boolean, onDismiss: () -> Unit, onConfirm: (Stri
     )
 }
 
+/**
+ * A color-swatch picker shared by the font-color and highlight toolbar buttons. [title] names which
+ * one; [swatches] is the fixed palette; [selectedArgb] rings the swatch (if any) uniformly applied
+ * over the current selection. Tapping any swatch - or the built-in "no color" entry, which
+ * [ColorSwatchRow] reports as a null argument - calls [onSelect]; the caller applies the change and
+ * dismisses, mirroring how [LinkDialog]'s `onConfirm` is wired.
+ */
+@Composable
+private fun ColorPickerDialog(
+    title: String,
+    swatches: List<ColorSwatch>,
+    selectedArgb: Int?,
+    onDismiss: () -> Unit,
+    onSelect: (Int?) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            ColorSwatchRow(
+                swatches = swatches,
+                selectedArgb = selectedArgb,
+                onSelect = onSelect,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+/** ~8 fixed font colors for the font-color picker; "no color" is [ColorSwatchRow]'s own leading entry. */
+@Composable
+private fun fontColorSwatches(): List<ColorSwatch> = listOf(
+    ColorSwatch(0xFF000000.toInt(), stringResource(R.string.format_color_black)),
+    ColorSwatch(0xFF616161.toInt(), stringResource(R.string.format_color_gray)),
+    ColorSwatch(0xFFD32F2F.toInt(), stringResource(R.string.format_color_red)),
+    ColorSwatch(0xFFEF6C00.toInt(), stringResource(R.string.format_color_orange)),
+    ColorSwatch(0xFFF9A825.toInt(), stringResource(R.string.format_color_yellow)),
+    ColorSwatch(0xFF2E7D32.toInt(), stringResource(R.string.format_color_green)),
+    ColorSwatch(0xFF1565C0.toInt(), stringResource(R.string.format_color_blue)),
+    ColorSwatch(0xFF6A1B9A.toInt(), stringResource(R.string.format_color_purple)),
+)
+
+/** Typical marker colors for the highlight picker; "none" is [ColorSwatchRow]'s own leading entry. */
+@Composable
+private fun highlightSwatches(): List<ColorSwatch> = listOf(
+    ColorSwatch(0xFFFFF59D.toInt(), stringResource(R.string.format_highlight_yellow)),
+    ColorSwatch(0xFFA5D6A7.toInt(), stringResource(R.string.format_highlight_green)),
+    ColorSwatch(0xFF80DEEA.toInt(), stringResource(R.string.format_highlight_cyan)),
+    ColorSwatch(0xFFF48FB1.toInt(), stringResource(R.string.format_highlight_pink)),
+)
+
 // --- editor-op plumbing (TextFieldValue <-> RichTextContent) ---
 
 /** Toggles [style] over the selection and rebuilds the field value (one-liner for toolbar wiring). */
@@ -339,6 +538,74 @@ internal fun applyLink(
         value.selection.max,
         url,
     )
+    return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
+}
+
+/**
+ * Sets paragraph [align] over the selection and rebuilds the field value. Alignment never changes the
+ * text, so (unlike [applyBlock]) the selection is preserved as-is.
+ */
+internal fun applyAlignment(
+    value: TextFieldValue,
+    align: RichAlign,
+    linkColor: Color,
+    resolveFont: (String) -> FontFamily? = { null },
+): TextFieldValue {
+    val updated = RichTextEditing.setAlignment(
+        value.annotatedString.toRichContent(),
+        value.selection.min,
+        value.selection.max,
+        align,
+    )
+    return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
+}
+
+/** Inserts an inline-image token at the caret and lands the selection just past it (for toolbar wiring). */
+internal fun applyImageInsert(
+    value: TextFieldValue,
+    contentId: String,
+    name: String,
+    linkColor: Color,
+    resolveFont: (String) -> FontFamily? = { null },
+): TextFieldValue {
+    val result = RichTextEditing.insertImage(
+        value.annotatedString.toRichContent(),
+        value.selection.min,
+        contentId,
+        name,
+    )
+    return TextFieldValue(
+        result.content.toAnnotatedString(linkColor, resolveFont),
+        TextRange(result.selectionStart, result.selectionEnd),
+    )
+}
+
+/**
+ * Clears every span of style kind [kind] over the selection - the color pickers' "no color"/"none"
+ * entry, which must remove the style outright regardless of its value. [applyStyle] cannot do this:
+ * it delegates to [RichTextEditing.toggleStyle], which only clears when the selection is already
+ * uniformly one exact value, and otherwise applies that value instead of removing it.
+ */
+internal fun <T : RichStyle> clearStyle(
+    value: TextFieldValue,
+    kind: Class<T>,
+    linkColor: Color,
+    resolveFont: (String) -> FontFamily? = { null },
+): TextFieldValue {
+    val start = value.selection.min
+    val end = value.selection.max
+    if (start >= end) return value
+    val content = value.annotatedString.toRichContent()
+    val kept = content.spans.flatMap { span ->
+        when {
+            !kind.isInstance(span.style) || span.end <= start || span.start >= end -> listOf(span)
+            else -> buildList {
+                if (span.start < start) add(span.copy(end = start))
+                if (span.end > end) add(span.copy(start = end))
+            }
+        }
+    }
+    val updated = content.copy(spans = kept.sortedBy { it.start })
     return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
 }
 

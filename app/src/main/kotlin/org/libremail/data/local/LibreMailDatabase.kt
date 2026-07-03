@@ -35,7 +35,7 @@ import org.libremail.data.local.entity.OutboxEntity
         FolderEntity::class,
         BackfillProgressEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 abstract class LibreMailDatabase : RoomDatabase() {

@@ -170,3 +170,11 @@ template for the eventual fdroiddata build recipe.
 
 LibreMail is licensed under the **GNU General Public License v3.0** — see
 [`LICENSE`](LICENSE). SPDX identifier: `GPL-3.0-or-later`.
+
+Onboarding requires agreeing to this license before anything else (#172); the screen that shows it
+(`ui/onboarding/LicenseScreen.kt`) reads a bundled runtime copy at
+`app/src/main/res/raw/license.txt` rather than this file directly. That copy is a byte-for-byte
+duplicate, kept in sync by hand rather than generated at build time or annotated in place (the
+in-app screen renders it verbatim, so any header/footer added to the copy would show up to the user
+as if it were part of the license) — **if you edit `LICENSE`, copy the change into `license.txt`
+too**, and vice versa.

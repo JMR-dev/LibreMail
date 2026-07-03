@@ -20,22 +20,32 @@ import java.io.File
  */
 interface MailRepository {
     /**
-     * The cached messages of one account's [folder], newest-first — the scoped source for the mailbox
-     * list (issue #86). Includes transient server-search rows so search can surface them; the caller
-     * filters `inInbox`/query. Re-emits only when that folder's rows change, not on every cache write.
-     */
-    fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>>
-
-    /** Like [observeFolderMessages] but for [folder] across every account (the unified inbox). */
-    fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>>
-
-    /**
      * The unified inbox as a [PagingData] stream so the list's query, mapping, and recomposition cost
      * scale with the visible window rather than the whole cache (issue #124). Emits only folder-synced
-     * rows of [folder] across every account, newest-first — unified *search* still uses
-     * [observeUnifiedFolderMessages]. Callers must `cachedIn` a scope before collecting.
+     * rows of [folder] across every account, newest-first — unified *search* is paged separately by
+     * [pagedUnifiedSearchMessages] (issue #214). Callers must `cachedIn` a scope before collecting.
      */
     fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>>
+
+    /**
+     * The per-account browse list as a [PagingData] stream — the account-scoped counterpart of
+     * [pagedUnifiedFolderMessages] (issue #214). Folder-synced rows of [accountId]'s [folder],
+     * newest-first, loaded a window at a time. Callers must `cachedIn` a scope before collecting.
+     */
+    fun pagedFolderMessages(accountId: String, folder: String): Flow<PagingData<Message>>
+
+    /**
+     * Unified *search* as a [PagingData] stream (issue #214): rows of [folder] across every account
+     * matching [query], newest-first, including the transient server-search hits [searchServer] adds.
+     * Scans the same fields the previous in-memory search filter did. `cachedIn` before collecting.
+     */
+    fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>>
+
+    /**
+     * Per-account *search* counterpart of [pagedUnifiedSearchMessages] (issue #214): [accountId]'s
+     * [folder] rows matching [query], newest-first. Callers must `cachedIn` before collecting.
+     */
+    fun pagedFolderSearchMessages(accountId: String, folder: String, query: String): Flow<PagingData<Message>>
 
     /** The account's cached IMAP folders for the navigation drawer. */
     fun observeFolders(accountId: String): Flow<List<Folder>>

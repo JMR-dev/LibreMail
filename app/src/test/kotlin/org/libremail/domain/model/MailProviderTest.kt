@@ -55,6 +55,19 @@ class MailProviderTest {
     }
 
     @Test
+    fun `aol preset uses documented imap and implicit-tls smtp endpoints`() {
+        val account = MailProvider.AOL.createAccount("user@aol.com")
+
+        assertEquals("imap.aol.com", account.imap.host)
+        assertEquals(993, account.imap.port)
+        assertEquals(MailSecurity.SSL_TLS, account.imap.security)
+
+        assertEquals("smtp.aol.com", account.smtp.host)
+        assertEquals(465, account.smtp.port)
+        assertEquals(MailSecurity.SSL_TLS, account.smtp.security)
+    }
+
+    @Test
     fun `no provider ever uses insecure transport`() {
         MailProvider.entries.forEach { provider ->
             val account = provider.createAccount("user@example.com")
@@ -82,7 +95,7 @@ class MailProviderTest {
     }
 
     @Test
-    fun `gmail and icloud link two-factor setup help over https, yahoo does not`() {
+    fun `gmail and icloud link two-factor setup help over https, yahoo and aol do not`() {
         // Gmail's app-passwords page rejects accounts without 2-Step Verification, so its setup
         // screen must offer the setup article as a way out (issue #98).
         val gmailUrl = assertNotNull(
@@ -100,6 +113,11 @@ class MailProviderTest {
         // which never list two-step verification as a prerequisite for generating an app password
         // (issue #155) — so it must not grow the extra link.
         assertNull(MailProvider.YAHOO.twoFactorHelpUrl)
+
+        // AOL gates nothing on two-factor either — its app-password article never lists two-step
+        // verification as a prerequisite, and its separate two-step-verification article doesn't
+        // call itself one either (issue #156) — so it must not grow the extra link.
+        assertNull(MailProvider.AOL.twoFactorHelpUrl)
     }
 
     @Test
@@ -112,6 +130,14 @@ class MailProviderTest {
         assertEquals(
             "https://my.help.yahoo.com/kb/mail/generate-app-specific-password-sln15241.html",
             MailProvider.YAHOO.appPasswordHelpUrl,
+        )
+    }
+
+    @Test
+    fun `aol app-password help points at AOL's dedicated app-password article`() {
+        assertEquals(
+            "https://help.aol.com/articles/Create-and-manage-app-password",
+            MailProvider.AOL.appPasswordHelpUrl,
         )
     }
 
@@ -136,6 +162,7 @@ class MailProviderTest {
         assertEquals(MailProvider.GMAIL, MailProvider.fromKey("gmail"))
         assertEquals(MailProvider.YAHOO, MailProvider.fromKey("YAHOO"))
         assertEquals(MailProvider.ICLOUD, MailProvider.fromKey("iCloud"))
+        assertEquals(MailProvider.AOL, MailProvider.fromKey("AOL"))
         assertNull(MailProvider.fromKey("outlook"))
         assertNull(MailProvider.fromKey(""))
     }
@@ -163,6 +190,9 @@ class MailProviderTest {
         assertEquals(MailProvider.GMAIL, MailProvider.forImapHost("imap.googlemail.com"))
         assertEquals(MailProvider.GMAIL, MailProvider.forImapHost("IMAP.GMAIL.COM"))
         assertEquals(MailProvider.ICLOUD, MailProvider.forImapHost("imap.mail.me.com"))
+        // A manually configured AOL account (set up before this preset existed) must still resolve
+        // to the AOL brand (issue #156).
+        assertEquals(MailProvider.AOL, MailProvider.forImapHost("imap.aol.com"))
         assertNull(MailProvider.forImapHost("imap.example.org"))
     }
 
@@ -176,6 +206,7 @@ class MailProviderTest {
     fun `brandFor centralizes host to brand matching, including Outlook`() {
         assertEquals("Gmail", MailProvider.brandFor(account("imap.googlemail.com")))
         assertEquals("iCloud Mail", MailProvider.brandFor(account("imap.mail.me.com")))
+        assertEquals("AOL Mail", MailProvider.brandFor(account("imap.aol.com")))
         // A manually configured Office 365 host is Outlook even without the OAuth auth type.
         assertEquals(MailProvider.OUTLOOK_BRAND, MailProvider.brandFor(account("outlook.office365.com")))
         // The OAuth auth type brands as Outlook regardless of host.
