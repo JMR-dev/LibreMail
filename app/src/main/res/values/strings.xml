@@ -124,6 +124,11 @@
     <string name="format_size">Font size</string>
     <string name="format_size_default">Default</string>
     <string name="format_size_pt">%1$d pt</string>
+    <string name="format_align_start">Align start</string>
+    <string name="format_align_center">Align center</string>
+    <string name="format_align_end">Align end</string>
+    <string name="format_font">Font</string>
+    <string name="format_font_default">Default</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>

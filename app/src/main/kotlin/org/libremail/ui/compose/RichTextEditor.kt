@@ -58,7 +58,9 @@ import org.libremail.richtext.RichTextEditing
 import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.compose.format.ColorSwatch
 import org.libremail.ui.compose.format.ColorSwatchRow
+import org.libremail.ui.compose.format.FontPicker
 import org.libremail.ui.compose.format.FontSizePicker
+import org.libremail.ui.compose.format.ParagraphAlignmentControl
 
 /** String-annotation tag the editor uses to carry a span's link target inside the [AnnotatedString]. */
 private const val URL_TAG = "libremail:url"
@@ -75,17 +77,19 @@ internal const val IMAGE_TAG = "libremail:image"
 
 /**
  * A rich-text body editor: a formatting toolbar (bold / italic / underline / strikethrough, font
- * size, font color and highlight, bulleted + numbered lists, block quote, and link) above a rounded
- * [OutlinedTextField]. It converts its [AnnotatedString] to the app's [RichTextContent] model and
- * reports both the plaintext form and its HTML — or null HTML when nothing is formatted, so an
- * unformatted message stays plaintext-only and feels exactly like the old editor.
+ * family + size, font color and highlight, bulleted + numbered lists, block quote, link, and
+ * paragraph alignment) above a rounded [OutlinedTextField]. It converts its [AnnotatedString] to the
+ * app's [RichTextContent] model and reports both the plaintext form and its HTML — or null HTML when
+ * nothing is formatted, so an unformatted message stays plaintext-only and feels exactly like the
+ * old editor.
  *
  * The field is a normal Compose text field, so TalkBack, text selection, and large system fonts all
  * work as usual; each toolbar button exposes its accessible action label via `onClickLabel` on its
  * [Modifier.clickable] (not a `contentDescription`), and still carries toggle state for accessibility.
  * The font-color and highlight buttons open a [ColorPickerDialog] built on the shared
  * [ColorSwatchRow], whose individual swatches carry their own `contentDescription` instead; the font
- * size button opens the self-contained [FontSizePicker] dropdown.
+ * size button opens the self-contained [FontSizePicker] dropdown and the trailing
+ * [ParagraphAlignmentControl] carries the three alignment buttons.
  *
  * [resolveFont] maps a CSS font-family stack to a Compose [FontFamily] for display; the default
  * resolves nothing, leaving the system font (the model still round-trips the CSS value untouched).
@@ -142,6 +146,16 @@ fun RichTextBodyField(
                         applyStyle(value, RichStyle.FontSize(pt), linkColor, resolveFont)
                     } else {
                         clearStyle(value, RichStyle.FontSize::class.java, linkColor, resolveFont)
+                    },
+                )
+            },
+            onAlignment = { align -> emit(applyAlignment(value, align, linkColor, resolveFont)) },
+            onFont = { css ->
+                emit(
+                    if (css != null) {
+                        applyStyle(value, RichStyle.FontFamily(css), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontFamily::class.java, linkColor, resolveFont)
                     },
                 )
             },
@@ -229,6 +243,8 @@ private fun FormattingToolbar(
     onFontColor: () -> Unit,
     onHighlight: () -> Unit,
     onFontSize: (Int?) -> Unit,
+    onAlignment: (RichAlign) -> Unit,
+    onFont: (String?) -> Unit,
 ) {
     val content = value.annotatedString.toRichContent()
     val start = value.selection.min
@@ -314,9 +330,15 @@ private fun FormattingToolbar(
         // *without* scrolling first (see ComposeScreenTest.formattingToolbar_bulletButtonMarksTheLine...),
         // so its click lands on the button's on-screen center. Any control inserted *before* the block
         // buttons shifts them right and can push the bullet past the viewport, making that tap miss —
-        // so this wider control is appended last, leaving every pre-existing button in its tested spot.
+        // so these wider controls are appended last, leaving every pre-existing button in its tested spot.
+        val fontCss = RichTextEditing.styleAt(content, start, end, RichStyle.FontFamily::class.java)?.css
+        FontPicker(selectedCss = fontCss, onSelect = onFont)
         val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
         FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
+        ParagraphAlignmentControl(
+            selected = RichTextEditing.alignmentAt(content, start, end),
+            onSelect = onAlignment,
+        )
     }
 }
 
@@ -489,6 +511,25 @@ internal fun applyLink(
         value.selection.min,
         value.selection.max,
         url,
+    )
+    return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
+}
+
+/**
+ * Sets paragraph [align] over the selection and rebuilds the field value. Alignment never changes the
+ * text, so (unlike [applyBlock]) the selection is preserved as-is.
+ */
+internal fun applyAlignment(
+    value: TextFieldValue,
+    align: RichAlign,
+    linkColor: Color,
+    resolveFont: (String) -> FontFamily? = { null },
+): TextFieldValue {
+    val updated = RichTextEditing.setAlignment(
+        value.annotatedString.toRichContent(),
+        value.selection.min,
+        value.selection.max,
+        align,
     )
     return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
 }

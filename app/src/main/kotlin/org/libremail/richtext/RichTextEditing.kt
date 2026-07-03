@@ -106,6 +106,41 @@ object RichTextEditing {
         )
         return EditResult(updated, remap(start), remap(end))
     }
+
+    /**
+     * Sets paragraph [align] on every line the selection [[start], [end]] touches, replacing whatever
+     * alignment those lines carried and leaving untouched paragraphs alone. [RichAlign.START] is the
+     * writing-direction default, so it is stored as *no* alignment (the range is dropped) — keeping an
+     * otherwise-plain paragraph plaintext-only — while CENTER and END become explicit ranges. The
+     * result is in the same canonical form [RichTextHtml.fromHtml] returns (one merged range per run
+     * of adjacent same-aligned lines; blank paragraphs never anchor a range, since the HTML model
+     * cannot pin a `text-align` to an empty `<p>`), so the model, its HTML, and the editor's
+     * [ParagraphStyle] rendering never drift.
+     */
+    fun setAlignment(content: RichTextContent, start: Int, end: Int, align: RichAlign): RichTextContent {
+        val touched = lineStartsTouching(content.text, start, end).toHashSet()
+        val perLine = lineRanges(content.text).map { line ->
+            val effective = if (line.start in touched) {
+                align.takeUnless { it == RichAlign.START }
+            } else {
+                alignCovering(content.alignments, line)
+            }
+            line to effective
+        }
+        return content.copy(alignments = canonicalAlignments(perLine))
+    }
+
+    /**
+     * The single alignment shared by every paragraph the selection touches, or null when they are
+     * mixed. Unaligned paragraphs read as [RichAlign.START] (the default), so this drives the toolbar's
+     * three-state start/center/end control directly (null lights up none of the three).
+     */
+    fun alignmentAt(content: RichTextContent, start: Int, end: Int): RichAlign? {
+        val aligns = lineStartsTouching(content.text, start, end).map { lineStart ->
+            alignCovering(content.alignments, lineRangeAt(content.text, lineStart)) ?: RichAlign.START
+        }
+        return aligns.distinct().singleOrNull()
+    }
 }
 
 private fun insertFor(marker: BlockMarker, ordinal: Int): String = when (marker) {
@@ -198,6 +233,61 @@ private fun lineStartsTouching(text: String, start: Int, end: Int): List<Int> {
     }
     return result
 }
+
+// --- paragraph alignment helpers ---
+
+/** One line's half-open range [[start], [contentEnd]) of plain text (marker included, newline excluded). */
+private data class LineRange(val start: Int, val contentEnd: Int)
+
+private fun lineRanges(text: String): List<LineRange> {
+    val result = ArrayList<LineRange>()
+    var lineStart = 0
+    while (true) {
+        val nl = text.indexOf('\n', lineStart)
+        result.add(LineRange(lineStart, if (nl == -1) text.length else nl))
+        if (nl == -1) break
+        lineStart = nl + 1
+    }
+    return result
+}
+
+private fun lineRangeAt(text: String, lineStart: Int): LineRange {
+    val nl = text.indexOf('\n', lineStart)
+    return LineRange(lineStart, if (nl == -1) text.length else nl)
+}
+
+/**
+ * The alignment covering [line], mirroring how [RichTextHtml] picks a line's alignment on emit. An
+ * empty line gets a one-char probe so a range that spans it is still detected.
+ */
+private fun alignCovering(alignments: List<RichAlignment>, line: LineRange): RichAlign? =
+    alignments.firstOrNull { it.start < maxOf(line.contentEnd, line.start + 1) && it.end > line.start }?.align
+
+/**
+ * Rebuilds canonical alignment ranges from a per-line alignment: one merged range per run of adjacent
+ * non-empty same-aligned lines. Empty paragraphs cannot carry a `text-align` in the HTML model, so
+ * they anchor no range and break a run — the exact form [RichTextHtml.fromHtml] returns.
+ */
+private fun canonicalAlignments(perLine: List<Pair<LineRange, RichAlign?>>): List<RichAlignment> {
+    val result = ArrayList<RichAlignment>()
+    var i = 0
+    while (i < perLine.size) {
+        val (line, align) = perLine[i]
+        if (align == null || line.start >= line.contentEnd) {
+            i++
+            continue
+        }
+        var j = i
+        while (j + 1 < perLine.size && perLine[j + 1].second == align && perLine[j + 1].first.isNotEmpty()) {
+            j++
+        }
+        result.add(RichAlignment(line.start, perLine[j].first.contentEnd, align))
+        i = j + 1
+    }
+    return result
+}
+
+private fun LineRange.isNotEmpty(): Boolean = start < contentEnd
 
 private data class LineEdit(val offset: Int, val deleteLen: Int, val insert: String)
 
