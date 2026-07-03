@@ -48,6 +48,17 @@ class ReportStore(private val directory: File) {
         }
     }
 
+    /**
+     * Deletes stored reports created before [cutoffMillis], returning how many were purged. Drives the
+     * charging-time housekeeping job (issue #239) so old crash/problem records don't pile up on-device.
+     */
+    fun purgeOlderThan(cutoffMillis: Long): Int = synchronized(lock) {
+        val stale = _reports.value.filter { it.createdAtMillis < cutoffMillis }
+        stale.forEach { File(directory, fileName(it.id)).delete() }
+        if (stale.isNotEmpty()) _reports.value = scan()
+        stale.size
+    }
+
     private fun scan(): List<DebugReport> {
         val files = directory.listFiles { file -> file.isFile && file.name.endsWith(SUFFIX) }
             ?: return emptyList()
