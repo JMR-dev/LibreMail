@@ -61,6 +61,15 @@ JVM unit tests use JUnit4 + `kotlin.test`, **Turbine** for `Flow`, **MockK** for
 **GreenMail** for a real in-process IMAP/SMTP server, and coroutines-test. `org.json` is
 pulled in as a real dependency for unit tests because `android.jar`'s version is a no-op stub.
 
+## Definition of done
+
+A change is not done until it ships with passing **unit tests** and **E2E/instrumented tests**
+that exercise the new or changed behaviour. Writing and committing that E2E/instrumented test
+is a required part of every task — it must exist and compile (the fast gate above already
+checks this via `compileDebugAndroidTestKotlin`). Only *running* it against a booted emulator
+locally remains optional: per "Emulator E2E is left to CI unless asked," CI's E2E matrix is
+what executes it before merge.
+
 ## Repo etiquette
 
 - Branch off `main`; branch names like `feat-…` / `fix-…`. PRs target `main` and must pass
