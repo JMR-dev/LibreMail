@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.util.Properties
 
 plugins {
@@ -9,6 +10,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
+    // JaCoCo (Gradle built-in) — unit-test code-coverage reporting (issue #192). The base `jacoco`
+    // plugin auto-instruments the JVM `testDebugUnitTest` task; the jacocoTestReport task below turns
+    // its exec data into XML + HTML. AGP-9-safe: it does NOT apply org.jetbrains.kotlin.android (which
+    // ClassCastExceptions against AGP 9's built-in-Kotlin DSL — see CLAUDE.md) and touches no variant DSL.
+    jacoco
     // Lint/format — resolved from the Gradle Plugin Portal (not the buildscript classpath).
     alias(libs.plugins.ktlint)
     alias(libs.plugins.detekt)
@@ -162,6 +168,70 @@ detekt {
     // Merge the project overrides in config/detekt onto detekt's bundled defaults.
     buildUponDefaultConfig = true
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+}
+
+// Pin a modern JaCoCo so the coverage agent understands Kotlin 2.4.0 bytecode on JDK 21.
+jacoco {
+    toolVersion = "0.8.13"
+}
+
+// Unit-test coverage report (issue #192). Reads the exec data the base `jacoco` plugin records for
+// the JVM `testDebugUnitTest` task, mapped against the debug variant's compiled Kotlin classes and
+// the hand-written main sources. Produces machine-readable XML + human-readable HTML under
+// build/reports/jacoco/jacocoTestReport/. Instrumented/E2E coverage is out of scope (issue #192).
+tasks.register<JacocoReport>("jacocoTestReport") {
+    // Ensure the unit tests (and thus their coverage exec data) have run first.
+    dependsOn("testDebugUnitTest")
+    group = "verification"
+    description = "Generates JaCoCo XML + HTML coverage for the debug JVM unit tests."
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+
+    // Strip generated code from the denominator so the % reflects hand-written Kotlin: Room (*_Impl*),
+    // Hilt/Dagger, Compose singletons/synthetics, and Android BuildConfig/R/Manifest scaffolding.
+    val generated = listOf(
+        "**/R.class",
+        "**/R\$*.class",
+        "**/BuildConfig.*",
+        "**/Manifest*.*",
+        "**/*_Hilt*",
+        "**/hilt_aggregated_deps/**",
+        "**/dagger/**",
+        "**/*_Factory*",
+        "**/*_MembersInjector*",
+        "**/*_Provide*",
+        "**/*_Impl_*",
+        "**/*_Impl*",
+        "**/ComposableSingletons*",
+        "**/*\$\$*",
+        "**/*\$*Lambda*",
+    )
+
+    // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output). All hand-written
+    // code here is Kotlin, so the javac output (purely Hilt/Dagger/BuildConfig generated) is omitted.
+    val debugKotlinClasses = layout.buildDirectory.dir(
+        "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
+    )
+    classDirectories.setFrom(
+        fileTree(debugKotlinClasses) { exclude(generated) },
+    )
+
+    // Sources = hand-written main Kotlin.
+    sourceDirectories.setFrom(files("src/main/kotlin"))
+
+    // Exec data written by the instrumented testDebugUnitTest task. Accept the base `jacoco` plugin's
+    // default location and AGP's enableUnitTestCoverage location so the wiring is robust either way.
+    executionData.setFrom(
+        fileTree(layout.buildDirectory) {
+            include(
+                "jacoco/testDebugUnitTest.exec",
+                "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
+            )
+        },
+    )
 }
 
 dependencies {
