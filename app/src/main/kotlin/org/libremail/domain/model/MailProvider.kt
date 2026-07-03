@@ -8,18 +8,19 @@ private const val SMTP_SUBMISSION_PORT = 587
 private const val SMTPS_PORT = 465
 
 /**
- * Preconfigured IMAP/SMTP presets for the app-password vendors (Gmail, Yahoo, iCloud).
+ * Preconfigured IMAP/SMTP presets for the app-password vendors (Gmail, Yahoo, iCloud, AOL).
  *
  * These mirror [Account.outlook]: each entry knows its servers so onboarding only has to collect an
  * email + app password (see the app-password setup screen). Outlook is intentionally NOT here — it
  * uses interactive OAuth, not an app password.
  *
  * Port / security rationale (verified against current vendor docs):
- *  - IMAP is implicit TLS on 993 for all three: none of these vendors document a STARTTLS IMAP
+ *  - IMAP is implicit TLS on 993 for all four: none of these vendors document a STARTTLS IMAP
  *    endpoint, so 993/[MailSecurity.SSL_TLS] is the only correct choice.
  *  - SMTP biases toward STARTTLS on 587 where the vendor documents it (Gmail, iCloud), matching the
- *    epic's "prefer STARTTLS where supported" guidance. Yahoo documents implicit TLS on 465 as its
- *    outgoing server, so it keeps 465/[MailSecurity.SSL_TLS].
+ *    epic's "prefer STARTTLS where supported" guidance. Yahoo and AOL each document only implicit
+ *    TLS on 465 for their outgoing server (no STARTTLS/587 alternative is documented), so both keep
+ *    465/[MailSecurity.SSL_TLS].
  *  - [MailSecurity.NONE] is never used — every path here is encrypted end to end.
  */
 enum class MailProvider(
@@ -32,7 +33,7 @@ enum class MailProvider(
     /**
      * Setup instructions for the provider's two-factor prerequisite, or null when there isn't one.
      * Gmail and iCloud both refuse to issue app passwords until two-factor auth is on, so both
-     * link their own setup article; Yahoo gates nothing on it.
+     * link their own setup article; Yahoo and AOL gate nothing on it.
      */
     val twoFactorHelpUrl: String? = null,
     private val imapHost: String,
@@ -90,6 +91,20 @@ enum class MailProvider(
         // Apple documents smtp.mail.me.com:587 with STARTTLS for iCloud Mail.
         smtpPort = SMTP_SUBMISSION_PORT,
         smtpSecurity = MailSecurity.STARTTLS,
+    ),
+    AOL(
+        key = "aol",
+        displayName = "AOL Mail",
+        // AOL's own "Create and manage 3rd-party app passwords" article. Unlike Gmail/iCloud, it
+        // never lists two-step verification as a prerequisite for generating an app password (nor
+        // does AOL's separate two-step-verification article call itself one), so there is no
+        // twoFactorHelpUrl below — same as Yahoo (issue #156).
+        appPasswordHelpUrl = "https://help.aol.com/articles/Create-and-manage-app-password",
+        imapHost = "imap.aol.com",
+        smtpHost = "smtp.aol.com",
+        // AOL documents smtp.aol.com:465 with implicit SSL/TLS as its outgoing server (issue #154).
+        smtpPort = SMTPS_PORT,
+        smtpSecurity = MailSecurity.SSL_TLS,
     ),
     ;
 
