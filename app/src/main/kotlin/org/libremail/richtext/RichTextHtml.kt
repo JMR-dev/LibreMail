@@ -27,7 +27,7 @@ object RichTextHtml {
 
 /** The `font-family`/`font-size` declarations of the base-style wrapper (possibly empty). */
 private fun baseCss(base: RichBaseStyle): String = listOfNotNull(
-    base.fontCss?.let { "font-family:$it" },
+    base.fontCss?.let(::safeFontFamily)?.let { "font-family:$it" },
     base.fontSizePt?.let { "font-size:${it}pt" },
 ).joinToString(";")
 
@@ -197,7 +197,8 @@ private fun appendRun(sb: StringBuilder, content: RichTextContent, a: Int, b: In
 /** Merges the parameterized styles active on a run into one CSS declaration list (maybe empty). */
 private fun inlineCss(styles: List<RichStyle>): String {
     val parts = ArrayList<String>()
-    styles.firstNotNullOfOrNull { it as? RichStyle.FontFamily }?.let { parts.add("font-family:${it.css}") }
+    styles.firstNotNullOfOrNull { it as? RichStyle.FontFamily }?.css?.let(::safeFontFamily)
+        ?.let { parts.add("font-family:$it") }
     styles.firstNotNullOfOrNull { it as? RichStyle.FontSize }?.let { parts.add("font-size:${it.pt}pt") }
     styles.firstNotNullOfOrNull { it as? RichStyle.FontColor }?.let { parts.add("color:${cssColor(it.argb)}") }
     styles.firstNotNullOfOrNull { it as? RichStyle.Highlight }
@@ -215,3 +216,16 @@ internal fun cssColor(argb: Int): String = "#" + (argb and RGB_MASK).toString(HE
 internal fun escape(s: String): String = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 internal fun escapeAttr(s: String): String = escape(s).replace("\"", "&quot;")
+
+/** The characters a font-family stack legitimately uses: letters, digits, spaces, commas, quotes, etc. */
+private val SAFE_FONT_FAMILY = Regex("[A-Za-z0-9 ,._'\"-]*")
+
+/**
+ * Emits a `font-family` value only when every character is one a real font stack uses, so a value
+ * that ever carried CSS metacharacters (notably `;` or `:`) can't inject a sibling declaration into
+ * the raw `style` attribute — an unrecognized value is dropped rather than emitted (issue #205,
+ * defense-in-depth: not reachable today, since the picker only offers the fixed `FontRegistry` stacks
+ * and reply/forward flattens sender HTML first). Every bundled `FontRegistry` stack is within this
+ * set, so the built-in fonts round-trip unchanged.
+ */
+private fun safeFontFamily(css: String): String? = css.takeIf { SAFE_FONT_FAMILY.matches(it) }

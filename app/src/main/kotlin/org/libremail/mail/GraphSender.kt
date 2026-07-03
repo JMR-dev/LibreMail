@@ -111,9 +111,10 @@ internal fun buildSendMailPayload(message: OutgoingMessage, attachments: List<Se
                 .put("name", attachment.file.name)
                 .put("contentBytes", Base64.getEncoder().encodeToString(attachment.file.readBytes()))
             // An inline image the HTML references as `cid:contentId` — Graph renders it in the body
-            // rather than listing it as a downloadable attachment.
+            // rather than listing it as a downloadable attachment. The content id is sanitized of
+            // control characters before it enters the payload (issue #204, defense-in-depth).
             if (attachment.isInlineImage) {
-                obj.put("isInline", true).put("contentId", attachment.contentId)
+                obj.put("isInline", true).put("contentId", sanitizeContentId(attachment.contentId))
             }
             items.put(obj)
         }
