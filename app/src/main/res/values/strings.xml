@@ -253,6 +253,8 @@
 
     <!-- Per-account settings -->
     <string name="settings_account_title">Account</string>
+    <string name="settings_account_set_default">Default account</string>
+    <string name="settings_account_set_default_summary">Use this account for new messages when none is specified</string>
     <string name="settings_signature">Signature</string>
     <string name="settings_signature_enable">Append signature automatically</string>
     <string name="settings_signature_hint">Your signature</string>

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
@@ -27,6 +28,7 @@ class AccountSettingsViewModel @Inject constructor(
     private val accountSettingsRepository: AccountSettingsRepository,
     signatureRepository: SignatureRepository,
     private val syncScheduler: SyncScheduler,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     private val accountId: String =
@@ -38,6 +40,11 @@ class AccountSettingsViewModel @Inject constructor(
 
     val settings: StateFlow<AccountSettings> = accountSettingsRepository.observe(accountId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AccountSettings(accountId))
+
+    /** Whether this account is the user-chosen default (issue #163) — see [SettingsRepository]. */
+    val isDefaultAccount: StateFlow<Boolean> = settingsRepository.settings
+        .map { it.defaultAccountId == accountId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val signaturesFlow = signatureRepository.observeForAccount(accountId)
 
@@ -78,9 +85,27 @@ class AccountSettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Makes this account the default (used by compose's from-account fallback, #163), or clears the
+     * default when turned off. Only one account is default at a time — persisting this account's id
+     * implicitly un-defaults whichever one held it before.
+     */
+    fun setDefaultAccount(isDefault: Boolean) {
+        viewModelScope.launch {
+            if (isDefault) {
+                settingsRepository.setDefaultAccountId(accountId)
+            } else {
+                settingsRepository.clearDefaultAccountId(accountId)
+            }
+        }
+    }
+
     fun removeAccount(onRemoved: () -> Unit) {
         viewModelScope.launch {
             accountRepository.deleteAccount(accountId)
+            // Don't strand the preference on a deleted account; only clears it if this account was
+            // actually the default (see SettingsRepository.clearDefaultAccountId).
+            settingsRepository.clearDefaultAccountId(accountId)
             onRemoved()
         }
     }
