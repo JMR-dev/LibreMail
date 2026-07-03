@@ -121,6 +121,9 @@
     <string name="format_highlight_green">Green</string>
     <string name="format_highlight_cyan">Cyan</string>
     <string name="format_highlight_pink">Pink</string>
+    <string name="format_size">Font size</string>
+    <string name="format_size_default">Default</string>
+    <string name="format_size_pt">%1$d pt</string>
 
     <!-- Drafts -->
     <string name="drafts_title">Drafts</string>

@@ -58,6 +58,7 @@ import org.libremail.richtext.RichTextEditing
 import org.libremail.richtext.RichTextHtml
 import org.libremail.ui.compose.format.ColorSwatch
 import org.libremail.ui.compose.format.ColorSwatchRow
+import org.libremail.ui.compose.format.FontSizePicker
 
 /** String-annotation tag the editor uses to carry a span's link target inside the [AnnotatedString]. */
 private const val URL_TAG = "libremail:url"
@@ -74,7 +75,7 @@ internal const val IMAGE_TAG = "libremail:image"
 
 /**
  * A rich-text body editor: a formatting toolbar (bold / italic / underline / strikethrough, font
- * color and highlight, bulleted + numbered lists, block quote, and link) above a rounded
+ * size, font color and highlight, bulleted + numbered lists, block quote, and link) above a rounded
  * [OutlinedTextField]. It converts its [AnnotatedString] to the app's [RichTextContent] model and
  * reports both the plaintext form and its HTML — or null HTML when nothing is formatted, so an
  * unformatted message stays plaintext-only and feels exactly like the old editor.
@@ -83,7 +84,8 @@ internal const val IMAGE_TAG = "libremail:image"
  * work as usual; each toolbar button exposes its accessible action label via `onClickLabel` on its
  * [Modifier.clickable] (not a `contentDescription`), and still carries toggle state for accessibility.
  * The font-color and highlight buttons open a [ColorPickerDialog] built on the shared
- * [ColorSwatchRow], whose individual swatches carry their own `contentDescription` instead.
+ * [ColorSwatchRow], whose individual swatches carry their own `contentDescription` instead; the font
+ * size button opens the self-contained [FontSizePicker] dropdown.
  *
  * [resolveFont] maps a CSS font-family stack to a Compose [FontFamily] for display; the default
  * resolves nothing, leaving the system font (the model still round-trips the CSS value untouched).
@@ -134,6 +136,15 @@ fun RichTextBodyField(
             onLink = { showLinkDialog = true },
             onFontColor = { showFontColorPicker = true },
             onHighlight = { showHighlightPicker = true },
+            onFontSize = { pt ->
+                emit(
+                    if (pt != null) {
+                        applyStyle(value, RichStyle.FontSize(pt), linkColor, resolveFont)
+                    } else {
+                        clearStyle(value, RichStyle.FontSize::class.java, linkColor, resolveFont)
+                    },
+                )
+            },
         )
         OutlinedTextField(
             value = value,
@@ -217,6 +228,7 @@ private fun FormattingToolbar(
     onLink: () -> Unit,
     onFontColor: () -> Unit,
     onHighlight: () -> Unit,
+    onFontSize: (Int?) -> Unit,
 ) {
     val content = value.annotatedString.toRichContent()
     val start = value.selection.min
@@ -257,6 +269,8 @@ private fun FormattingToolbar(
             strikethrough = true,
             onClick = { onToggleStyle(RichStyle.Strikethrough) },
         )
+        val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
+        FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
         val fontColorArgb = RichTextEditing.styleAt(content, start, end, RichStyle.FontColor::class.java)?.argb
         FormatButton(
             label = "A",

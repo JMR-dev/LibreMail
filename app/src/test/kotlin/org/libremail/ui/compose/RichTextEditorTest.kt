@@ -207,6 +207,14 @@ class RichTextEditorTest {
         assertEquals(colored.annotatedString.toRichContent().spans, result.annotatedString.toRichContent().spans)
     }
 
+    @Test
+    fun `clearStyle removes a font size span regardless of its value`() {
+        val value = field("hello", TextRange(0, 5))
+        val sized = applyStyle(value, RichStyle.FontSize(18), linkColor)
+        val cleared = clearStyle(sized, RichStyle.FontSize::class.java, linkColor)
+        assertTrue(cleared.annotatedString.toRichContent().spans.isEmpty())
+    }
+
     // --- applyBlock ---
 
     @Test
