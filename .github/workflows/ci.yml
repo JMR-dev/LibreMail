@@ -20,8 +20,130 @@ env:
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
 
 jobs:
+  # ── Priority-based runner orchestration ──────────────────────────────────────
+  # Runs FIRST (the heavy jobs below all `needs: traffic-control`). It reads THIS
+  # PR's P0–P9 label — P0 = highest priority, P9 = lowest, default P5 when the PR
+  # carries no P-label — and PREEMPTS: it cancels the in-progress / queued CI runs
+  # of strictly-LOWER-priority OTHER open PRs, freeing their runners for this
+  # higher-priority PR. A preempted PR simply re-runs on its next push / autoupdate
+  # rebase.
+  #
+  # Hard safety rules, all enforced in the script below:
+  #   • never cancels a run on main / a push event (filters --event pull_request);
+  #   • never cancels THIS PR's own run (skips self by PR number + run id);
+  #   • never cancels an equal-or-higher-priority PR (only prio > self);
+  #   • only strictly-lower-priority OTHER open PRs' active runs are cancelled.
+  #
+  # It is deliberately NOT a merge-gate check: it is absent from `ci-passed`'s
+  # needs, every API call is guarded, the script always exits 0, and the step is
+  # `continue-on-error` — so a hiccup (API error, missing permission, fork PR)
+  # can never fail or block CI. The heavy jobs only *order* after it via `needs`;
+  # if it were ever skipped/failed they'd be skipped, which `ci-passed` now treats
+  # as a gate failure (fail-safe: blocks merge, never spuriously passes).
+  traffic-control:
+    name: Traffic control (runner priority)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # cancel workflow runs on lower-priority PRs
+      pull-requests: read # read PR P0–P9 labels
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SELF_PR: ${{ github.event.pull_request.number }}
+    steps:
+      # No checkout: this job only calls the gh CLI (auto-configured from GH_TOKEN /
+      # GH_REPO), so it needs neither the repo contents nor the default contents:read.
+      - name: Preempt lower-priority PR runs
+        continue-on-error: true # belt-and-suspenders: never let this fail the run
+        run: |
+          # GitHub invokes run steps with `bash -eo pipefail`. Disable errexit so a
+          # single failed API call can't abort the step; we guard every call and
+          # always exit 0. Attacker-influenced values (branch names, labels) are only
+          # ever read via env / gh JSON into shell vars — never interpolated as code.
+          set +e
+
+          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ] || [ -z "${SELF_PR:-}" ]; then
+            echo "Not a pull_request event (or no PR number) — nothing to preempt."
+            exit 0
+          fi
+
+          # Effective priority (0–9) of a labels JSON array read on stdin: the
+          # highest-priority (lowest-numbered) P0–P9 label present, else 5.
+          prio_of() {
+            jq -r '[ .[] | .name | select(test("^P[0-9]$")) | ltrimstr("P") | tonumber ]
+                   | if length == 0 then 5 else min end' 2>/dev/null
+          }
+
+          # One snapshot of every open PR (number, head branch, labels).
+          if ! gh pr list --state open --limit 300 \
+                 --json number,headRefName,labels > open_prs.json 2>err.txt; then
+            echo "::warning::Could not list open PRs — skipping preemption. $(cat err.txt 2>/dev/null)"
+            exit 0
+          fi
+
+          self_labels=$(jq -c --argjson pr "$SELF_PR" \
+            '([ .[] | select(.number == $pr) | .labels ] | .[0]) // []' open_prs.json 2>/dev/null)
+          self_prio=$(printf '%s' "${self_labels:-[]}" | prio_of)
+          case "$self_prio" in ''|*[!0-9]*) self_prio=5 ;; esac
+          echo "This PR #$SELF_PR has effective priority P$self_prio (P0 = highest, P9 = lowest)."
+
+          if [ "$self_prio" -ge 9 ]; then
+            echo "P$self_prio is the lowest tier — no strictly-lower-priority PRs to preempt."
+            exit 0
+          fi
+
+          # "number<TAB>head<TAB>prio" for every OTHER open PR.
+          jq -r --argjson self "$SELF_PR" '
+            .[] | select(.number != $self)
+            | [ .number, .headRefName,
+                ([ .labels[] | .name | select(test("^P[0-9]$")) | ltrimstr("P") | tonumber ]
+                  | if length == 0 then 5 else min end) ]
+            | @tsv' open_prs.json 2>/dev/null > others.tsv
+
+          cancelled_total=0
+          while IFS=$'\t' read -r num head prio; do
+            [ -n "${num:-}" ] || continue
+            case "$prio" in ''|*[!0-9]*) prio=5 ;; esac
+
+            if [ "$prio" -le "$self_prio" ]; then
+              echo "· PR #$num (P$prio): equal-or-higher priority — left untouched."
+              continue
+            fi
+
+            echo "· PR #$num (P$prio, head '$head'): strictly lower priority — checking for active CI runs."
+            # Active (non-completed) CI runs on that PR's head branch, PR events only.
+            run_ids=$(gh run list --workflow ci.yml --branch "$head" --event pull_request \
+                        --limit 100 --json databaseId,status,headBranch,event 2>/dev/null \
+                      | jq -r '.[]
+                          | select(.event == "pull_request")
+                          | select(.headBranch != "main")
+                          | select(.status != "completed")
+                          | .databaseId' 2>/dev/null)
+
+            if [ -z "$run_ids" ]; then
+              echo "    no active CI runs."
+              continue
+            fi
+
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              [ "$run_id" = "${GITHUB_RUN_ID:-}" ] && continue # never cancel our own run
+              if gh run cancel "$run_id" 2>err.txt; then
+                echo "    cancelled run $run_id (freed its runner)."
+                cancelled_total=$((cancelled_total + 1))
+              else
+                echo "::warning::could not cancel run $run_id — likely already finished. $(cat err.txt 2>/dev/null)"
+              fi
+            done <<< "$run_ids"
+          done < others.tsv
+
+          echo "Preemption pass complete — cancelled $cancelled_total lower-priority run(s)."
+          exit 0
+
   debug-build:
     name: Debug build
+    needs: traffic-control # order after runner-priority preemption
     # x86_64: Linux-arm64 runners can't set up this SDK — android-actions/setup-android's sdkmanager
     # fails (exit 1) on the android-37.0 preview platform, and the emulator package has no arm64-Linux
     # build. Build/unit-test results are host-arch-independent anyway (R8/AGP/JVM); real arm64
@@ -58,6 +180,7 @@ jobs:
 
   unit-tests:
     name: Unit tests
+    needs: traffic-control # order after runner-priority preemption
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -106,6 +229,7 @@ jobs:
 
   static-analysis:
     name: Static analysis
+    needs: traffic-control # order after runner-priority preemption
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -143,6 +267,7 @@ jobs:
 
   e2e:
     name: E2E
+    needs: traffic-control # order after runner-priority preemption
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -253,6 +378,7 @@ jobs:
   # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
     name: E2E (API 37 preview)
+    needs: traffic-control # order after runner-priority preemption
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -363,11 +489,16 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
+    # `traffic-control` is intentionally NOT listed here — it is a best-effort
+    # optimizer, not a merge requirement. But because the heavy jobs `needs:` it,
+    # a (should-never-happen) traffic-control failure would mark them 'skipped';
+    # treating 'skipped' as a gate failure below keeps that fail-safe (blocks the
+    # merge rather than letting it through untested).
     needs: [static-analysis, debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every required job succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         run: |
           echo "Required CI jobs did not all succeed:"
           echo "  static-analysis: ${{ needs.static-analysis.result }}"
