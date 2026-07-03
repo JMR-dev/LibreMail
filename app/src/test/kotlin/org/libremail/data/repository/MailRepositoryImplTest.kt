@@ -84,38 +84,6 @@ class MailRepositoryImplTest {
     )
 
     @Test
-    fun `observeFolderMessages is empty when the folder has no cached rows`() = runTest {
-        every { messageDao.observeFolderSummaries("acct", "INBOX") } returns flowOf(emptyList())
-        repository.observeFolderMessages("acct", "INBOX").test {
-            assertTrue(awaitItem().isEmpty())
-            awaitComplete()
-        }
-    }
-
-    @Test
-    fun `observeFolderMessages maps the folder's cached entities`() = runTest {
-        every { messageDao.observeFolderSummaries("acct", "INBOX") } returns
-            flowOf(listOf(messageSummary("1", "INBOX")))
-        repository.observeFolderMessages("acct", "INBOX").test {
-            val items = awaitItem()
-            assertEquals(1, items.size)
-            assertEquals("Ada", items.first().sender)
-            assertEquals("INBOX", items.first().folder)
-            awaitComplete()
-        }
-    }
-
-    @Test
-    fun `observeUnifiedFolderMessages maps the folder's rows across accounts`() = runTest {
-        every { messageDao.observeUnifiedFolderSummaries("INBOX") } returns
-            flowOf(listOf(messageSummary("1", "INBOX")))
-        repository.observeUnifiedFolderMessages("INBOX").test {
-            assertEquals(1, awaitItem().size)
-            awaitComplete()
-        }
-    }
-
-    @Test
     fun `pagedUnifiedFolderMessages maps the paged summaries to domain messages`() = runTest {
         every { messageDao.pagingUnifiedFolderSummaries("INBOX") } returns FakeSummaryPagingSource(
             listOf(messageSummary("1", "INBOX"), messageSummary("2", "INBOX", accountId = "acct2")),
@@ -127,6 +95,44 @@ class MailRepositoryImplTest {
         assertEquals("Ada", items.first().sender)
         // The list projection never carries a body — the reader loads it on demand (see MessageSummary).
         assertEquals("", items.first().body)
+    }
+
+    @Test
+    fun `pagedFolderMessages maps the account folder's paged summaries to domain messages`() = runTest {
+        every { messageDao.pagingFolderSummaries("acct", "INBOX") } returns FakeSummaryPagingSource(
+            listOf(messageSummary("1", "INBOX"), messageSummary("2", "INBOX")),
+        )
+
+        val items = repository.pagedFolderMessages("acct", "INBOX").asSnapshot()
+
+        assertEquals(listOf("1", "2"), items.map { it.id })
+        // The list projection never carries a body — the reader loads it on demand (see MessageSummary).
+        assertEquals("", items.first().body)
+    }
+
+    @Test
+    fun `pagedUnifiedSearchMessages escapes LIKE metacharacters and maps the paged hits`() = runTest {
+        val pattern = slot<String>()
+        every { messageDao.pagingUnifiedFolderSearchSummaries("INBOX", capture(pattern)) } returns
+            FakeSummaryPagingSource(listOf(messageSummary("1", "INBOX")))
+
+        val items = repository.pagedUnifiedSearchMessages("INBOX", "50%_off").asSnapshot()
+
+        assertEquals(listOf("1"), items.map { it.id })
+        // The query's LIKE metacharacters are escaped (so they match literally) then wrapped in wildcards.
+        assertEquals("%50\\%\\_off%", pattern.captured)
+    }
+
+    @Test
+    fun `pagedFolderSearchMessages scopes the paged search to the account and folder`() = runTest {
+        val pattern = slot<String>()
+        every { messageDao.pagingFolderSearchSummaries("acct", "INBOX", capture(pattern)) } returns
+            FakeSummaryPagingSource(listOf(messageSummary("1", "INBOX")))
+
+        val items = repository.pagedFolderSearchMessages("acct", "INBOX", "hi").asSnapshot()
+
+        assertEquals(listOf("1"), items.map { it.id })
+        assertEquals("%hi%", pattern.captured)
     }
 
     @Test

@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.paging.PagingSource
 import androidx.paging.map
 import dagger.hilt.android.qualifiers.ApplicationContext
 import jakarta.mail.Flags
@@ -30,6 +31,7 @@ import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageRouting
+import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
@@ -82,12 +84,6 @@ class MailRepositoryImpl @Inject constructor(
     // Hilt's SingletonComponent), so the scope's lifetime is the process's, not any one caller's coroutine.
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
-        messageDao.observeFolderSummaries(accountId, folder).map { rows -> rows.map { it.toDomain() } }
-
-    override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
-        messageDao.observeUnifiedFolderSummaries(folder).map { rows -> rows.map { it.toDomain() } }
-
     override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> = Pager(
         config = PagingConfig(
             // A page comfortably exceeds a screenful so scrolling rarely waits on a load; loading
@@ -100,6 +96,36 @@ class MailRepositoryImpl @Inject constructor(
         ),
         pagingSourceFactory = { messageDao.pagingUnifiedFolderSummaries(folder) },
     ).flow.map { page -> page.map { it.toDomain() } }
+
+    override fun pagedFolderMessages(accountId: String, folder: String): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingFolderSummaries(accountId, folder) }
+
+    override fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingUnifiedFolderSearchSummaries(folder, likePattern(query)) }
+
+    override fun pagedFolderSearchMessages(
+        accountId: String,
+        folder: String,
+        query: String,
+    ): Flow<PagingData<Message>> =
+        mailboxPager { messageDao.pagingFolderSearchSummaries(accountId, folder, likePattern(query)) }
+
+    /**
+     * Shared [Pager] for the per-account and search mailbox lists (issue #214). Same window sizing as
+     * the unified browse pager, plus a bounded `maxSize` so scrolling a long list drops far-offscreen
+     * pages instead of retaining the whole scrolled-through range in memory. Placeholders stay off (the
+     * row height varies, and the list never sizes a scrollbar to the full uncounted result).
+     */
+    private fun mailboxPager(pagingSourceFactory: () -> PagingSource<Int, MessageSummary>): Flow<PagingData<Message>> =
+        Pager(
+            config = PagingConfig(
+                pageSize = MAILBOX_PAGE_SIZE,
+                initialLoadSize = MAILBOX_PAGE_SIZE * 3,
+                enablePlaceholders = false,
+                maxSize = MAILBOX_PAGE_SIZE * 5,
+            ),
+            pagingSourceFactory = pagingSourceFactory,
+        ).flow.map { page -> page.map { it.toDomain() } }
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> =
         folderDao.observeForAccount(accountId).map { rows ->
@@ -515,3 +541,13 @@ private const val SEEN_FLAG_RETRY_BACKOFF_MS = 2_000L
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
+
+/**
+ * Builds the SQL `LIKE` pattern the paged-search DAO queries take (issue #214), preserving the old
+ * `matchesSearch` literal-substring semantics: escape the LIKE metacharacters (`\ % _`) — the `\`
+ * first, so the escapes just added aren't themselves re-escaped — then wrap the term in wildcards.
+ */
+private fun likePattern(query: String): String {
+    val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return "%$escaped%"
+}

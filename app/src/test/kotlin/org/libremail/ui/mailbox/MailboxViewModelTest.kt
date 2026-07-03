@@ -8,6 +8,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -54,43 +56,59 @@ class MailboxViewModelTest {
     private val alice = account("imap:a", "alice@example.org")
     private val bob = account("imap:b", "bob@example.org")
 
+    // Every mailbox mode is a single paged flow (issues #124, #214); the ViewModel's only job is to
+    // dispatch each (account, folder, query) to the matching repository pager. The paged rows/scoping
+    // themselves are covered by MailRepositoryImplTest and the MailboxScreen UI test.
     @Test
-    fun `unified browse keeps the whole inbox out of the in-memory list flow`() = runTest(testDispatcher) {
-        val vm = createViewModel(
-            accounts = listOf(alice, bob),
-            messages = listOf(
-                msg("imap:a:INBOX:1", "imap:a", "INBOX"),
-                msg("imap:a:Archive:1", "imap:a", "Archive"),
-                msg("imap:b:INBOX:1", "imap:b", "INBOX"),
-            ),
-        )
-        backgroundScope.launch { vm.messages.collect {} }
+    fun `pagedMessages dispatches to the matching repository pager for each mode`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), repo = repo)
+        backgroundScope.launch { vm.pagedMessages.collect {} }
+        runCurrent()
 
+        // Default: unified "All inboxes" browse.
         assertEquals("INBOX", vm.selectedFolder.value)
         assertNull(vm.selectedAccountId.value)
-        // Unified browse is paged (issue #124): the flat list flow stays empty so the whole unified
-        // inbox is never materialized on every write. The paged rows themselves are covered by
-        // MailRepositoryImplTest's pagedUnifiedFolderMessages test and the MailboxScreen UI test.
-        assertTrue(vm.messages.value.isEmpty())
+        verify { repo.pagedUnifiedFolderMessages("INBOX") }
+
+        // A query flips the unified view to the unified search pager.
+        vm.onSearchQuery("hello")
+        runCurrent()
+        verify { repo.pagedUnifiedSearchMessages("INBOX", "hello") }
+
+        // Clearing the query and picking an account browses that account's folder via the per-account pager.
+        vm.onSearchQuery("")
+        vm.selectAccount("imap:a")
+        runCurrent()
+        verify { repo.pagedFolderMessages("imap:a", "INBOX") }
+
+        // Searching within a concrete account uses the per-account search pager.
+        vm.onSearchQuery("world")
+        runCurrent()
+        verify { repo.pagedFolderSearchMessages("imap:a", "INBOX", "world") }
     }
 
     @Test
-    fun `selecting a concrete account renders the flat scoped list`() = runTest(testDispatcher) {
+    fun `selecting a concrete account pages that account's folder`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
         val vm = createViewModel(
             accounts = listOf(alice),
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:a:Archive:1", "imap:a", "Archive")),
+            repo = repo,
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.selectAccount("imap:a")
+        runCurrent()
 
-        // A concrete account uses the SQL-scoped, already-flat list (issue #86), not the paged path.
-        assertEquals(listOf("imap:a:INBOX:1"), vm.messages.value.map { it.id })
+        // A concrete account uses the SQL-scoped per-account pager (issue #214), not the unified one.
+        verify { repo.pagedFolderMessages("imap:a", "INBOX") }
     }
 
     @Test
     fun `selecting a folder scopes the view to that account and folder and syncs it`() = runTest(testDispatcher) {
         val syncer = mockk<MailSyncer>(relaxed = true)
+        val repo = mockk<MailRepository>(relaxed = true)
         val vm = createViewModel(
             accounts = listOf(alice),
             messages = listOf(
@@ -98,14 +116,16 @@ class MailboxViewModelTest {
                 msg("imap:a:Archive:1", "imap:a", "Archive"),
             ),
             syncer = syncer,
+            repo = repo,
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.selectFolder("imap:a", "Archive")
+        runCurrent()
 
         assertEquals("Archive", vm.selectedFolder.value)
         assertEquals("imap:a", vm.selectedAccountId.value)
-        assertEquals(listOf("imap:a:Archive:1"), vm.messages.value.map { it.id })
+        verify { repo.pagedFolderMessages("imap:a", "Archive") }
         coVerify { syncer.syncFolder("imap:a", "Archive") }
     }
 
@@ -120,7 +140,7 @@ class MailboxViewModelTest {
             Result.success(0)
         }
         val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.isSyncingFolder.test {
             assertEquals(false, awaitItem())
@@ -145,7 +165,7 @@ class MailboxViewModelTest {
             Result.failure(IllegalStateException("boom"))
         }
         val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.isSyncingFolder.test {
             assertEquals(false, awaitItem())
@@ -174,7 +194,7 @@ class MailboxViewModelTest {
             Result.success(0)
         }
         val vm = createViewModel(accounts = listOf(alice), messages = emptyList(), syncer = syncer)
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.isSyncingFolder.test {
             assertEquals(false, awaitItem())
@@ -233,7 +253,7 @@ class MailboxViewModelTest {
             accounts = listOf(alice, bob),
             messages = listOf(msg("imap:a:Archive:1", "imap:a", "Archive")),
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
         vm.selectFolder("imap:a", "Archive")
         assertEquals("Archive", vm.selectedFolder.value)
 
@@ -338,7 +358,7 @@ class MailboxViewModelTest {
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")),
             repo = repo,
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
 
         vm.startSelection("imap:a:INBOX:1", "imap:a")
         vm.requestDelete()
@@ -367,7 +387,7 @@ class MailboxViewModelTest {
             ),
             repo = repo,
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
         backgroundScope.launch { vm.currentFolderRole.collect {} }
         vm.selectFolder("imap:a", "Spam")
 
@@ -474,7 +494,7 @@ class MailboxViewModelTest {
             accounts = listOf(alice, bob),
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:b:INBOX:1", "imap:b", "INBOX")),
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
         backgroundScope.launch { vm.canMove.collect {} }
 
         vm.startSelection("imap:a:INBOX:1", "imap:a")
@@ -523,16 +543,20 @@ class MailboxViewModelTest {
 
     @Test
     fun `opens filtered to the account passed as a nav argument`() = runTest(testDispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
         val vm = createViewModel(
             accounts = listOf(alice, bob),
             messages = listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX"), msg("imap:b:INBOX:1", "imap:b", "INBOX")),
             initialAccountId = "imap:a",
+            repo = repo,
         )
-        backgroundScope.launch { vm.messages.collect {} }
+        backgroundScope.launch { vm.pagedMessages.collect {} }
+        runCurrent()
 
         assertEquals("imap:a", vm.selectedAccountId.value)
         assertEquals("INBOX", vm.selectedFolder.value)
-        assertEquals(listOf("imap:a:INBOX:1"), vm.messages.value.map { it.id })
+        // Seeded to a concrete account, so it pages that account's inbox (not the unified pager).
+        verify { repo.pagedFolderMessages("imap:a", "INBOX") }
     }
 
     @Test
@@ -588,22 +612,32 @@ class MailboxViewModelTest {
         repo: MailRepository = mockk(relaxed = true),
         initialAccountId: String? = null,
     ): MailboxViewModel {
-        // Mimic the SQL scoping: return the seed list narrowed to the queried account+folder / folder,
-        // exactly as MessageDao.observeFolderSummaries / observeUnifiedFolderSummaries do (issue #86).
-        every { repo.observeFolderMessages(any(), any()) } answers {
-            val accountId = firstArg<String>()
-            val folder = secondArg<String>()
-            MutableStateFlow(messages.filter { it.accountId == accountId && it.folder == folder })
-        }
-        every { repo.observeUnifiedFolderMessages(any()) } answers {
-            val folder = firstArg<String>()
-            MutableStateFlow(messages.filter { it.folder == folder })
-        }
-        // The unified browse list is paged (issue #124); mirror the DAO's inInbox-scoped, folder-scoped
-        // projection as a single static page.
+        // Every mailbox mode is paged (issues #124, #214). Mirror each DAO projection as a single static
+        // page over the seed list: browse pagers keep folder-synced (inInbox) rows; search pagers match
+        // the same fields the DAO's LIKE query does, leaving inInbox unfiltered.
         every { repo.pagedUnifiedFolderMessages(any()) } answers {
             val folder = firstArg<String>()
             flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
+        }
+        every { repo.pagedFolderMessages(any(), any()) } answers {
+            val accountId = firstArg<String>()
+            val folder = secondArg<String>()
+            flowOf(PagingData.from(messages.filter { it.accountId == accountId && it.folder == folder && it.inInbox }))
+        }
+        every { repo.pagedUnifiedSearchMessages(any(), any()) } answers {
+            val folder = firstArg<String>()
+            val query = secondArg<String>()
+            flowOf(PagingData.from(messages.filter { it.folder == folder && it.matchesSearch(query) }))
+        }
+        every { repo.pagedFolderSearchMessages(any(), any(), any()) } answers {
+            val accountId = firstArg<String>()
+            val folder = secondArg<String>()
+            val query = thirdArg<String>()
+            flowOf(
+                PagingData.from(
+                    messages.filter { it.accountId == accountId && it.folder == folder && it.matchesSearch(query) },
+                ),
+            )
         }
         every { repo.observeDrafts() } returns flowOf(emptyList())
         every { repo.observeOutbox() } returns flowOf(emptyList())
@@ -647,3 +681,9 @@ class MailboxViewModelTest {
         inInbox = true,
     )
 }
+
+/** Mirrors the paged-search DAO queries' columns so the stubbed search pagers filter like production. */
+private fun Message.matchesSearch(query: String): Boolean = sender.contains(query, ignoreCase = true) ||
+    senderEmail.contains(query, ignoreCase = true) ||
+    subject.contains(query, ignoreCase = true) ||
+    snippet.contains(query, ignoreCase = true)

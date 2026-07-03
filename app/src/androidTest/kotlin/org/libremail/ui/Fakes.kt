@@ -88,14 +88,24 @@ class FakeMailRepository(
     val movedToFolder = mutableListOf<Pair<List<String>, String>>()
     val replyDrafts = mutableListOf<Pair<String, ReplyMode>>()
 
-    override fun observeFolderMessages(accountId: String, folder: String): Flow<List<Message>> =
-        flowOf(messages.filter { it.accountId == accountId && it.folder == folder })
-
-    override fun observeUnifiedFolderMessages(folder: String): Flow<List<Message>> =
-        flowOf(messages.filter { it.folder == folder })
-
     override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> =
         flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
+
+    override fun pagedFolderMessages(accountId: String, folder: String): Flow<PagingData<Message>> =
+        flowOf(PagingData.from(messages.filter { it.accountId == accountId && it.folder == folder && it.inInbox }))
+
+    override fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>> =
+        flowOf(PagingData.from(messages.filter { it.folder == folder && it.matchesSearch(query) }))
+
+    override fun pagedFolderSearchMessages(
+        accountId: String,
+        folder: String,
+        query: String,
+    ): Flow<PagingData<Message>> = flowOf(
+        PagingData.from(
+            messages.filter { it.accountId == accountId && it.folder == folder && it.matchesSearch(query) },
+        ),
+    )
 
     override fun observeFolders(accountId: String): Flow<List<Folder>> = flowOf(
         folders.filter {
@@ -198,3 +208,9 @@ class FakeMailSyncer : Syncer {
     override suspend fun syncAccount(accountId: String): Result<Int> = Result.success(0)
     override suspend fun syncFolder(accountId: String, folder: String): Result<Int> = Result.success(0)
 }
+
+/** Mirrors the paged-search DAO queries' columns so the fake's search pagers filter like production. */
+private fun Message.matchesSearch(query: String): Boolean = sender.contains(query, ignoreCase = true) ||
+    senderEmail.contains(query, ignoreCase = true) ||
+    subject.contains(query, ignoreCase = true) ||
+    snippet.contains(query, ignoreCase = true)

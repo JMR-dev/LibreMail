@@ -27,43 +27,13 @@ interface MessageDao {
     fun observeSummaries(): Flow<List<MessageSummary>>
 
     /**
-     * Mailbox-list projection scoped in SQL to one account's [folder], newest-first. Unlike
-     * [observeSummaries] this pulls only that folder's rows and re-emits only when they actually
-     * change, so the mailbox list's cost scales with what's shown, not the whole cache (issue #86).
-     * `inInbox` is *not* filtered here so the one query serves both the normal list (caller keeps
-     * `inInbox = 1` rows) and search (caller keeps rows matching the query, including transient
-     * `inInbox = 0` server-search hits). Served by the existing `(accountId, folder, uid)` index (its
-     * `(accountId, folder)` prefix), so no new index — and no schema migration — is needed.
-     */
-    @Query(
-        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
-            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE accountId = :accountId AND folder = :folder ORDER BY timestampMillis DESC",
-    )
-    fun observeFolderSummaries(accountId: String, folder: String): Flow<List<MessageSummary>>
-
-    /**
-     * Unified-inbox projection: [folder] across every account, newest-first. Scoped in SQL like
-     * [observeFolderSummaries] but without an account predicate (issue #86). No existing index leads
-     * with `folder`, so this still scans in timestamp order — far cheaper than [observeSummaries] (it
-     * materializes only this folder's rows, not the whole cache) but not O(1); a large multi-account
-     * unified inbox is a candidate for a `(folder, inInbox, timestampMillis)` index + paging.
-     */
-    @Query(
-        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
-            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE folder = :folder ORDER BY timestampMillis DESC",
-    )
-    fun observeUnifiedFolderSummaries(folder: String): Flow<List<MessageSummary>>
-
-    /**
      * Paged unified-inbox projection: folder-synced rows of [folder] across every account,
-     * newest-first, as a Paging 3 [PagingSource] (issue #124). Unlike [observeUnifiedFolderSummaries]
-     * — which materializes the *entire* unified inbox (~thousands of rows) on every emission — Room
-     * loads only the requested window (LIMIT/OFFSET), so the mailbox list's query, mapping, and
-     * recomposition cost scale with what's on screen, not the whole cache. Filters `inInbox = 1`
-     * because the paged browse list shows only synced rows; unified *search* (which must also surface
-     * transient `inInbox = 0` hits) stays on [observeUnifiedFolderSummaries]. Profiling (see
+     * newest-first, as a Paging 3 [PagingSource] (issue #124). Room loads only the requested window
+     * (LIMIT/OFFSET), so the mailbox list's query, mapping, and recomposition cost scale with what's on
+     * screen, not the whole cache — instead of materializing the *entire* unified inbox (~thousands of
+     * rows) on every emission. Filters `inInbox = 1` because the paged browse list shows only synced
+     * rows; unified *search* (which must also surface transient `inInbox = 0` hits) is paged separately
+     * by [pagingUnifiedFolderSearchSummaries] (issue #214). Profiling (see
      * `docs/perf/issue-124-unified-inbox-paging.md`) showed the first page loads flat regardless of
      * total cache size on the existing indices, so no `(folder, …)` index / schema migration is added.
      */
@@ -73,6 +43,60 @@ interface MessageDao {
             "WHERE folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC",
     )
     fun pagingUnifiedFolderSummaries(folder: String): PagingSource<Int, MessageSummary>
+
+    /**
+     * Paged per-account folder projection: [accountId]'s folder-synced rows of [folder], newest-first,
+     * as a Paging 3 [PagingSource] (issue #214). The account-scoped counterpart of
+     * [pagingUnifiedFolderSummaries] — brings #124's window-at-a-time loading to the per-account browse
+     * list so opening a large account folder no longer materializes the whole folder into memory.
+     * Filters `inInbox = 1` (synced browse rows only; per-account *search* uses
+     * [pagingFolderSearchSummaries], which also surfaces transient `inInbox = 0` hits). Served by the
+     * `(accountId, folder, uid)` index's `(accountId, folder)` prefix, so no new index / migration.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC",
+    )
+    fun pagingFolderSummaries(accountId: String, folder: String): PagingSource<Int, MessageSummary>
+
+    /**
+     * Paged unified search: rows of [folder] across every account whose sender, sender address,
+     * subject, or snippet match [pattern] — a pre-built SQL `LIKE` pattern (`%term%`, with the LIKE
+     * metacharacters `\ % _` escaped by `\`) — newest-first, as a Paging 3 [PagingSource] (issue #214).
+     * Scans the same columns the old in-memory search filter (`matchesSearch`) did, but in SQL so a
+     * search over a large folder loads only the visible window. Unlike the browse pagers this does
+     * *not* filter `inInbox`, so it surfaces both synced rows and the transient `inInbox = 0`
+     * server-search hits `MailRepository.searchServer` inserts — exactly what the old filter saw. LIKE
+     * is case-insensitive for ASCII (SQLite's default), matching `matchesSearch`'s common case.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE folder = :folder AND (sender LIKE :pattern ESCAPE '\\' OR " +
+            "senderEmail LIKE :pattern ESCAPE '\\' OR subject LIKE :pattern ESCAPE '\\' OR " +
+            "snippet LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+    )
+    fun pagingUnifiedFolderSearchSummaries(folder: String, pattern: String): PagingSource<Int, MessageSummary>
+
+    /**
+     * Paged per-account search: [accountId]'s rows of [folder] matching [pattern] (see
+     * [pagingUnifiedFolderSearchSummaries] for the pattern/column contract), newest-first, as a
+     * Paging 3 [PagingSource] (issue #214). Like the unified variant it leaves `inInbox` unfiltered so
+     * per-account search still surfaces transient server-search hits.
+     */
+    @Query(
+        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
+            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
+            "WHERE accountId = :accountId AND folder = :folder AND (sender LIKE :pattern ESCAPE '\\' OR " +
+            "senderEmail LIKE :pattern ESCAPE '\\' OR subject LIKE :pattern ESCAPE '\\' OR " +
+            "snippet LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+    )
+    fun pagingFolderSearchSummaries(
+        accountId: String,
+        folder: String,
+        pattern: String,
+    ): PagingSource<Int, MessageSummary>
 
     /**
      * Live per-(account, folder) unread counts for the drawer's folder badges and the bold styling of

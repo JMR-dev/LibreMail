@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -104,8 +103,8 @@ fun MailboxScreen(
     onSelectTab: (org.libremail.ui.TopDest) -> Unit,
     viewModel: MailboxViewModel = hiltViewModel(),
 ) {
-    val messages by viewModel.messages.collectAsStateWithLifecycle()
-    // The unified "All inboxes" browse list is paged (issue #124); per-account/search render [messages].
+    // Every mailbox mode — unified/per-account browse and search — is a single paged list now
+    // (issues #124, #214); the ViewModel dispatches the right pager by (account, folder, query).
     val pagedMessages = viewModel.pagedMessages.collectAsLazyPagingItems()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val selectedAccountId by viewModel.selectedAccountId.collectAsStateWithLifecycle()
@@ -129,10 +128,6 @@ fun MailboxScreen(
     val moveTargetFolders by viewModel.moveTargetFolders.collectAsStateWithLifecycle()
     val actionInProgress by viewModel.actionInProgress.collectAsStateWithLifecycle()
     val selectionMode = selectedIds.isNotEmpty()
-    // The unified inbox (no account filter, not searching) renders the paged list; a concrete account
-    // or an active search renders the flat [messages] list. Hoisted here so the selection bar's
-    // "Select all" can read the right source (issue #124).
-    val showPaged = selectedAccountId == null && searchQuery.isBlank()
     var showMovePicker by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -198,11 +193,9 @@ fun MailboxScreen(
                         onSpam = viewModel::requestSpam,
                         onMove = { showMovePicker = true },
                         onSelectAll = {
-                            // "Select all" acts on what's shown: the loaded paged window for the unified
-                            // inbox, or the whole flat list for a per-account/search view.
-                            viewModel.selectAll(
-                                if (showPaged) pagedMessages.itemSnapshotList.items else messages,
-                            )
+                            // "Select all" acts on what's shown: the currently loaded window of the
+                            // paged list (issues #124, #214).
+                            viewModel.selectAll(pagedMessages.itemSnapshotList.items)
                         },
                         onReply = { viewModel.reply(ReplyMode.REPLY) },
                         onReplyAll = viewModel::requestReplyAll,
@@ -294,59 +287,36 @@ fun MailboxScreen(
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                if (showPaged) {
-                                    if (pagedMessages.itemCount == 0) {
-                                        item {
-                                            // Hold the empty state back until the first page settles so
-                                            // it doesn't flash before rows arrive (search never lands here).
-                                            if (pagedMessages.loadState.refresh !is LoadState.Loading) {
-                                                NoMessagesState(Modifier.fillParentMaxSize())
-                                            }
-                                        }
-                                    } else {
-                                        items(
-                                            count = pagedMessages.itemCount,
-                                            key = pagedMessages.itemKey { it.id },
-                                        ) { index ->
-                                            val message = pagedMessages[index] ?: return@items
-                                            val accountLabel =
-                                                if (showAccount) accountsById[message.accountId]?.email else null
-                                            MessageRow(
-                                                message = message,
-                                                accountLabel = accountLabel,
-                                                selected = message.id in selectedIds,
-                                                onClick = {
-                                                    if (selectionMode) {
-                                                        viewModel.toggleSelection(message.id, message.accountId)
-                                                    } else {
-                                                        onOpenMessage(message.id)
-                                                    }
-                                                },
-                                                onLongClick = {
-                                                    viewModel.startSelection(message.id, message.accountId)
-                                                },
-                                            )
-                                            HorizontalDivider()
-                                        }
-                                    }
-                                } else if (messages.isEmpty()) {
+                                if (pagedMessages.itemCount == 0) {
                                     item {
-                                        // Hold the empty state back while the folder's initial background
-                                        // sync is still in flight, so opening an uncached folder doesn't
-                                        // flash "No messages to display" before the fetch has a chance to
-                                        // populate anything (issue #149).
-                                        if (searchActive && searchQuery.isNotBlank()) {
-                                            NoResultsState(Modifier.fillParentMaxSize())
-                                        } else if (isSyncingFolder) {
-                                            Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
-                                                CircularProgressIndicator()
-                                            }
-                                        } else {
-                                            NoMessagesState(Modifier.fillParentMaxSize())
+                                        val loadState = pagedMessages.loadState
+                                        // "Settled" = the refresh finished and there is no further page,
+                                        // so an empty list is genuinely empty. Gating on it (not just
+                                        // "refresh not Loading") holds the empty state back on an
+                                        // empty→loaded transition — before the first page, or before a
+                                        // search's debounced server hits land (issues #124, #214).
+                                        val settled = loadState.refresh is LoadState.NotLoading &&
+                                            loadState.append.endOfPaginationReached
+                                        when {
+                                            searchActive && searchQuery.isNotBlank() ->
+                                                if (settled) NoResultsState(Modifier.fillParentMaxSize())
+                                            // An uncached per-account folder still doing its initial
+                                            // background sync: show the spinner rather than "No messages"
+                                            // until it settles or the fetch populates rows (issue #149).
+                                            isSyncingFolder ->
+                                                Box(
+                                                    Modifier.fillParentMaxSize(),
+                                                    contentAlignment = Alignment.Center,
+                                                ) { CircularProgressIndicator() }
+                                            settled -> NoMessagesState(Modifier.fillParentMaxSize())
                                         }
                                     }
                                 } else {
-                                    items(messages, key = { it.id }) { message ->
+                                    items(
+                                        count = pagedMessages.itemCount,
+                                        key = pagedMessages.itemKey { it.id },
+                                    ) { index ->
+                                        val message = pagedMessages[index] ?: return@items
                                         val accountLabel =
                                             if (showAccount) accountsById[message.accountId]?.email else null
                                         MessageRow(
