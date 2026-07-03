@@ -29,6 +29,8 @@ data class DebugReport(
     val settings: Map<String, String>,
     val logs: List<String>,
     val userComment: String = "",
+    /** Reply-to address the user supplied when submitting (see #159); required for online submit. */
+    val userEmail: String = "",
 ) {
     /** The exact text shown for review, copied, saved to a file, and POSTed on submit. */
     fun toSubmissionPayload(): String = toJson().toString(JSON_INDENT)
@@ -55,6 +57,7 @@ data class DebugReport(
             .put("app", app)
             .put("device", device)
             .put("userComment", userComment)
+            .put("userEmail", userEmail)
             .put("settings", settingsJson)
             .put("logs", JSONArray(logs))
         if (stackTrace != null) json.put("stackTrace", stackTrace)
@@ -88,6 +91,7 @@ data class DebugReport(
                 settings = settings,
                 logs = logs,
                 userComment = json.optString("userComment", ""),
+                userEmail = json.optString("userEmail", ""),
             )
         }
     }

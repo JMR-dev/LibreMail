@@ -24,6 +24,8 @@ import org.libremail.reporting.ReportStore
 import org.libremail.reporting.ReportSubmitter
 import org.libremail.ui.navigation.Routes
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReportReviewViewModelTest {
@@ -83,31 +85,82 @@ class ReportReviewViewModelTest {
     }
 
     @Test
-    fun `submit enqueues the upload exactly once and persists the reviewed comment`() = runTest(testDispatcher) {
-        every { submitter.isEnabled } returns true
-        every { submitter.submit("rid") } just Runs
-        every { submitter.status("rid") } returns emptyFlow()
-        every { store.save(any()) } just Runs
+    fun `payload shown reflects the entered email`() = runTest(testDispatcher) {
         val vm = viewModel()
-        vm.updateComment("edited before submit")
 
-        vm.submit()
+        vm.updateEmail("me@example.com")
 
-        verify(exactly = 1) { store.save(match { it.userComment == "edited before submit" }) }
-        verify(exactly = 1) { submitter.submit("rid") }
+        assertEquals(report.copy(userEmail = "me@example.com").toSubmissionPayload(), vm.payload())
     }
 
     @Test
-    fun `submit with no endpoint configured never transmits`() = runTest(testDispatcher) {
+    fun `submit enqueues the upload exactly once and persists the reviewed comment and email`() =
+        runTest(testDispatcher) {
+            every { submitter.isEnabled } returns true
+            every { submitter.submit("rid") } just Runs
+            every { submitter.status("rid") } returns emptyFlow()
+            every { store.save(any()) } just Runs
+            val vm = viewModel()
+            vm.updateComment(VALID_COMMENT)
+            vm.updateEmail(VALID_EMAIL)
+
+            vm.submit()
+
+            verify(exactly = 1) {
+                store.save(match { it.userComment == VALID_COMMENT && it.userEmail == VALID_EMAIL })
+            }
+            verify(exactly = 1) { submitter.submit("rid") }
+        }
+
+    @Test
+    fun `submit with no endpoint configured never transmits but still persists`() = runTest(testDispatcher) {
         every { submitter.isEnabled } returns false
         every { store.save(any()) } just Runs
         val vm = viewModel()
-        vm.updateComment("please send")
+        vm.updateComment(VALID_COMMENT)
+        vm.updateEmail(VALID_EMAIL)
 
         vm.submit()
 
-        // The comment is still persisted for Copy/Save, but nothing is enqueued for upload.
-        verify(exactly = 1) { store.save(match { it.userComment == "please send" }) }
+        // The comment/email are still persisted for Copy/Save, but nothing is enqueued for upload.
+        verify(exactly = 1) {
+            store.save(match { it.userComment == VALID_COMMENT && it.userEmail == VALID_EMAIL })
+        }
+        verify(exactly = 0) { submitter.submit(any()) }
+    }
+
+    @Test
+    fun `submit does nothing when the comment is under the minimum length`() = runTest(testDispatcher) {
+        val vm = viewModel()
+        vm.updateEmail(VALID_EMAIL)
+        vm.updateComment("way too short")
+
+        vm.submit()
+
+        verify(exactly = 0) { store.save(any()) }
+        verify(exactly = 0) { submitter.submit(any()) }
+    }
+
+    @Test
+    fun `submit does nothing when the email is blank`() = runTest(testDispatcher) {
+        val vm = viewModel()
+        vm.updateComment(VALID_COMMENT)
+
+        vm.submit()
+
+        verify(exactly = 0) { store.save(any()) }
+        verify(exactly = 0) { submitter.submit(any()) }
+    }
+
+    @Test
+    fun `submit does nothing when the email is malformed`() = runTest(testDispatcher) {
+        val vm = viewModel()
+        vm.updateComment(VALID_COMMENT)
+        vm.updateEmail("not-an-email")
+
+        vm.submit()
+
+        verify(exactly = 0) { store.save(any()) }
         verify(exactly = 0) { submitter.submit(any()) }
     }
 
@@ -120,5 +173,47 @@ class ReportReviewViewModelTest {
 
         verify(exactly = 1) { store.delete("rid") }
         verify(exactly = 0) { submitter.submit(any()) }
+    }
+
+    @Test
+    fun `isCommentLongEnough is false below the threshold and true at or above it`() {
+        val short = ReportReviewState(comment = "a".repeat(ReportSubmissionRules.MIN_COMMENT_LENGTH - 1))
+        val exact = ReportReviewState(comment = "a".repeat(ReportSubmissionRules.MIN_COMMENT_LENGTH))
+
+        assertFalse(short.isCommentLongEnough)
+        assertTrue(exact.isCommentLongEnough)
+    }
+
+    @Test
+    fun `isEmailValid accepts plausible addresses and rejects malformed or blank input`() {
+        assertTrue(ReportReviewState(email = "user@example.com").isEmailValid)
+        assertTrue(ReportReviewState(email = "first.last+tag@sub.example.co.uk").isEmailValid)
+        assertFalse(ReportReviewState(email = "").isEmailValid)
+        assertFalse(ReportReviewState(email = "no-at-sign.com").isEmailValid)
+        assertFalse(ReportReviewState(email = "user@").isEmailValid)
+        assertFalse(ReportReviewState(email = "user@nodot").isEmailValid)
+        assertFalse(ReportReviewState(email = "@example.com").isEmailValid)
+        assertFalse(ReportReviewState(email = "has space@example.com").isEmailValid)
+    }
+
+    @Test
+    fun `canSubmit requires both a long-enough comment and a valid email`() {
+        val validComment = "a".repeat(ReportSubmissionRules.MIN_COMMENT_LENGTH)
+
+        assertTrue(ReportReviewState(comment = validComment, email = "user@example.com").canSubmit)
+        assertFalse(ReportReviewState(comment = "short", email = "user@example.com").canSubmit)
+        assertFalse(ReportReviewState(comment = validComment, email = "not-an-email").canSubmit)
+        assertFalse(
+            ReportReviewState(
+                comment = validComment,
+                email = "user@example.com",
+                submit = SubmitUiState.SUBMITTING,
+            ).canSubmit,
+        )
+    }
+
+    private companion object {
+        val VALID_COMMENT = "a".repeat(ReportSubmissionRules.MIN_COMMENT_LENGTH)
+        const val VALID_EMAIL = "reporter@example.com"
     }
 }
