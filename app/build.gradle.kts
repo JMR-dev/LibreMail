@@ -146,8 +146,19 @@ android {
         // `./gradlew api29DebugAndroidTest`. Gradle provisions/boots/tears down the emulators and
         // downloads the system images on first use. Keep this list in lockstep with the CI matrix in
         // .github/workflows/ci.yml; when a new Android ships, add it and drop the oldest level that
-        // has fallen outside ~7 years. API 37 (preview) is exercised on the dev emulator until a
-        // stable managed-device image is published, so it is intentionally not listed here.
+        // has fallen outside ~7 years.
+        //
+        // API 37 (preview) is intentionally NOT listed here (re-confirmed 2026-07, see PR that added
+        // API 35/37 to preflight): its only published system image is the nonstandard
+        // "android-37.0" / google_apis_ps16k pairing that the e2e-preview job in
+        // .github/workflows/ci.yml installs directly via sdkmanager. ManagedVirtualDevice only knows
+        // how to build an "android-<apiLevel:Int>" package id (e.g. `apiLevel = 37` → "android-37")
+        // or an "android-<apiPreview:codename>" one — neither produces "android-37.0" — so there is
+        // no DSL path to this image today, the same root cause documented on e2e-preview for why
+        // reactivecircus/android-emulator-runner can't provision it either. issue #124's perf doc
+        // (docs/perf/issue-124-unified-inbox-paging.md) independently corroborates this: its API 37
+        // cross-check used a physical Pixel, not an emulator/AVD. Once a managed-device-compatible
+        // image is published, add `api37` here (and to the CI matrix) and delete the e2e-preview job.
         managedDevices {
             localDevices {
                 listOf(29, 30, 31, 32, 33, 34, 35, 36).forEach { api ->

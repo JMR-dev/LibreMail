@@ -28,15 +28,18 @@ or via Gradle Managed Devices `./gradlew e2eGroupDebugAndroidTest` (whole matrix
 
 **Before treating a change as done**, run the fast CI gate: `assembleDebug` +
 `testDebugUnitTest` + `compileDebugAndroidTestKotlin` + `lintDebug` + `ktlintCheck` +
-`detekt` + the latest-API emulator E2E `api36DebugAndroidTest` (the `/preflight` skill does
-all of this). `compileDebugAndroidTestKotlin` compiles the `androidTest` source set that the
-static part of the gate skips, catching E2E/instrumented-test compile errors before they
-surface only in CI. `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that
-`lintDebug` skips, so they catch style violations that would otherwise fail CI's Static
-analysis gate. `api36DebugAndroidTest` runs the instrumented/E2E suite on API 36 — the highest
-API level in the E2E matrix — via its Gradle Managed Device (Gradle boots and tears down the
-emulator automatically). Running that one latest-API level locally is required; the full
-multi-API matrix (and the API 37 preview job) stays CI's job.
+`detekt` + the top-of-matrix emulator E2E `api35DebugAndroidTest` + `api36DebugAndroidTest`
+(the `/preflight` skill does all of this). `compileDebugAndroidTestKotlin` compiles the
+`androidTest` source set that the static part of the gate skips, catching E2E/instrumented-test
+compile errors before they surface only in CI. `ktlintCheck`/`detekt` cover the
+`test`/`androidTest` source sets that `lintDebug` skips, so they catch style violations that
+would otherwise fail CI's Static analysis gate. `api35DebugAndroidTest` and
+`api36DebugAndroidTest` run the instrumented/E2E suite on the top two stable API levels in the
+E2E matrix, each via its own Gradle Managed Device (Gradle boots and tears down each emulator
+automatically). Running those two levels locally is required; the rest of the multi-API matrix
+(API 29–34) stays CI's job. API 37 (preview) still has no Gradle Managed Device to run locally
+— see the comment above `testOptions.managedDevices` in `app/build.gradle.kts` for why — so it
+remains exercised only by CI's `e2e-preview` job.
 
 ## Build-config gotchas
 
@@ -70,9 +73,10 @@ pulled in as a real dependency for unit tests because `android.jar`'s version is
 A change is not done until it ships with passing **unit tests** and **E2E/instrumented tests**
 that exercise the new or changed behaviour. Writing and committing that E2E/instrumented test
 is a required part of every task — and the test must actually **run and pass**, not merely
-compile: preflight runs the latest-API-level emulator E2E locally (`api36DebugAndroidTest`, the
-highest API level in the E2E matrix and its Gradle Managed Device task) and it must be green
-before the change is done. CI then runs the full multi-API matrix.
+compile: preflight runs the top-of-matrix emulator E2E locally (`api35DebugAndroidTest` +
+`api36DebugAndroidTest`, the two highest stable API levels in the E2E matrix and their Gradle
+Managed Device tasks) and both must be green before the change is done. CI then runs the full
+multi-API matrix plus the API 37 preview job.
 
 ## Repo etiquette
 
