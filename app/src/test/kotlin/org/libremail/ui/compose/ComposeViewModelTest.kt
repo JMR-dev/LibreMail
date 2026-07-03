@@ -9,12 +9,15 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -533,5 +536,98 @@ class ComposeViewModelTest {
         assertFalse(vm.state.value.showAttachmentPrompt)
         assertFalse(vm.state.value.highlightAttach)
         coVerify(exactly = 0) { mailRepository.sendMessage(any()) }
+    }
+
+    @Test
+    fun `rapid edits coalesce into a single debounced autosave`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle() // let init (signature/font seeding) settle before observing autosaves
+
+        vm.onToChange("bob@example.org")
+        vm.onSubjectChange("Hi")
+        vm.onBodyChange("Hello", null)
+        vm.onBodyChange("Hello world", null)
+
+        // Still inside the debounce window: nothing persisted yet.
+        coVerify(exactly = 0) { mailRepository.saveDraft(any()) }
+
+        advanceUntilIdle() // cross the debounce window
+        coVerify(exactly = 1) { mailRepository.saveDraft(any()) }
+    }
+
+    @Test
+    fun `repeated autosaves of a brand-new draft update a single row`() = runTest(testDispatcher) {
+        // Regression test for the draft-id-reuse bug: a brand-new compose (draftId == null) must not
+        // mint a fresh UUID per autosave tick, or each tick would insert a duplicate draft row.
+        val saved = mutableListOf<Draft>()
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.saveDraft(capture(saved)) } just Runs
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onBodyChange("First", null)
+        advanceUntilIdle() // autosave #1
+
+        vm.onBodyChange("First, expanded", null)
+        advanceUntilIdle() // autosave #2
+
+        assertEquals(2, saved.size, "expected two autosaves")
+        assertEquals(saved[0].id, saved[1].id, "autosaves must reuse one draft id, not insert per tick")
+    }
+
+    @Test
+    fun `exiting saves immediately without waiting for the debounce`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onBodyChange("Draft body", null)
+        vm.onExit()
+        runCurrent() // run onExit's coroutine, but do NOT advance past the debounce window
+
+        coVerify(exactly = 1) { mailRepository.saveDraft(any()) }
+    }
+
+    @Test
+    fun `does not autosave while a send is in flight`() = runTest(testDispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val gate = CompletableDeferred<Result<Unit>>()
+        coEvery { mailRepository.sendMessage(any()) } coAnswers { gate.await() }
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Body", null)
+        vm.send() // performSend sets sending = true and suspends on the gate
+
+        // An edit lands mid-send; even past the debounce window it must not autosave.
+        vm.onBodyChange("Body extended", null)
+        advanceUntilIdle()
+        coVerify(exactly = 0) { mailRepository.saveDraft(any()) }
+
+        gate.complete(Result.success(Unit)) // let the send finish cleanly
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `sending after an autosave deletes the autosaved draft`() = runTest(testDispatcher) {
+        // A brand-new compose that autosaved a row must not orphan it once the message is actually sent.
+        val saved = mutableListOf<Draft>()
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.saveDraft(capture(saved)) } just Runs
+        coEvery { mailRepository.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(mailRepository = mailRepository)
+        advanceUntilIdle()
+
+        vm.onToChange("bob@example.org")
+        vm.onBodyChange("Body", null)
+        advanceUntilIdle() // autosave persists the draft
+        val autosavedId = saved.single().id
+
+        vm.send()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { mailRepository.deleteDraft(autosavedId) }
     }
 }

@@ -5,13 +5,18 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -57,6 +62,21 @@ data class ComposeUiState(
     val highlightAttach: Boolean = false,
 )
 
+/** The persisted draft fields; autosave fires only when one of these actually changes (#177). */
+private data class DraftContent(
+    val to: String,
+    val cc: String,
+    val bcc: String,
+    val subject: String,
+    val body: String,
+    val bodyHtml: String?,
+    val attachments: List<OutgoingAttachment>,
+)
+
+/** Idle window after the last edit before an in-progress compose draft is autosaved (#177). */
+private const val DRAFT_AUTOSAVE_DEBOUNCE_MS = 1_500L
+
+@OptIn(FlowPreview::class)
 @HiltViewModel
 class ComposeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -70,6 +90,17 @@ class ComposeViewModel @Inject constructor(
 
     private val draftId: String? =
         savedStateHandle.get<String>(Routes.COMPOSE_ARG_DRAFT)?.takeIf { it.isNotBlank() }
+
+    /**
+     * The id every save in this session writes under: the resumed draft's [draftId], or — for a
+     * brand-new composition — a single id generated once and reused for every autosave (#177). Without
+     * this, `id = draftId ?: UUID.randomUUID()` minted a fresh id on each call, so periodic autosave
+     * would insert a new duplicate draft row per tick instead of updating the same one.
+     */
+    private val persistedDraftId: String by lazy { draftId ?: UUID.randomUUID().toString() }
+
+    /** Whether a draft row currently exists for this session (resumed, or autosaved at least once). */
+    private var draftPersisted: Boolean = draftId != null
 
     private val _state = MutableStateFlow(
         ComposeUiState(
@@ -139,6 +170,18 @@ class ComposeViewModel @Inject constructor(
                 // replies/forwards resume as drafts and take the branch above, left untouched.
                 seedRememberedFont(settings.lastFontCss, settings.lastFontSizePt)
             }
+        }
+        // Debounced periodic autosave (#177): coalesce rapid edits to the persisted fields into one
+        // write after a short idle window, so an in-progress draft survives a background-kill without
+        // waiting for the explicit back-press save. Keyed only off the fields saveOrDeleteDraft() writes
+        // (from-account and transient UI flags are intentionally excluded).
+        viewModelScope.launch {
+            _state
+                .map { DraftContent(it.to, it.cc, it.bcc, it.subject, it.body, it.bodyHtml, it.attachments) }
+                .distinctUntilChanged()
+                .drop(1)
+                .debounce(DRAFT_AUTOSAVE_DEBOUNCE_MS)
+                .collect { autosaveDraft() }
         }
     }
 
@@ -289,6 +332,23 @@ class ComposeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Immediately flushes any pending draft save — called from ComposeScreen on `ON_STOP` so the last
+     * keystrokes within the debounce window aren't lost if the app is killed while backgrounded (#177).
+     */
+    fun flushDraft() {
+        viewModelScope.launch { autosaveDraft() }
+    }
+
+    /**
+     * Persists (or deletes, when emptied) the draft now — unless a send is in flight or we've already
+     * navigated away. Mirrors onExit()'s "don't save mid-send" guard and never re-creates a draft for
+     * an already-sent message (see [navigated]). Shared by the debounce collector and [flushDraft].
+     */
+    private suspend fun autosaveDraft() {
+        if (!_state.value.sending && !navigated) saveOrDeleteDraft()
+    }
+
     /** Closes the screen exactly once, so send() and a stray back-press can't double-pop. */
     private suspend fun finish() {
         if (navigated) return
@@ -305,21 +365,29 @@ class ComposeViewModel @Inject constructor(
             s.body.isNotBlank() ||
             s.attachments.isNotEmpty()
         when {
-            hasContent -> mailRepository.saveDraft(
-                Draft(
-                    id = draftId ?: UUID.randomUUID().toString(),
-                    accountId = s.fromAccountId,
-                    to = s.to,
-                    cc = s.cc,
-                    bcc = s.bcc,
-                    subject = s.subject,
-                    body = s.body,
-                    updatedAt = System.currentTimeMillis(),
-                    bodyHtml = s.bodyHtml,
-                    attachments = s.attachments,
-                ),
-            )
-            draftId != null -> mailRepository.deleteDraft(draftId) // an existing draft was emptied out
+            hasContent -> {
+                mailRepository.saveDraft(
+                    Draft(
+                        id = persistedDraftId,
+                        accountId = s.fromAccountId,
+                        to = s.to,
+                        cc = s.cc,
+                        bcc = s.bcc,
+                        subject = s.subject,
+                        body = s.body,
+                        updatedAt = System.currentTimeMillis(),
+                        bodyHtml = s.bodyHtml,
+                        attachments = s.attachments,
+                    ),
+                )
+                draftPersisted = true
+            }
+            // The draft was emptied out: drop the persisted row — a resumed draft, or one an earlier
+            // autosave tick created this session — so an empty orphan is never left behind.
+            draftPersisted -> {
+                mailRepository.deleteDraft(persistedDraftId)
+                draftPersisted = false
+            }
         }
     }
 
@@ -377,7 +445,10 @@ class ComposeViewModel @Inject constructor(
         ).fold(
             onSuccess = {
                 rememberFontPreference(s.bodyHtml)
-                draftId?.let { mailRepository.deleteDraft(it) }
+                // Delete the draft this message was composed from — whether resumed from the drafts list
+                // or created by an autosave tick this session (#177) — so sending never orphans it.
+                if (draftPersisted) mailRepository.deleteDraft(persistedDraftId)
+                draftPersisted = false
                 _state.update { it.copy(sending = false) }
                 finish()
             },
