@@ -20,6 +20,7 @@ import org.libremail.contacts.ContactSuggestion
 import org.libremail.contacts.ContactsRepository
 import org.libremail.data.SignatureBlock
 import org.libremail.data.settings.AccountSettingsRepository
+import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.Draft
@@ -62,6 +63,7 @@ class ComposeViewModel @Inject constructor(
     private val contactsRepository: ContactsRepository,
     private val accountSettingsRepository: AccountSettingsRepository,
     private val signatureRepository: SignatureRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     private val draftId: String? =
@@ -120,7 +122,15 @@ class ComposeViewModel @Inject constructor(
             // signature. Reply/forward drafts already carry theirs, so they take the draft branch above.
             viewModelScope.launch {
                 val available = accountRepository.observeAccounts().first { it.isNotEmpty() }
-                val effectiveId = _state.value.fromAccountId ?: available.first().id
+                // The persisted default (#163) only counts if it still names an account that exists.
+                // Deleting the default account normally clears this via
+                // SettingsRepository.clearDefaultAccountId, but a stale id could still reach here (e.g.
+                // a Backup restore onto a device that never had the account) — validate rather than
+                // trust it, so it just falls through to the incidental "first account alphabetically"
+                // behavior instead of crashing or composing from a nonexistent account.
+                val defaultAccountId = settingsRepository.settings.first().defaultAccountId
+                val validDefaultAccountId = defaultAccountId?.takeIf { id -> available.any { it.id == id } }
+                val effectiveId = _state.value.fromAccountId ?: validDefaultAccountId ?: available.first().id
                 applySignature(effectiveId)
             }
         }
