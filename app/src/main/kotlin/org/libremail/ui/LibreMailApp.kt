@@ -69,7 +69,6 @@ fun LibreMailApp(
     val start = startDestination ?: return
     val licenseAlreadyAccepted = licenseAccepted ?: return
     val navController = rememberNavController()
-    val pendingCrash by startupViewModel.pendingCrash.collectAsStateWithLifecycle()
 
     // A mailto:/share intent opens compose on top of the mailbox, pre-filled. Keyed on the request so
     // it fires once per intent (and again for a new intent delivered while the app is alive).
@@ -256,14 +255,28 @@ fun LibreMailApp(
     }
 
     // On launch, offer any saved crash report for review — never sent without the user's action.
+    StartupCrashPrompt(
+        viewModel = startupViewModel,
+        onReview = { reportId -> navController.navigate(Routes.reportReview(reportId)) },
+    )
+}
+
+/**
+ * Offers any pending crash report for review on launch (see #255). [StartupReportViewModel] gates this
+ * to a legitimate crash from the last 24h, shown at most once; this only renders its decision. "Review"
+ * and "Not now" both mark the report surfaced so it never re-nags; only "Discard" deletes it.
+ */
+@Composable
+internal fun StartupCrashPrompt(viewModel: StartupReportViewModel, onReview: (String) -> Unit) {
+    val pendingCrash by viewModel.pendingCrash.collectAsStateWithLifecycle()
     pendingCrash?.let { crash ->
         CrashReportDialog(
             onReview = {
-                startupViewModel.dismiss()
-                navController.navigate(Routes.reportReview(crash.id))
+                viewModel.dismiss(crash.id)
+                onReview(crash.id)
             },
-            onLater = startupViewModel::dismiss,
-            onDiscard = { startupViewModel.discard(crash.id) },
+            onLater = { viewModel.dismiss(crash.id) },
+            onDiscard = { viewModel.discard(crash.id) },
         )
     }
 }

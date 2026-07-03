@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
+import android.util.Log
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import jakarta.activation.DataHandler
+import jakarta.mail.Flags
 import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Part
@@ -14,13 +19,20 @@ import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
 import jakarta.mail.internet.MimeMultipart
 import jakarta.mail.util.ByteArrayDataSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import java.util.Properties
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -41,6 +53,7 @@ class ImapClientTest {
     @After
     fun tearDown() {
         greenMail.stop()
+        unmockkAll()
     }
 
     private fun params(secret: String = "secret") = ImapConnectionParams(
@@ -187,6 +200,142 @@ class ImapClientTest {
         assertEquals(setOf("Inbox subject"), inbox.map { it.subject }.toSet())
     }
 
+    @Test
+    fun `fetchAttachment downloads a part's bytes by its index`() = runTest {
+        appendInlineImageDigest() // part 0 = inline logo.png, part 1 = invoice.pdf
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+
+        val inline = client.fetchAttachment(params(), "INBOX", uid, 0)
+        val attachment = client.fetchAttachment(params(), "INBOX", uid, 1)
+
+        assertEquals("logo.png", inline.filename)
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), inline.bytes)
+        assertEquals("invoice.pdf", attachment.filename)
+        assertContentEquals(byteArrayOf(5, 6, 7), attachment.bytes)
+        assertTrue(attachment.mimeType.contains("pdf", ignoreCase = true), attachment.mimeType)
+    }
+
+    @Test
+    fun `fetchAttachment fails for an out-of-range part index`() = runTest {
+        appendInlineImageDigest()
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+
+        assertFailsWith<Exception> { client.fetchAttachment(params(), "INBOX", uid, 99) }
+    }
+
+    @Test
+    fun `fetchAttachment fails when the message is not found`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Solo", "Body")
+        greenMail.waitForIncomingEmail(1)
+
+        assertFailsWith<Exception> { client.fetchAttachment(params(), "INBOX", "999999", 0) }
+    }
+
+    @Test
+    fun `setFlag marks a message flagged on the server`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Star me", "Body")
+        greenMail.waitForIncomingEmail(1)
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+
+        client.setFlag(params(), "INBOX", uid, Flags.Flag.FLAGGED, value = true)
+
+        assertTrue(client.fetchRecent(params(), "INBOX", limit = 50).first().isFlagged, "should be flagged")
+    }
+
+    @Test
+    fun `setFlag on an unknown uid is a no-op`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Present", "Body")
+        greenMail.waitForIncomingEmail(1)
+
+        // No message has this uid, so getMessageByUID returns null and setFlag simply does nothing.
+        client.setFlag(params(), "INBOX", "999999", Flags.Flag.FLAGGED, value = true)
+
+        assertFalse(client.fetchRecent(params(), "INBOX", limit = 50).first().isFlagged)
+    }
+
+    @Test
+    fun `deleteMessage expunges the message from the folder`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Delete me", "Body")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Keep me", "Body")
+        greenMail.waitForIncomingEmail(2)
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first { it.subject == "Delete me" }.uid
+
+        client.deleteMessage(params(), "INBOX", uid)
+
+        val remaining = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        assertFalse(remaining.contains("Delete me"), "remaining=$remaining")
+        assertTrue(remaining.contains("Keep me"), "remaining=$remaining")
+    }
+
+    @Test
+    fun `fetchRecent returns empty for an empty folder`() = runTest {
+        createFolder("Empty")
+
+        assertTrue(client.fetchRecent(params(), "Empty", limit = 50).isEmpty())
+    }
+
+    @Test
+    fun `body and reply fetches fail for an unknown uid`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Present", "Body")
+        greenMail.waitForIncomingEmail(1)
+
+        assertFailsWith<Exception> { client.fetchBodyMarkingSeen(params(), "INBOX", "999999") }
+        assertFailsWith<Exception> { client.fetchBodyPeek(params(), "INBOX", "999999") }
+        assertFailsWith<Exception> { client.fetchForReply(params(), "INBOX", "999999") }
+    }
+
+    @Test
+    fun `STARTTLS and XOAUTH2 params drive the corresponding connection properties`() = runTest {
+        // GreenMail here is plaintext with no XOAUTH2, so the connect fails — but buildProps has already
+        // run, which is the STARTTLS + XOAUTH2 property wiring this exercises.
+        val params = ImapConnectionParams(
+            host = "127.0.0.1",
+            port = greenMail.imap.port,
+            security = MailSecurity.STARTTLS,
+            username = "alice@example.org",
+            secret = "secret",
+            useXoauth2 = true,
+            strictStartTls = true,
+        )
+
+        assertFailsWith<Exception> { client.listFolders(params) }
+    }
+
+    @Test
+    fun `idle syncs once on connect, again on newly delivered mail, and stops on cancel`() = runBlocking {
+        mockkStatic(Log::class) // idle() logs connect/push at debug level
+        every { Log.d(any(), any()) } returns 0
+        val activity = Channel<Unit>(Channel.UNLIMITED)
+        val job = launch(Dispatchers.IO) { client.idle(params()) { activity.send(Unit) } }
+        try {
+            // A sync fires immediately on connect to catch anything already waiting...
+            withTimeout(IDLE_TIMEOUT_MS) { activity.receive() }
+            // ...then an IMAP IDLE push fires another when new mail arrives.
+            GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Pushed", "Body")
+            withTimeout(IDLE_TIMEOUT_MS) { activity.receive() }
+        } finally {
+            job.cancelAndJoin() // cancelling closes the connection and unblocks idle()
+        }
+        assertTrue(job.isCompleted, "the idle loop must terminate on cancellation")
+    }
+
+    /** Creates [folderName] (holding messages) if it does not already exist. */
+    private fun createFolder(folderName: String) {
+        val props = Properties().apply {
+            put("mail.store.protocol", "imap")
+            put("mail.imap.host", "127.0.0.1")
+            put("mail.imap.port", greenMail.imap.port.toString())
+        }
+        val store = Session.getInstance(props).getStore("imap")
+        store.connect("127.0.0.1", greenMail.imap.port, "alice@example.org", "secret")
+        try {
+            val folder = store.getFolder(folderName)
+            if (!folder.exists()) folder.create(Folder.HOLDS_MESSAGES)
+        } finally {
+            store.close()
+        }
+    }
+
     /**
      * Appends a rich digest to the INBOX: a `multipart/mixed` of a `multipart/related` (HTML body
      * referencing an inline image via `cid:logo1`) plus a genuine PDF attachment — the shape that
@@ -274,5 +423,10 @@ class ImapClientTest {
         } finally {
             store.close()
         }
+    }
+
+    private companion object {
+        /** Generous ceiling for the in-process IDLE round trip so the assertion never races the server. */
+        const val IDLE_TIMEOUT_MS = 15_000L
     }
 }

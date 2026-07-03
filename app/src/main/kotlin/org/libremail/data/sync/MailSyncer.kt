@@ -87,11 +87,19 @@ class MailSyncer @Inject constructor(
     private suspend fun syncFolderHeaders(account: Account, folder: String, notify: Boolean): Result<Int> =
         runCatching {
             val params = connectionFactory.imapParamsFor(account)
+            val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             // Never fetch more of the recent window than device-only retention (#13) would keep. Without
             // this, a count limit BELOW the window would make foreground sync re-download the same rows
             // the pruner just trimmed, on every sync — an endless re-download/re-prune fight.
-            val fetched = imapClient.fetchRecent(params, folder, recentWindowFor(account)) // cancellable network I/O
+            val window = policy.countLimit?.let { minOf(FETCH_LIMIT, it) } ?: FETCH_LIMIT
+            val fetched = imapClient.fetchRecent(params, folder, window) // cancellable network I/O
+            // Age-based retention (#193): drop anything older than the age cutoff before persisting. On a
+            // low-traffic mailbox the newest-N can extend PAST the cutoff, so without this a sync re-inserts
+            // rows the age pruner just deleted and the next prune deletes them again — a churn loop. Count/
+            // unlimited modes have a null cutoff and keep the full window, so their behavior is unchanged.
+            val cutoff = policy.ageCutoffMillis(System.currentTimeMillis())
             val entities = fetched.map { it.toEntity(account.id, folder) }
+                .let { mapped -> if (cutoff == null) mapped else mapped.filter { it.timestampMillis >= cutoff } }
 
             // Persist and notify atomically with respect to cancellation: an IDLE renewal that cancels
             // mid-sync must not drop a notification (the rows would then look "already seen" next time).
@@ -104,9 +112,11 @@ class MailSyncer @Inject constructor(
                     entities.filter { it.id !in existingIds && !it.isRead }
                 }
 
-                if (entities.isEmpty()) {
+                if (fetched.isEmpty()) {
                     // An empty recent window means the server folder itself is empty, so nothing (not
-                    // even backfilled history) should remain cached for it.
+                    // even backfilled history) should remain cached for it. Keyed on the raw fetch, not the
+                    // age-filtered set: a folder holding only mail older than the age cutoff is NOT empty on
+                    // the server, so its stale local rows are left to the pruner rather than wiped here.
                     messageDao.deleteSyncedByAccountFolder(account.id, folder)
                 } else {
                     val ids = entities.map { it.id }
@@ -146,16 +156,6 @@ class MailSyncer @Inject constructor(
             }
             fetched.size
         }
-
-    /**
-     * The number of recent headers to fetch: the standard [FETCH_LIMIT], but capped by the account's
-     * effective device-only retention count so foreground sync never re-downloads rows the pruner
-     * would immediately trim. Age-only or unlimited retention leaves the full window in place.
-     */
-    private suspend fun recentWindowFor(account: Account): Int {
-        val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
-        return policy.countLimit?.let { minOf(FETCH_LIMIT, it) } ?: FETCH_LIMIT
-    }
 
     /**
      * Aggressively pre-caches each not-yet-fetched message's full content (body + attachments) per the
