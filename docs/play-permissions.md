@@ -62,14 +62,16 @@ Nothing else. Notably **absent** (worth stating in any review exchange):
   `notifications/MailNotifier.kt` (no push/cloud-messaging service; lock-screen content
   redacted via `VISIBILITY_PRIVATE`); (2) the persistent low-importance status notification
   Android requires while the IMAP IDLE foreground service runs (`push/IdleService.kt:120`).
-- **Request flow:** once at first launch, API 33+ only (`MainActivity.kt`
-  `NotificationPermissionEffect`). If denied, `MailNotifier.notifyNewMail` no-ops (permission
+- **Request flow:** once, when the onboarding welcome screen appears, API 33+ only
+  (`ui/onboarding/OnboardingWelcomeScreen.kt` `NotificationPermissionEffect`, scoped to that
+  screen's composition so the system dialog shows onboarding context instead of racing the
+  cold-start/splash transition — #151). If denied, `MailNotifier.notifyNewMail` no-ops (permission
   re-checked before every post, `MailNotifier.kt:134`); mail sync itself is unaffected.
 - **Play-Console justification text (if asked):**
   > Notifies the user of newly received email (per-account channels, generated on the device
   > from the user's own mailbox — no push service) and shows the persistent status notification
-  > Android requires for the optional foreground IMAP IDLE connection. Requested once at first
-  > launch; all app functions except notifications work if declined.
+  > Android requires for the optional foreground IMAP IDLE connection. Requested once, when the
+  > onboarding welcome screen appears; all app functions except notifications work if declined.
 
 ## `FOREGROUND_SERVICE_DATA_SYNC` (requires the Play Console FGS declaration)
 

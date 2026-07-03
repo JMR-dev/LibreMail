@@ -78,7 +78,8 @@ internal const val IMAGE_TAG = "libremail:image"
  * feels exactly like the old editor.
  *
  * The field is a normal Compose text field, so TalkBack, text selection, and large system fonts all
- * work as usual; the toolbar buttons carry content descriptions and toggle state for accessibility.
+ * work as usual; each toolbar button exposes its accessible action label via `onClickLabel` on its
+ * [Modifier.clickable] (not a `contentDescription`), and still carries toggle state for accessibility.
  *
  * [resolveFont] maps a CSS font-family stack to a Compose [FontFamily] for display; the default
  * resolves nothing, leaving the system font (the model still round-trips the CSS value untouched).
@@ -296,7 +297,7 @@ internal fun applyStyle(
     return TextFieldValue(updated.toAnnotatedString(linkColor, resolveFont), value.selection)
 }
 
-private fun applyBlock(
+internal fun applyBlock(
     value: TextFieldValue,
     marker: BlockMarker,
     linkColor: Color,
@@ -314,7 +315,7 @@ private fun applyBlock(
     )
 }
 
-private fun applyLink(
+internal fun applyLink(
     value: TextFieldValue,
     url: String,
     linkColor: Color,

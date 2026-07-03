@@ -184,6 +184,7 @@
     <string name="app_password_warning">Store this app password carefully — it grants full access to your email. LibreMail keeps it only on this device.</string>
     <string name="app_password_open_page">Create an app password for %1$s</string>
     <string name="app_password_2fa_help">How to turn on 2-Step Verification</string>
+    <string name="app_password_2fa_help_icloud">How to turn on Two-Factor Authentication</string>
     <string name="app_password_open_failed">Couldn\'t open your browser</string>
     <string name="app_password_email">Email address</string>
     <string name="app_password_field">App password</string>
@@ -224,13 +225,13 @@
     <string name="fetch_on_demand">Always on-demand</string>
     <string name="fetch_on_demand_summary">Sync only message headers; download a message\'s content when you open it.</string>
     <string name="settings_notifications">Notifications</string>
-    <string name="settings_new_mail">New-mail notifications</string>
+    <string name="settings_new_mail">New mail notifications</string>
     <string name="settings_new_mail_summary">Show a notification when new mail arrives</string>
     <string name="settings_no_accounts">No accounts yet</string>
     <string name="account_remove">Remove account</string>
 
     <!-- Backup -->
-    <string name="settings_backup">Backup</string>
+    <string name="settings_backup">Settings Backup</string>
     <string name="settings_backup_include">Include settings in Android Backup</string>
     <string name="settings_backup_include_summary">Let Android back up your LibreMail preferences (Google Auto Backup) so they restore when you set up a new device. Your mail, accounts, passwords, and encryption keys are never backed up — only app settings. Off by default; uses Google infrastructure.</string>
 
@@ -278,6 +279,7 @@
     <string name="settings_account_system_notif">Sound &amp; vibration</string>
     <string name="settings_account_system_notif_summary">Manage sound, vibration, and importance in Android settings</string>
     <string name="settings_appearance">Appearance</string>
+    <string name="settings_appearance_summary">Match device theme\nMaterial You theming (Android 12+)</string>
     <string name="settings_dynamic_color">Use wallpaper colors</string>
     <string name="settings_dynamic_color_summary">Material You dynamic theming (Android 12+)</string>
     <string name="settings_add_account">Add account</string>
@@ -319,7 +321,6 @@
     <string name="settings_contacts_open_settings">Open settings</string>
 
     <!-- Diagnostics / debug reporting -->
-    <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_report_problem">Report a problem</string>
     <string name="settings_report_problem_summary">Capture diagnostics you can review and optionally send</string>
     <string name="reports_title">Problem reports</string>
@@ -337,7 +338,10 @@
     <string name="report_copy">Copy</string>
     <string name="report_save">Save to file</string>
     <string name="report_submitting">Submitting…</string>
-    <string name="report_submitted">Report sent. Thank you!</string>
+    <!-- Shown in a confirmation dialog (not just inline) so it can't be missed if the report row
+         is deleted by ReportUploadWorker moments after the submit succeeds (#161). -->
+    <string name="report_submitted">Thank you for submitting a problem report! It\'s people like you that help make LibreMail better! Please note that submission of a problem does not guarantee a response or a fix, as this is a volunteer led project.</string>
+    <string name="report_submitted_dismiss">OK</string>
     <string name="report_submit_failed">Couldn\'t send — it will be retried.</string>
     <string name="report_submit_unavailable">Online submission isn\'t available in this build. Use Copy or Save to share the report.</string>
     <string name="report_copied">Copied to clipboard</string>
