@@ -11,9 +11,11 @@ API 37's only published system image is the nonstandard "android-37.0" / google_
 "android-<apiLevel:Int>" package id (apiLevel = 37 -> "android-37") or an
 "android-<apiPreview:codename>" one -- neither resolves to "android-37.0" -- so there is NO
 api37DebugAndroidTest task to run. This script custom-provisions the emulator with
-sdkmanager / avdmanager / emulator directly, mirroring CI's `e2e-preview` job in
-.github/workflows/ci.yml EXACTLY (same system image string, same emulator flags, same
-provisioning/boot sequence) so that local preflight == CI. Keep the two in lockstep: when a
+sdkmanager / avdmanager / emulator directly, closely mirroring CI's `e2e-preview` job in
+.github/workflows/ci.yml (same system image string, same provisioning/boot sequence, same
+emulator flags EXCEPT the GPU mode -- CI uses `-gpu swiftshader_indirect` for headless
+determinism, while this local run uses `-gpu auto-no-window` to render on the host GPU, which
+is faster; see start_emulator). Keep the two in lockstep on everything but that GPU flag: when a
 stable, GMD-compatible API 37 image ships, delete this script, fold api37 into
 testOptions.managedDevices, and fold 37 into CI's `e2e` matrix (dropping the `e2e-preview` job).
 
@@ -117,12 +119,16 @@ def create_avd(avdmanager: str, emulator: str) -> None:
 
 def start_emulator(emulator: str, emu_log: Path, attempt: int) -> subprocess.Popen:
     print(f"Starting API 37 emulator (attempt {attempt})...")
-    # Flags mirror .github/workflows/ci.yml e2e-preview EXACTLY (cold headless boot, SwiftShader
-    # GPU, hardware accel required, no cameras). Keep in lockstep with that job.
+    # Flags mirror .github/workflows/ci.yml e2e-preview (cold headless boot, hardware accel
+    # required, no cameras), with ONE deliberate LOCAL exception -- the GPU mode. CI uses
+    # `-gpu swiftshader_indirect` (software rendering, deterministic on a headless CI runner);
+    # locally we use `-gpu auto-no-window`, which renders on the host GPU: faster, and the mode
+    # that boots cleanly on a dev machine. Keep everything except the GPU mode in lockstep with
+    # that job.
     flags = [
         "-avd", AVD_NAME,
         "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-accel", "on",
-        "-gpu", "swiftshader_indirect", "-camera-back", "none", "-camera-front", "none",
+        "-gpu", "auto-no-window", "-camera-back", "none", "-camera-front", "none",
     ]
     log = open(emu_log, "wb")  # noqa: SIM115 - handed to the child; closed in the parent below
     try:

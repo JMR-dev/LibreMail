@@ -64,17 +64,20 @@ Managed Device — its only published system image is the nonstandard `android-3
 `google_apis_ps16k` pairing, which neither `ManagedVirtualDevice`'s `apiLevel` (Int) nor
 `apiPreview` (codename) DSL resolves (see the comment above `testOptions.managedDevices` in
 `app/build.gradle.kts`), so there is no `api37DebugAndroidTest` task. The script hand-provisions
-it exactly the way CI's `e2e-preview` job does — installs the image with `sdkmanager`, creates
-the AVD with `avdmanager`, cold-boots it headless with the same emulator flags, waits for
-`sys.boot_completed`, runs `:app:connectedDebugAndroidTest`, then kills the emulator and deletes
-the AVD. Because it mirrors `e2e-preview`, local preflight == CI on API 37.
+it essentially the way CI's `e2e-preview` job does — installs the image with `sdkmanager`,
+creates the AVD with `avdmanager`, cold-boots it headless, waits for `sys.boot_completed`, runs
+`:app:connectedDebugAndroidTest`, then kills the emulator and deletes the AVD. The emulator flags
+match `e2e-preview` with one deliberate local exception: the **GPU mode**. CI uses
+`-gpu swiftshader_indirect` (software rendering, deterministic on a headless CI runner); the
+local run uses `-gpu auto-no-window`, which renders on the host GPU — faster, and the mode that
+boots cleanly on a dev machine.
 
 All three levels are the E2E that preflight runs locally and all three must pass; CI fans the
 same suite out across the whole matrix (API 29–36 in `e2e`, plus API 37 in `e2e-preview`). Keep
 `api35DebugAndroidTest` / `api36DebugAndroidTest` in lockstep with the top of the managed-device
 list in `app/build.gradle.kts`, and keep `api37_e2e.py` in lockstep with the `e2e-preview` job in
-`.github/workflows/ci.yml` (same image string + emulator flags) — when a newer API level is added
-there, run the new top levels instead.
+`.github/workflows/ci.yml` (same image string + emulator flags, apart from the intentional GPU-mode
+difference noted above) — when a newer API level is added there, run the new top levels instead.
 
 ## Reporting
 

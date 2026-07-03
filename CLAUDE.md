@@ -39,8 +39,9 @@ top two stable API levels in the E2E matrix, each via its own Gradle Managed Dev
 and tears down each emulator automatically). API 37 (preview) has no Gradle Managed Device — its
 only image is the nonstandard `android-37.0` / `google_apis_ps16k` pairing (see the comment above
 `testOptions.managedDevices` in `app/build.gradle.kts`) — so `api37_e2e.py` hand-provisions it,
-mirroring CI's `e2e-preview` job (same image + emulator flags), boots it headless, runs
-`connectedDebugAndroidTest`, and tears it down. Running all three levels locally is required; the
+mirroring CI's `e2e-preview` job (same image + emulator flags, except it uses host-GPU
+`-gpu auto-no-window` locally vs CI's headless `-gpu swiftshader_indirect`), boots it headless,
+runs `connectedDebugAndroidTest`, and tears it down. Running all three levels locally is required; the
 rest of the multi-API matrix (API 29–34) stays CI's job. Emulators need a free hardware
 hypervisor (VT-x/WHPX), so shut down VirtualBox/other VMs first or the AVD hangs at 0% CPU.
 
