@@ -65,6 +65,14 @@ data class AppSettings(
      * treat it as a hint to validate against the current account list, never as a trusted id.
      */
     val defaultAccountId: String? = null,
+    /**
+     * Whether the user has agreed to the bundled GPL-3.0 license (issue #172). Gates
+     * `onboardingGraph`'s start destination in `LibreMailApp.kt`: unaccepted routes through
+     * `Routes.ONBOARDING_LICENSE` first; already-accepted skips straight to
+     * `Routes.ONBOARDING_WELCOME`. Persisted rather than re-asked every launch, so a user who agrees
+     * but exits (or whose process dies) before adding an account isn't forced to agree again.
+     */
+    val licenseAccepted: Boolean = false,
 )
 
 private object Keys {
@@ -80,6 +88,7 @@ private object Keys {
     val RETENTION_COUNT = intPreferencesKey("retention_count")
     val RETENTION_MONTHS = intPreferencesKey("retention_months")
     val DEFAULT_ACCOUNT_ID = stringPreferencesKey("default_account_id")
+    val LICENSE_ACCEPTED = booleanPreferencesKey("license_accepted")
     val BATTERY_PROMPT_HANDLED = booleanPreferencesKey("battery_prompt_handled")
     val CONTACTS_PROMPT_HANDLED = booleanPreferencesKey("contacts_prompt_handled")
     val CONTACTS_PERMISSION_REQUESTED = booleanPreferencesKey("contacts_permission_requested")
@@ -106,6 +115,7 @@ internal fun Preferences.toAppSettings(): AppSettings = AppSettings(
     retentionCount = this[Keys.RETENTION_COUNT] ?: 0,
     retentionMonths = this[Keys.RETENTION_MONTHS] ?: 0,
     defaultAccountId = this[Keys.DEFAULT_ACCOUNT_ID],
+    licenseAccepted = this[Keys.LICENSE_ACCEPTED] ?: false,
 )
 
 @Singleton
@@ -160,6 +170,9 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun setLoadRemoteImages(value: Boolean) = put(Keys.LOAD_REMOTE_IMAGES, value)
     suspend fun setEncryptCache(value: Boolean) = put(Keys.ENCRYPT_CACHE, value)
     suspend fun setAppLock(value: Boolean) = put(Keys.APP_LOCK, value)
+
+    /** Records that the user agreed to the license (#172), so onboarding never shows it again. */
+    suspend fun setLicenseAccepted(value: Boolean) = put(Keys.LICENSE_ACCEPTED, value)
 
     /**
      * Opts this app in/out of system Android Backup. Off by default. After persisting, nudges the
