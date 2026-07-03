@@ -136,4 +136,100 @@ class RichTextEditingTest {
         assertEquals(listOf(RichImage(5, 15, "c1", "x")), result.content.images)
         assertEquals(base.baseStyle, result.content.baseStyle)
     }
+
+    // --- setAlignment / alignmentAt ---
+
+    @Test
+    fun `setAlignment centers the caret's paragraph and start clears it back to default`() {
+        val centered = RichTextEditing.setAlignment(RichTextContent("hello"), 2, 2, RichAlign.CENTER)
+        assertEquals(listOf(RichAlignment(0, 5, RichAlign.CENTER)), centered.alignments)
+
+        // START is the writing-direction default, so it is stored as "no alignment" (range dropped).
+        val cleared = RichTextEditing.setAlignment(centered, 0, 5, RichAlign.START)
+        assertTrue(cleared.alignments.isEmpty())
+    }
+
+    @Test
+    fun `setAlignment over a multi-paragraph selection makes one merged range`() {
+        val result = RichTextEditing.setAlignment(RichTextContent("a\nb\nc"), 0, 5, RichAlign.END)
+        assertEquals(listOf(RichAlignment(0, 5, RichAlign.END)), result.alignments)
+    }
+
+    @Test
+    fun `setAlignment on a middle paragraph splits an existing block`() {
+        val base = RichTextContent("a\nb\nc", alignments = listOf(RichAlignment(0, 5, RichAlign.CENTER)))
+        // Select only the "b" line (positions 2..3) and right-align it.
+        val result = RichTextEditing.setAlignment(base, 2, 3, RichAlign.END)
+        assertEquals(
+            listOf(
+                RichAlignment(0, 1, RichAlign.CENTER),
+                RichAlignment(2, 3, RichAlign.END),
+                RichAlignment(4, 5, RichAlign.CENTER),
+            ),
+            result.alignments,
+        )
+    }
+
+    @Test
+    fun `setAlignment leaves paragraphs the selection does not touch alone`() {
+        val base = RichTextContent("a\nb", alignments = listOf(RichAlignment(2, 3, RichAlign.END)))
+        val result = RichTextEditing.setAlignment(base, 0, 1, RichAlign.CENTER)
+        assertEquals(
+            listOf(RichAlignment(0, 1, RichAlign.CENTER), RichAlignment(2, 3, RichAlign.END)),
+            result.alignments,
+        )
+    }
+
+    @Test
+    fun `setAlignment across a blank line does not anchor alignment to the blank paragraph`() {
+        // The blank middle paragraph cannot carry a text-align in the HTML model, so it breaks the run
+        // into two ranges — the canonical form RichTextHtml.fromHtml also returns.
+        val result = RichTextEditing.setAlignment(RichTextContent("a\n\nb"), 0, 4, RichAlign.CENTER)
+        assertEquals(
+            listOf(RichAlignment(0, 1, RichAlign.CENTER), RichAlignment(3, 4, RichAlign.CENTER)),
+            result.alignments,
+        )
+    }
+
+    @Test
+    fun `setAlignment on an empty document is a no-op`() {
+        assertTrue(RichTextEditing.setAlignment(RichTextContent(""), 0, 0, RichAlign.CENTER).alignments.isEmpty())
+    }
+
+    @Test
+    fun `setAlignment output round-trips through html unchanged`() {
+        listOf(
+            RichTextEditing.setAlignment(RichTextContent("a\nb\nc"), 0, 5, RichAlign.END),
+            RichTextEditing.setAlignment(RichTextContent("a\n\nb"), 0, 4, RichAlign.CENTER),
+            RichTextEditing.setAlignment(
+                RichTextContent("a\nb\nc", alignments = listOf(RichAlignment(0, 5, RichAlign.CENTER))),
+                2,
+                3,
+                RichAlign.END,
+            ),
+        ).forEach { content ->
+            val restored = RichTextHtml.fromHtml(RichTextHtml.toHtml(content))
+            assertEquals(content.text, restored.text, "text of $content")
+            assertEquals(content.alignments, restored.alignments, "alignments of $content")
+        }
+    }
+
+    @Test
+    fun `alignmentAt reports the shared alignment, START default, or null when mixed`() {
+        val content = RichTextContent(
+            "a\nb\nc",
+            alignments = listOf(RichAlignment(0, 1, RichAlign.CENTER), RichAlignment(2, 3, RichAlign.END)),
+        )
+        assertEquals(RichAlign.CENTER, RichTextEditing.alignmentAt(content, 0, 1))
+        assertEquals(RichAlign.END, RichTextEditing.alignmentAt(content, 2, 3))
+        // "c" carries no explicit alignment, so it reads as the START default.
+        assertEquals(RichAlign.START, RichTextEditing.alignmentAt(content, 4, 5))
+        // A selection spanning center + end paragraphs is mixed.
+        assertNull(RichTextEditing.alignmentAt(content, 0, 3))
+    }
+
+    @Test
+    fun `alignmentAt treats a plain paragraph as START`() {
+        assertEquals(RichAlign.START, RichTextEditing.alignmentAt(RichTextContent("plain"), 0, 5))
+    }
 }
