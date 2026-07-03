@@ -13,8 +13,12 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import jakarta.mail.Flags
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -205,6 +209,62 @@ class MailRepositoryImplTest {
 
         // Style content must not leak and entities must be decoded (the derivation honors isHtml).
         assertEquals("Tom & Jerry say \"hi\"", snippet.captured)
+    }
+
+    /**
+     * The #148 fix: when the body is already cached and the message is unread, openMessage() must not
+     * await the SEEN-flag IMAP round trip before returning. Uses `runBlocking` (not `runTest`) and a
+     * [CompletableDeferred] gate — same idiom as `MailMaintenanceGateTest` — because the behavior under
+     * test is genuine concurrency between the caller's coroutine and the repository's own background
+     * scope, not something a virtual-time test dispatcher can observe.
+     */
+    @Test
+    fun `openMessage returns without awaiting the background SEEN-flag push`() {
+        // Block body (not `= runBlocking { ... }`): the last statement below returns Boolean
+        // (CompletableDeferred.complete), and JUnit4 requires @Test methods to return void/Unit.
+        runBlocking {
+            val id = "acct:INBOX:40"
+            coEvery { messageDao.getById(id) } returns
+                messageEntity(id, "INBOX", bodyFetched = true) // isRead = false
+            coEvery { accountDao.getById("acct") } returns accountEntity()
+            coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+            coEvery { messageDao.setRead(id, true) } just Runs
+            val flagPushStarted = CompletableDeferred<Unit>()
+            val releaseFlagPush = CompletableDeferred<Unit>()
+            coEvery { imapClient.setFlag(any(), "INBOX", "40", Flags.Flag.SEEN, true) } coAnswers {
+                flagPushStarted.complete(Unit)
+                releaseFlagPush.await() // stays "in flight" until this test explicitly releases it
+            }
+
+            val result = repository.openMessage(id)
+
+            // openMessage already completed successfully even though the mocked setFlag call above is
+            // still parked on releaseFlagPush — proof it is not on the awaited path.
+            assertTrue(result.isSuccess)
+            coVerify { messageDao.setRead(id, true) } // the optimistic local write happens synchronously
+            // The push must still actually happen, just off this path — bounded wait, not indefinite.
+            withTimeout(FLAG_PUSH_AWAIT_TIMEOUT_MS) { flagPushStarted.await() }
+            releaseFlagPush.complete(Unit) // let the background coroutine finish cleanly before the test ends
+        }
+    }
+
+    /** Best-effort means retried, not "one attempt and silently give up" (#148 design point 2). */
+    @Test
+    fun `a failed SEEN-flag push is retried in the background`() = runBlocking {
+        val id = "acct:INBOX:41"
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX", bodyFetched = true)
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { messageDao.setRead(id, true) } just Runs
+        coEvery { imapClient.setFlag(any(), "INBOX", "41", Flags.Flag.SEEN, true) } throws RuntimeException("boom")
+
+        repository.openMessage(id)
+
+        // The first attempt fails immediately; observing a second proves this is a retry loop rather than
+        // a single best-effort attempt that gives up silently after one failure.
+        coVerify(timeout = FLAG_PUSH_RETRY_VERIFY_TIMEOUT_MS, atLeast = 2) {
+            imapClient.setFlag(any(), "INBOX", "41", Flags.Flag.SEEN, true)
+        }
     }
 
     @Test
@@ -656,3 +716,9 @@ class MailRepositoryImplTest {
             LoadResult.Page(data = rows, prevKey = null, nextKey = null)
     }
 }
+
+/** Bounded real-time wait for the background SEEN-flag push to have started (see `pushSeenFlagInBackground`). */
+private const val FLAG_PUSH_AWAIT_TIMEOUT_MS = 2_000L
+
+/** Bounded real-time wait for a second (retried) SEEN-flag push attempt to land. */
+private const val FLAG_PUSH_RETRY_VERIFY_TIMEOUT_MS = 5_000L
