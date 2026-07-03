@@ -82,7 +82,7 @@ class MailProviderTest {
     }
 
     @Test
-    fun `only gmail links two-factor setup help, over https`() {
+    fun `gmail and icloud link two-factor setup help over https, yahoo does not`() {
         // Gmail's app-passwords page rejects accounts without 2-Step Verification, so its setup
         // screen must offer the setup article as a way out (issue #98).
         val gmailUrl = assertNotNull(
@@ -91,9 +91,18 @@ class MailProviderTest {
         )
         assertTrue(gmailUrl.startsWith("https://"), "gmail 2FA help URL must be https")
 
-        // Yahoo and iCloud gate nothing on two-factor, so they must not grow the extra link.
+        // Apple also won't issue an app-specific password until two-factor authentication is on,
+        // so iCloud needs the same escape hatch — pointed at Apple's dedicated article, not a
+        // generic Apple ID sign-in page (issue #153).
+        assertEquals("https://support.apple.com/en-us/102660", MailProvider.ICLOUD.twoFactorHelpUrl)
+
+        // Yahoo gates nothing on two-factor, so it must not grow the extra link.
         assertNull(MailProvider.YAHOO.twoFactorHelpUrl)
-        assertNull(MailProvider.ICLOUD.twoFactorHelpUrl)
+    }
+
+    @Test
+    fun `icloud app-password help points at Apple's specific instructions, not the generic sign-in page`() {
+        assertEquals("https://support.apple.com/en-us/102654", MailProvider.ICLOUD.appPasswordHelpUrl)
     }
 
     @Test
