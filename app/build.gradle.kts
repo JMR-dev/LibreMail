@@ -342,4 +342,7 @@ dependencies {
     // Instrumented DatabaseProvisioner test: fakes the security/settings collaborators and spies the
     // DatabaseEncryption object to regression-guard the SQLCipher native-lib load before a keyed open.
     androidTestImplementation(libs.mockk.android)
+    // TestListenableWorkerBuilder for the instrumented PruneWorker/BackfillWorker cache-lock-deferral
+    // test (issue #226): builds a CoroutineWorker with its real (non-Hilt) constructor args on-device.
+    androidTestImplementation(libs.androidx.work.testing)
 }
