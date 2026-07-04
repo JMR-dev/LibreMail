@@ -67,7 +67,9 @@ class AccountDaoTest {
     }
 
     @Test
-    fun upsertReplacesAnAccountWithTheSameId() = runBlocking {
+    fun upsertOnAConflictingIdUpdatesTheRowInPlace() = runBlocking {
+        // Non-destructive by design (issue #309): a second upsert of the same id refreshes the row
+        // rather than delete-then-reinserting it (which would cascade-delete settings/signatures).
         dao.upsert(account("acct", "ada@example.org", displayName = "Ada"))
 
         dao.upsert(account("acct", "ada@example.org", displayName = "Ada Lovelace"))
