@@ -129,6 +129,14 @@ command -v tasklist >/dev/null 2>&1 || die "tasklist not found — this helper t
   die "AVD '${AVD_NAME}' not found under '${AVD_HOME}'. Set LOCAL_INSTRUMENTED_AVD / ANDROID_AVD_HOME.
        (GMD AVDs are created by any local apiXXDebugAndroidTest run.)"
 
+# Move into the resolved repo/worktree root before invoking gradlew. GRADLEW above is an
+# absolute path, but the gradlew wrapper script picks the *project* to build from the
+# process's current directory, not from its own script location — so without this `cd`,
+# running this helper from a different tree (e.g. another worktree, or the main repo
+# while iterating on a worktree's copy of this script) silently builds the CALLER's CWD
+# tree instead of this one (issue #284).
+cd "${REPO_ROOT}" || die "Could not cd to repo root '${REPO_ROOT}'."
+
 export JAVA_HOME="${JDK_HOME}"
 export ANDROID_AVD_HOME="${AVD_HOME}"
 
