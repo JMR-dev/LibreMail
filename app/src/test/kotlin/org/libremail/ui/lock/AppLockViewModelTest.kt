@@ -17,6 +17,7 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -40,9 +41,12 @@ import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.restart.ProcessRestarter
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeoutException
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 /**
  * Wiring guard for #101: the app-lock gate must be an INJECTED, application-scoped dependency so its
@@ -170,6 +174,103 @@ class AppLockViewModelTest {
         // anyway (the periodic sync will still refill the wiped cache later).
         verify { future.get(any(), any()) }
         verify { processRestarter.restart() }
+    }
+
+    @Test
+    fun `recovery still restarts when the re-sync enqueue fails to persist`() = runTest(dispatcher) {
+        val (future, syncScheduler) = enqueueingScheduler()
+        every { future.get(any(), any()) } throws ExecutionException(IllegalStateException("insert failed"))
+        val processRestarter = mockk<ProcessRestarter>(relaxed = true)
+        val vm = clearOnForegroundViewModel(syncScheduler = syncScheduler, processRestarter = processRestarter)
+
+        vm.onForeground()
+        advanceUntilIdle()
+
+        // A failed enqueue is swallowed like a timeout: recovery restarts anyway.
+        verify { future.get(any(), any()) }
+        verify { processRestarter.restart() }
+    }
+
+    @Test
+    fun `recovery still restarts when awaiting the re-sync enqueue is interrupted`() = runTest(dispatcher) {
+        val (future, syncScheduler) = enqueueingScheduler()
+        every { future.get(any(), any()) } throws InterruptedException("interrupted")
+        val processRestarter = mockk<ProcessRestarter>(relaxed = true)
+        val vm = clearOnForegroundViewModel(syncScheduler = syncScheduler, processRestarter = processRestarter)
+
+        vm.onForeground()
+        // The recovery runs inline on this (unconfined) thread and re-sets its interrupt flag; capture and
+        // clear it immediately so it can neither disrupt the scheduler nor leak into a later test.
+        val reInterrupted = Thread.interrupted()
+        advanceUntilIdle()
+
+        // An interrupt while awaiting the enqueue is swallowed (flag preserved) and recovery restarts anyway.
+        assertTrue(reInterrupted)
+        verify { future.get(any(), any()) }
+        verify { processRestarter.restart() }
+    }
+
+    @Test
+    fun `onAuthenticated rethrows a cancellation while unwrapping and never wipes the cache`() = runTest(dispatcher) {
+        stubLog()
+        val session = mockk<PassphraseSession>(relaxed = true)
+        every { session.isUnlocked() } returns false
+        val databaseKeyStore = mockk<DatabaseKeyStore>(relaxed = true)
+        coEvery { databaseKeyStore.hasAuthSealedPassphrase() } returns true
+        coEvery { databaseKeyStore.unlockWithAuth() } throws CancellationException("scope cancelled")
+        val databaseKeyCipher = mockk<DatabaseKeyCipher>(relaxed = true)
+        every { databaseKeyCipher.hasKey() } returns true
+        val processRestarter = mockk<ProcessRestarter>(relaxed = true)
+        val vm = viewModel(
+            gate = mockk(relaxed = true),
+            session = session,
+            databaseKeyStore = databaseKeyStore,
+            databaseKeyCipher = databaseKeyCipher,
+            processRestarter = processRestarter,
+        )
+
+        vm.onAuthenticated()
+        advanceUntilIdle()
+
+        // A cancellation is rethrown, never mapped to UNRECOVERABLE, so the cache is not wiped/restarted.
+        coVerify { databaseKeyStore.unlockWithAuth() }
+        coVerify(exactly = 0) { databaseKeyStore.setClearPending() }
+        verify(exactly = 0) { processRestarter.restart() }
+    }
+
+    @Test
+    fun `each lock emission carries a distinct nonce so a repeat lock still updates the UI`() = runTest(dispatcher) {
+        val vm = viewModel(gate = mockk(relaxed = true))
+
+        vm.onAuthError("boom")
+        val first = assertIs<AppLockUiState.Locked>(vm.uiState.value).nonce
+        vm.onAuthError("boom")
+        val second = assertIs<AppLockUiState.Locked>(vm.uiState.value).nonce
+
+        // StateFlow conflates equal values; the bumped nonce guarantees the repeated lock still emits.
+        assertNotEquals(first, second)
+    }
+
+    @Test
+    fun `onBackground covers the app content when app-lock is on and the app was showing`() = runTest(dispatcher) {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 2_000L
+        val gate = mockk<AppLockGate>(relaxed = true)
+        every { gate.state } returns LockState.UNLOCKED
+        val session = mockk<PassphraseSession>(relaxed = true)
+        every { session.isUnlocked() } returns true
+        val vm = viewModel(gate = gate, session = session, appLock = true)
+
+        // Reach the Unlocked state (app content showing) via a warm re-auth...
+        vm.onAuthenticated()
+        advanceUntilIdle()
+        assertIs<AppLockUiState.Unlocked>(vm.uiState.value)
+
+        // ...then backgrounding must immediately cover it so nothing sensitive lands in the recents snapshot.
+        vm.onBackground()
+
+        assertIs<AppLockUiState.Checking>(vm.uiState.value)
+        verify { gate.onBackground(2_000L) }
     }
 
     // --- onForeground: LockAction dispatch (issue #100) ------------------------------------------
