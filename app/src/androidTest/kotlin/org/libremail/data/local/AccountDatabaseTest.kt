@@ -110,4 +110,40 @@ class AccountDatabaseTest {
             db.signatureDao().observeForAccount("acct").first().isEmpty(),
         )
     }
+
+    @Test
+    fun upsertOnAnExistingIdUpdatesInPlaceWithoutCascadingSettingsOrSignatures() = runBlocking<Unit> {
+        // Regression for issue #309: an @Insert(REPLACE) upsert deletes-then-reinserts on an id
+        // conflict, firing the ON DELETE CASCADE that wipes the account's settings + signatures.
+        db.accountDao().upsert(account("acct"))
+        db.accountSettingsDao().upsert(AccountSettingsEntity("acct", signature = "Keep me"))
+        db.signatureDao().upsert(SignatureEntity("sig-1", "acct", "Work", "<p>Regards</p>", isDefault = true))
+
+        db.accountDao().upsert(account("acct").copy(displayName = "Updated"))
+
+        assertEquals("Updated", db.accountDao().getById("acct")?.displayName)
+        assertEquals("Keep me", db.accountSettingsDao().get("acct")?.signature)
+        assertEquals(1, db.signatureDao().observeForAccount("acct").first().size)
+        assertEquals(1, db.accountDao().getAll().size)
+    }
+
+    @Test
+    fun insertAtEndReAddingAnExistingAccountKeepsItsSettingsSignaturesAndPosition() = runBlocking<Unit> {
+        // The production re-add path (addOutlookAccount -> insertAtEnd -> upsert). Re-adding a
+        // deterministic id must not cascade-delete its settings/signatures nor move it to the end.
+        db.accountDao().insertAtEnd(account("a"))
+        db.accountDao().insertAtEnd(account("b"))
+        db.accountSettingsDao().upsert(AccountSettingsEntity("b", signature = "Sig B", signatureEnabled = false))
+        db.signatureDao().upsert(SignatureEntity("sig-b", "b", "Work", "<p>Regards</p>", isDefault = true))
+
+        db.accountDao().insertAtEnd(account("b").copy(displayName = "Renamed"))
+
+        // Updated in place, position preserved (still 1, not appended after), children intact.
+        assertEquals("Renamed", db.accountDao().getById("b")?.displayName)
+        assertEquals(1, db.accountDao().getById("b")?.sortOrder)
+        assertEquals("Sig B", db.accountSettingsDao().get("b")?.signature)
+        assertEquals(false, db.accountSettingsDao().get("b")?.signatureEnabled)
+        assertEquals(1, db.signatureDao().observeForAccount("b").first().size)
+        assertEquals(2, db.accountDao().getAll().size)
+    }
 }
