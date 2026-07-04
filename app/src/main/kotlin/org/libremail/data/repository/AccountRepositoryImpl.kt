@@ -44,7 +44,7 @@ class AccountRepositoryImpl @Inject constructor(
 
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
-        accountDao.upsert(account.toEntity())
+        accountDao.insertAtEnd(account.toEntity())
         accountSettingsRepository.ensureDefaults(account.id)
         credentialStore.saveSecret(account.id, password)
         mailNotifier.ensureAccountChannel(account)
@@ -60,7 +60,7 @@ class AccountRepositoryImpl @Inject constructor(
     ): Result<List<String>> = runCatching {
         val account = Account.outlook(email)
         val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
-        accountDao.upsert(account.toEntity())
+        accountDao.insertAtEnd(account.toEntity())
         accountSettingsRepository.ensureDefaults(account.id)
         credentialStore.saveSecret(account.id, authStateJson)
         mailNotifier.ensureAccountChannel(account)
@@ -68,6 +68,8 @@ class AccountRepositoryImpl @Inject constructor(
         syncScheduler.backfillNow() // start caching this account's full history in the background (#12)
         folders.map { it.fullName }
     }
+
+    override suspend fun reorderAccounts(orderedIds: List<String>) = accountDao.reorder(orderedIds)
 
     override suspend fun deleteAccount(id: String) {
         accountDao.deleteById(id)

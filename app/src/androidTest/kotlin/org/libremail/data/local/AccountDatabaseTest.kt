@@ -39,9 +39,9 @@ class AccountDatabaseTest {
     @After
     fun tearDown() = db.close()
 
-    private fun account(id: String = "acct") = AccountEntity(
+    private fun account(id: String = "acct", email: String = "$id@example.org") = AccountEntity(
         id = id,
-        email = "a@example.org",
+        email = email,
         displayName = "A",
         authType = "PASSWORD_IMAP",
         imap = ServerConfigEmbedded("imap.example.org", 993, "SSL_TLS"),
@@ -67,6 +67,34 @@ class AccountDatabaseTest {
         db.accountDao().deleteById("acct")
 
         assertNull("account_settings must cascade-delete with its account", db.accountSettingsDao().get("acct"))
+    }
+
+    @Test
+    fun insertAtEndAppendsAccountsInIncreasingSortOrder() = runBlocking<Unit> {
+        db.accountDao().insertAtEnd(account("a"))
+        db.accountDao().insertAtEnd(account("b"))
+        db.accountDao().insertAtEnd(account("c"))
+
+        // Each new account lands at the end: current max + 1, starting from 0 (issue #164).
+        assertEquals(0, db.accountDao().getById("a")?.sortOrder)
+        assertEquals(1, db.accountDao().getById("b")?.sortOrder)
+        assertEquals(2, db.accountDao().getById("c")?.sortOrder)
+        // observeAll now orders by sortOrder, i.e. the append (insertion) order.
+        assertEquals(listOf("a", "b", "c"), db.accountDao().observeAll().first().map { it.id })
+    }
+
+    @Test
+    fun reorderPersistsAndBothQueriesReflectTheNewOrder() = runBlocking<Unit> {
+        listOf("a", "b", "c").forEach { db.accountDao().insertAtEnd(account(it)) }
+
+        db.accountDao().reorder(listOf("c", "a", "b"))
+
+        assertEquals(listOf("c", "a", "b"), db.accountDao().observeAll().first().map { it.id })
+        assertEquals(listOf("c", "a", "b"), db.accountDao().getAll().map { it.id })
+        // sortOrder is renumbered to the new positions, so the order survives an app restart.
+        assertEquals(0, db.accountDao().getById("c")?.sortOrder)
+        assertEquals(1, db.accountDao().getById("a")?.sortOrder)
+        assertEquals(2, db.accountDao().getById("b")?.sortOrder)
     }
 
     @Test

@@ -105,7 +105,7 @@ class AccountRepositoryImplTest {
         coEvery { imapClient.listFolders(capture(used)) } returns listOf(
             FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true),
         )
-        coEvery { accountDao.upsert(any()) } just Runs
+        coEvery { accountDao.insertAtEnd(any()) } just Runs
 
         val result = repository.addImapAccount(account, "app-password")
 
@@ -114,7 +114,7 @@ class AccountRepositoryImplTest {
         assertFalse(used.captured.useXoauth2)
         assertEquals("app-password", used.captured.secret)
         assertEquals("ada@example.org", used.captured.username)
-        coVerify { accountDao.upsert(any()) }
+        coVerify { accountDao.insertAtEnd(any()) }
         coVerify { accountSettingsRepository.ensureDefaults(account.id) }
         coVerify { credentialStore.saveSecret(account.id, "app-password") }
         verify { mailNotifier.ensureAccountChannel(account) }
@@ -129,7 +129,7 @@ class AccountRepositoryImplTest {
         val result = repository.addImapAccount(account(), "wrong")
 
         assertTrue(result.isFailure)
-        coVerify(exactly = 0) { accountDao.upsert(any()) }
+        coVerify(exactly = 0) { accountDao.insertAtEnd(any()) }
         coVerify(exactly = 0) { credentialStore.saveSecret(any(), any()) }
         verify(exactly = 0) { syncScheduler.syncNow() }
     }
@@ -141,7 +141,7 @@ class AccountRepositoryImplTest {
             FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true),
         )
         val saved = slot<AccountEntity>()
-        coEvery { accountDao.upsert(capture(saved)) } just Runs
+        coEvery { accountDao.insertAtEnd(capture(saved)) } just Runs
 
         val result = repository.addOutlookAccount("me@outlook.com", "access-token", "{authstate}")
 
@@ -164,7 +164,7 @@ class AccountRepositoryImplTest {
         val result = repository.addOutlookAccount("me@outlook.com", "expired", "{authstate}")
 
         assertTrue(result.isFailure)
-        coVerify(exactly = 0) { accountDao.upsert(any()) }
+        coVerify(exactly = 0) { accountDao.insertAtEnd(any()) }
         coVerify(exactly = 0) { credentialStore.saveSecret(any(), any()) }
     }
 

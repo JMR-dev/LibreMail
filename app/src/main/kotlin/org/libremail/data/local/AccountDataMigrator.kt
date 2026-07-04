@@ -108,7 +108,8 @@ class AccountDataMigrator @Inject constructor(
         internal val CREATE_TABLE_SQL = mapOf(
             "accounts" to
                 "CREATE TABLE IF NOT EXISTS `accounts` (`id` TEXT NOT NULL, `email` TEXT NOT NULL, " +
-                "`displayName` TEXT NOT NULL, `authType` TEXT NOT NULL, `imap_host` TEXT NOT NULL, " +
+                "`displayName` TEXT NOT NULL, `authType` TEXT NOT NULL, " +
+                "`sortOrder` INTEGER NOT NULL DEFAULT 0, `imap_host` TEXT NOT NULL, " +
                 "`imap_port` INTEGER NOT NULL, `imap_security` TEXT NOT NULL, `smtp_host` TEXT NOT NULL, " +
                 "`smtp_port` INTEGER NOT NULL, `smtp_security` TEXT NOT NULL, PRIMARY KEY(`id`))",
             "credentials" to
@@ -167,6 +168,18 @@ class AccountDataMigrator @Inject constructor(
                     TABLES.filter { it in present }.forEach { table ->
                         val cols = sharedColumns(db, table)
                         db.rawExecSQL("INSERT OR IGNORE INTO `$table` ($cols) SELECT $cols FROM cache.`$table`")
+                    }
+                    // sortOrder (issue #164) is a destination-only column the pre-#111 cache never had, so
+                    // the copy above leaves every account at its DEFAULT 0. Give them the same stable
+                    // alphabetical initial order ACCOUNT_MIGRATION_1_2 assigns (rank by email), so a
+                    // pre-#111 upgrade lands in the order it already showed rather than an undefined
+                    // tie-break. Post-#111 installs migrate via ACCOUNT_MIGRATION_1_2 instead and never
+                    // reach this copy; either way the user can then drag to reorder.
+                    if ("accounts" in present) {
+                        db.rawExecSQL(
+                            "UPDATE `accounts` SET `sortOrder` = " +
+                                "(SELECT COUNT(*) FROM `accounts` AS ranked WHERE ranked.`email` < `accounts`.`email`)",
+                        )
                     }
                     Log.d(TAG, "moved account tables into the account database: $present")
                 } finally {

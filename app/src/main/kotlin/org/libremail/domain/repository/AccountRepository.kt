@@ -21,6 +21,13 @@ interface AccountRepository {
     suspend fun deleteAccount(id: String)
 
     /**
+     * Persist a user-chosen account order (issue #164). [orderedIds] is the new top-to-bottom order;
+     * every account's stored position is updated to its index in the list. All surfaces that list
+     * accounts (Settings, the drawer switcher, the unified-inbox filter chips) then follow it.
+     */
+    suspend fun reorderAccounts(orderedIds: List<String>)
+
+    /**
      * Discards full-history backfill progress so it re-evaluates against the current retention floor
      * after a retention change: tightening re-hits the (tighter) floor cheaply, loosening resumes
      * paging older history. [accountId] null clears every account (a global-default change).
