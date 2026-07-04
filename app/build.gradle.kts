@@ -248,13 +248,88 @@ tasks.register<JacocoReport>("jacocoTestReport") {
         "**/ComposableSingletons*",
     )
 
+    // Scope the denominator to the JVM-testable surface (issue #290, following the Phase-2 coverage
+    // audit): unlike `generated` above, none of this is generated code — it is hand-written but
+    // structurally unreachable from a JVM unit test, so counting it against the metric just measures
+    // how much Compose/framework glue exists rather than how well the logic is tested. Four buckets:
+    //  1. Compose screen/component render code — only exercisable via a Compose UI test or an emulator.
+    //  2. Android framework entry points the OS instantiates directly (Activity/Service/Worker/
+    //     Application/BackupAgent) rather than the app's own code constructing them.
+    //  3. Hilt DI modules — `@Provides`/`@Binds` one-liners with no branching logic.
+    //  4. The `src/debug` cold-open probe (issue #221), a `ContentProvider` that only runs in a forked
+    //     instrumented process (see its kdoc) and is never packaged in a release build anyway.
+    //
+    // Deliberately NOT excluded, even though each sits in a package/pattern above and renders UI: files
+    // that carry plain, unit-tested logic alongside their `@Composable` functions. JaCoCo has no finer
+    // granularity than a class file, and Kotlin compiles every top-level function in a .kt file —
+    // `@Composable` or not — into the SAME facade class (`<File>Kt.class`); excluding that class would
+    // silently zero out the tested function's coverage too, not just the render code's. Confirmed
+    // against these files' own dedicated tests before leaving them out of the list below:
+    //   - ui/compose/RichTextEditor.kt (RichTextEditorTest) — the AnnotatedString<->RichTextContent
+    //     editor-op functions (applyStyle/applyBlock/applyLink/toRichContent/toAnnotatedString/...).
+    //   - ui/settings/AccountReorderList.kt (AccountReorderListTest) — commitDrag's reorder maths.
+    //   - ui/reader/HtmlBody.kt (HtmlBodyTest, InlineImageResolverTest) — cidKey/resolveInlineImage/
+    //     wrapHtml/toCssHex.
+    //   - ui/reporting/ReportReviewScreen.kt (ReportReviewClipboardTest) — copyReportPayloadToClipboard.
+    // (ui/compose/format/FontRegistry.kt and ui/mailbox/FolderLabels.kt are plain logic files with no
+    // `@Composable` at all — never at risk — but sit right next to excluded files below.) For the same
+    // reason this list names each Screen/component file individually rather than a package-wide
+    // "**/ui/**": a blanket pattern can't carve the four files above back out, and would also reach
+    // every `*ViewModel*`.
+    //
+    // Tradeoff called out for review rather than silently applied: `**/*Worker*` excludes SyncWorker,
+    // BackfillWorker, PruneWorker, SendWorker, ReportPurgeWorker and ReportUploadWorker as framework
+    // entry points, per issue #290 — but all six are directly unit-tested today (construct-the-worker-
+    // and-call-doWork(), e.g. SyncWorkerTest, SendWorkerTest), so this also removes that already-tested
+    // coverage from both the numerator and the denominator, not just untested render/glue code.
+    val nonJvmTestableSurface = listOf(
+        // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
+        "**/LibreMailApp*",
+        "**/AccountPickerScreen*",
+        "**/AppPasswordSetupScreen*",
+        "**/ManualSetupScreen*",
+        "**/ComposeScreen*",
+        "**/ColorSwatch*",
+        "**/FontPicker*",
+        "**/FontSizePicker*",
+        "**/ParagraphAlignmentControl*",
+        "**/DraftsScreen*",
+        "**/LockScreen*",
+        "**/AppLockGateHost*",
+        "**/FolderDrawer*",
+        "**/MailboxScreen*",
+        "**/AddAnotherAccountScreen*",
+        "**/BatteryOptimizationScreen*",
+        "**/ContactsAccessScreen*",
+        "**/LicenseScreen*",
+        "**/OnboardingWelcomeScreen*",
+        "**/OutboxScreen*",
+        "**/ReaderScreen*",
+        "**/ProblemReportsScreen*",
+        "**/AccountSettingsScreen*",
+        "**/SettingsScreen*",
+        "**/SettingsComponents*",
+        "**/SignatureEditScreen*",
+        "**/SignaturesScreen*",
+        // --- Android framework entry points ---
+        "**/*Activity*",
+        "**/*Service*",
+        "**/*Worker*",
+        "**/LibreMailApplication*",
+        "**/*BackupAgent*",
+        // --- Hilt DI wiring ---
+        "**/di/**",
+        // --- src/debug cold-open probe (issue #221) ---
+        "**/data/local/coldopen/**",
+    )
+
     // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output). All hand-written
     // code here is Kotlin, so the javac output (purely Hilt/Dagger/BuildConfig generated) is omitted.
     val debugKotlinClasses = layout.buildDirectory.dir(
         "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
     )
     classDirectories.setFrom(
-        fileTree(debugKotlinClasses) { exclude(generated) },
+        fileTree(debugKotlinClasses) { exclude(generated + nonJvmTestableSurface) },
     )
 
     // Sources = hand-written main Kotlin.
