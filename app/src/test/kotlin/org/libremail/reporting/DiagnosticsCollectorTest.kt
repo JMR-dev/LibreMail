@@ -9,6 +9,11 @@ import org.junit.Test
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.domain.model.Account
+import org.libremail.domain.model.AuthType
+import org.libremail.domain.model.MailSecurity
+import org.libremail.domain.model.ServerConfig
+import org.libremail.domain.repository.AccountRepository
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -20,8 +25,11 @@ class DiagnosticsCollectorTest {
         every { versionCode } returns 42L
     }
     private val settingsRepository = mockk<SettingsRepository>()
+    private val accountRepository = mockk<AccountRepository> {
+        every { observeAccounts() } returns flowOf(emptyList())
+    }
     private val logBuffer = RingLogBuffer()
-    private val collector = DiagnosticsCollector(appVersion, settingsRepository, logBuffer)
+    private val collector = DiagnosticsCollector(appVersion, settingsRepository, accountRepository, logBuffer)
 
     @Test
     fun `crash report includes stack trace and app version`() = runTest {
@@ -78,4 +86,34 @@ class DiagnosticsCollectorTest {
 
         assertTrue(report.logs.any { it.contains("hello-breadcrumb") })
     }
+
+    @Test
+    fun `manual report summarizes accounts as PII-free provider labels`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        every { accountRepository.observeAccounts() } returns flowOf(
+            listOf(
+                account("a@example.com", AuthType.OAUTH_OUTLOOK, "outlook.office365.com"),
+                account("b@gmail.com", AuthType.PASSWORD_IMAP, "imap.gmail.com"),
+                account("c@corp.example", AuthType.PASSWORD_IMAP, "mail.corp.example"),
+            ),
+        )
+
+        val report = collector.collectManual()
+
+        assertEquals(
+            listOf("Outlook (OAUTH_OUTLOOK)", "Gmail (PASSWORD_IMAP)", "Other (PASSWORD_IMAP)"),
+            report.accounts,
+        )
+        // No email address or server hostname leaks — a custom host buckets to "Other".
+        assertTrue(report.accounts.none { it.contains("@") || it.contains("example") || it.contains(".com") })
+    }
+
+    private fun account(email: String, authType: AuthType, imapHost: String) = Account(
+        id = "id:$email",
+        email = email,
+        displayName = email,
+        authType = authType,
+        imap = ServerConfig(imapHost, 993, MailSecurity.SSL_TLS),
+        smtp = ServerConfig(imapHost, 587, MailSecurity.STARTTLS),
+    )
 }
