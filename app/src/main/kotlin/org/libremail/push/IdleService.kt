@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.push
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
@@ -97,6 +102,20 @@ class IdleService : Service() {
     }
 
     /**
+     * Android 14+'s runtime cap on a `dataSync` foreground service (~6h per rolling 24h window) fires
+     * this callback and then force-stops the service — throwing a system FGS-timeout exception — if we
+     * don't stop it ourselves (issue #302). So drop out of foreground state cleanly and fall back to
+     * the always-scheduled 15-minute periodic sync, exactly like the low-battery [PushMode.POLLING]
+     * path, leaving the persistent notification saying so. The platform delivers the timeout to this
+     * deprecated single-arg form on API 34 and to the [onTimeout] overload carrying the fgsType on
+     * API 35+; both route to the same clean shutdown, and the handler is idempotent.
+     */
+    @Deprecated("Platform calls onTimeout(startId, fgsType) on API 35+; both overloads route here.")
+    override fun onTimeout(startId: Int) = fallBackToPeriodicSync()
+
+    override fun onTimeout(startId: Int, fgsType: Int) = fallBackToPeriodicSync()
+
+    /**
      * Observes the account list and the battery-derived [PushMode], and keeps one IDLE watcher per
      * account while in [PushMode.IDLE]: a watcher is started for a newly-added account and cancelled
      * when its account is removed (which promptly closes that account's IDLE connection). In
@@ -137,6 +156,40 @@ class IdleService : Service() {
             AppLog.i(TAG, "Battery recovered: resuming IMAP IDLE push")
         }
     }
+
+    /**
+     * Clean shutdown for the dataSync FGS runtime-cap timeout (issue #302): re-assert the periodic
+     * sync fallback, swap the persistent notification to the degraded text and DETACH it so it stays
+     * posted after we leave foreground state, then stop the service. Stopping foreground state is not
+     * optional here — a `dataSync` service that is still foreground when its timeout elapses is the
+     * exact condition the platform force-stops (and throws) on, so we must not keep running as an FGS.
+     * [stopSelf] then tears down [scope] in [onDestroy], closing the IDLE connections; mail arrives via
+     * the 15-minute periodic sync until push is started again (next app foreground / cap reset).
+     */
+    // Permission is checked via hasNotificationPermission() below; lint can't trace the indirect guard.
+    @SuppressLint("MissingPermission")
+    private fun fallBackToPeriodicSync() {
+        AppLog.i(TAG, "dataSync FGS runtime cap reached: pausing IMAP IDLE; mail arrives via 15-minute periodic sync")
+        // Already scheduled at every app start (UPDATE, so a no-op here) — re-asserted so the fallback
+        // provably exists now that push is paused, mirroring the low-battery path in onPushModeChanged.
+        syncScheduler.schedulePeriodicSync()
+        // Re-post FOREGROUND_ID with the degraded text and DETACH it (below) so it survives leaving
+        // foreground state. Skipped without POST_NOTIFICATIONS (API 33+ denied), where no status
+        // notification is shown anyway; the detach then simply leaves nothing posted.
+        if (hasNotificationPermission()) {
+            PushStatusNotification.ensureChannel(this)
+            NotificationManagerCompat.from(this).notify(
+                PushStatusNotification.FOREGROUND_ID,
+                PushStatusNotification.build(this, PushMode.POLLING, timedOut = true),
+            )
+        }
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        stopSelf()
+    }
+
+    private fun hasNotificationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
 
     /**
      * Holds IDLE for one account, reconnecting with exponential backoff whenever it drops.
