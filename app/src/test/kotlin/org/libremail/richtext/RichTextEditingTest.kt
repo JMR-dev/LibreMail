@@ -255,4 +255,150 @@ class RichTextEditingTest {
         assertEquals(result.content.text, restored.text)
         assertEquals(result.content.images, restored.images)
     }
+
+    @Test
+    fun `insertImage leaves runs entirely before the insertion point unshifted`() {
+        val base = RichTextContent(
+            "abc",
+            spans = listOf(RichSpan(0, 1, RichStyle.Bold)),
+            links = listOf(RichLink(0, 1, "http://x")),
+            alignments = listOf(RichAlignment(0, 1, RichAlign.CENTER)),
+        )
+        val result = RichTextEditing.insertImage(base, 2, "cid", "n")
+        // pos = 2: a span/link/alignment ending at or before it keeps its original offsets.
+        assertEquals(RichSpan(0, 1, RichStyle.Bold), result.content.spans.single())
+        assertEquals(RichLink(0, 1, "http://x"), result.content.links.single())
+        assertEquals(RichAlignment(0, 1, RichAlign.CENTER), result.content.alignments.single())
+    }
+
+    // --- removeLink ---
+
+    @Test
+    fun `removeLink is a no-op for an empty or inverted range`() {
+        val linked = RichTextContent("hello", links = listOf(RichLink(0, 5, "http://x")))
+        assertEquals(linked.links, RichTextEditing.removeLink(linked, 3, 3).links)
+        assertEquals(linked.links, RichTextEditing.removeLink(linked, 4, 2).links)
+    }
+
+    @Test
+    fun `removeLink drops only the links overlapping the range`() {
+        val content = RichTextContent(
+            "0123456789",
+            links = listOf(RichLink(0, 2, "a"), RichLink(3, 6, "b"), RichLink(7, 9, "c")),
+        )
+        // Over [4,7): "a" ends before it, "c" starts at/after its end — both kept; "b" overlaps and goes.
+        val result = RichTextEditing.removeLink(content, 4, 7)
+        assertEquals(listOf(RichLink(0, 2, "a"), RichLink(7, 9, "c")), result.links)
+    }
+
+    // --- applyLink edge cases ---
+
+    @Test
+    fun `applyLink ignores a blank url or an empty range`() {
+        val base = RichTextContent("hello", links = listOf(RichLink(0, 5, "http://x")))
+        assertEquals(base, RichTextEditing.applyLink(base, 1, 3, "   "))
+        assertEquals(base, RichTextEditing.applyLink(base, 2, 2, "http://y"))
+    }
+
+    @Test
+    fun `applyLink keeps links wholly outside the range and replaces overlapping ones`() {
+        val content = RichTextContent(
+            "0123456789",
+            links = listOf(RichLink(0, 2, "a"), RichLink(3, 6, "b"), RichLink(7, 9, "c")),
+        )
+        val result = RichTextEditing.applyLink(content, 4, 7, "http://new")
+        assertEquals(
+            listOf(RichLink(0, 2, "a"), RichLink(4, 7, "http://new"), RichLink(7, 9, "c")),
+            result.links.sortedBy { it.start },
+        )
+    }
+
+    // --- styleAt / isStyled caret edges ---
+
+    @Test
+    fun `styleAt at a caret finds the run it sits in, and null outside every run`() {
+        val content = RichTextContent("abcd", spans = listOf(RichSpan(1, 3, RichStyle.FontSize(12))))
+        assertEquals(RichStyle.FontSize(12), RichTextEditing.styleAt<RichStyle.FontSize>(content, 2, 2))
+        // Caret before every run: no candidate starts at/before it.
+        assertNull(RichTextEditing.styleAt<RichStyle.FontSize>(content, 0, 0))
+        // Caret past every run: the candidate starts before it but ends before it too.
+        assertNull(RichTextEditing.styleAt<RichStyle.FontSize>(content, 4, 4))
+    }
+
+    @Test
+    fun `isStyled is false for a caret (empty range)`() {
+        val content = RichTextContent("ab", spans = listOf(RichSpan(0, 2, RichStyle.Bold)))
+        assertFalse(RichTextEditing.isStyled(content, 1, 1, RichStyle.Bold))
+    }
+
+    @Test
+    fun `isStyled is false when the style covers only part of the range`() {
+        // The span runs out before the end of the query, so the fully-styled check falls through false.
+        val content = RichTextContent("abcd", spans = listOf(RichSpan(0, 2, RichStyle.Bold)))
+        assertFalse(RichTextEditing.isStyled(content, 0, 4, RichStyle.Bold))
+    }
+
+    // --- toggleStyle: same-kind runs outside the selection ---
+
+    @Test
+    fun `toggleStyle leaves same-kind runs entirely outside the selection untouched`() {
+        val base = RichTextContent(
+            "abcdef",
+            spans = listOf(RichSpan(0, 1, RichStyle.FontColor(1)), RichSpan(5, 6, RichStyle.FontColor(1))),
+        )
+        val result = RichTextEditing.toggleStyle(base, 2, 4, RichStyle.FontColor(2))
+        assertEquals(
+            setOf(
+                RichSpan(0, 1, RichStyle.FontColor(1)),
+                RichSpan(2, 4, RichStyle.FontColor(2)),
+                RichSpan(5, 6, RichStyle.FontColor(1)),
+            ),
+            result.spans.toSet(),
+        )
+    }
+
+    // --- block markers: quote / ordered detection and removal ---
+
+    @Test
+    fun `hasBlock detects quote and ordered markers and rejects a mixed selection`() {
+        assertTrue(RichTextEditing.hasBlock(RichTextContent("> a\n> b"), 0, 7, BlockMarker.QUOTE))
+        assertTrue(RichTextEditing.hasBlock(RichTextContent("1. a\n2. b"), 0, 9, BlockMarker.ORDERED))
+        // One line lacks the marker, so `all { … }` short-circuits to false.
+        assertFalse(RichTextEditing.hasBlock(RichTextContent("• a\nplain"), 0, 9, BlockMarker.BULLET))
+    }
+
+    @Test
+    fun `toggleBlock removes quote and ordered markers, measuring each prefix length`() {
+        val quote = RichTextEditing.toggleBlock(RichTextContent("> a\n> b"), 0, 7, BlockMarker.QUOTE)
+        assertEquals("a\nb", quote.content.text)
+        val ordered = RichTextEditing.toggleBlock(RichTextContent("1. a\n2. b"), 0, 9, BlockMarker.ORDERED)
+        assertEquals("a\nb", ordered.content.text)
+    }
+
+    @Test
+    fun `toggleBlock adding a marker shifts a link past the inserted prefix`() {
+        val base = RichTextContent("x", links = listOf(RichLink(0, 1, "http://x")))
+        val result = RichTextEditing.toggleBlock(base, 0, 0, BlockMarker.BULLET)
+        assertEquals("• x", result.content.text)
+        assertEquals(listOf(RichLink(2, 3, "http://x")), result.content.links)
+    }
+
+    @Test
+    fun `toggleBlock removing a marker drops channels that lived entirely in the marker prefix`() {
+        // Every channel covers just the "• " prefix (0,2); removing the bullet deletes it, so each
+        // maps to an empty range and is dropped (the remap* helpers' null branch).
+        val base = RichTextContent(
+            text = "• x",
+            spans = listOf(RichSpan(0, 2, RichStyle.Bold)),
+            links = listOf(RichLink(0, 2, "http://x")),
+            alignments = listOf(RichAlignment(0, 2, RichAlign.CENTER)),
+            images = listOf(RichImage(0, 2, "c", "n")),
+        )
+        val result = RichTextEditing.toggleBlock(base, 0, base.text.length, BlockMarker.BULLET)
+        assertEquals("x", result.content.text)
+        assertTrue(result.content.spans.isEmpty())
+        assertTrue(result.content.links.isEmpty())
+        assertTrue(result.content.alignments.isEmpty())
+        assertTrue(result.content.images.isEmpty())
+    }
 }

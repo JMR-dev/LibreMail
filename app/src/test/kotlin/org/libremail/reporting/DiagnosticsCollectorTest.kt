@@ -108,6 +108,47 @@ class DiagnosticsCollectorTest {
         assertTrue(report.accounts.none { it.contains("@") || it.contains("example") || it.contains(".com") })
     }
 
+    @Test
+    fun `provider labels bucket every known imap host and default to Other`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        every { accountRepository.observeAccounts() } returns flowOf(
+            listOf(
+                account("1@x", AuthType.PASSWORD_IMAP, "imap.gmail.com"),
+                account("2@x", AuthType.PASSWORD_IMAP, "imap.googlemail.com"),
+                account("3@x", AuthType.PASSWORD_IMAP, "imap.mail.yahoo.com"),
+                account("4@x", AuthType.PASSWORD_IMAP, "p01-imap.mail.icloud.com"),
+                account("5@x", AuthType.PASSWORD_IMAP, "imap.mail.me.com"),
+                account("6@x", AuthType.PASSWORD_IMAP, "imap.mac.com"),
+                account("7@x", AuthType.PASSWORD_IMAP, "imap-mail.outlook.com"),
+                account("8@x", AuthType.PASSWORD_IMAP, "smtp.office365.com"),
+                account("9@x", AuthType.PASSWORD_IMAP, "imap.mail.hotmail.com"),
+                account("10@x", AuthType.PASSWORD_IMAP, "imap.live.com"),
+                account("11@x", AuthType.PASSWORD_IMAP, "imap.aol.com"),
+                account("12@x", AuthType.PASSWORD_IMAP, "mail.custom.example"),
+            ),
+        )
+
+        val report = collector.collectManual()
+
+        assertEquals(
+            listOf(
+                "Gmail (PASSWORD_IMAP)",
+                "Gmail (PASSWORD_IMAP)",
+                "Yahoo (PASSWORD_IMAP)",
+                "iCloud (PASSWORD_IMAP)",
+                "iCloud (PASSWORD_IMAP)",
+                "iCloud (PASSWORD_IMAP)",
+                "Outlook (PASSWORD_IMAP)",
+                "Outlook (PASSWORD_IMAP)",
+                "Outlook (PASSWORD_IMAP)",
+                "Outlook (PASSWORD_IMAP)",
+                "AOL (PASSWORD_IMAP)",
+                "Other (PASSWORD_IMAP)",
+            ),
+            report.accounts,
+        )
+    }
+
     private fun account(email: String, authType: AuthType, imapHost: String) = Account(
         id = "id:$email",
         email = email,

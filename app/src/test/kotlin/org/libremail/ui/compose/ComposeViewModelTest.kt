@@ -156,10 +156,50 @@ class ComposeViewModelTest {
     }
 
     @Test
+    fun `switching accounts rebuilds the html signature when the body no longer ends with the old block`() =
+        runTest(testDispatcher) {
+            val vm = viewModel(
+                accounts = listOf(alice, bob),
+                signatures = mapOf(
+                    "imap:a" to signature("imap:a", "Cheers, <b>Alice</b>"),
+                    "imap:b" to signature("imap:b", "Best, Bob"),
+                ),
+            )
+            // Alice's rich signature seeded an HTML body ending with her block.
+            assertTrue(vm.state.value.bodyHtml?.contains("<b>Alice</b>") == true)
+
+            // The user rewrites the body so its HTML no longer ends with Alice's block.
+            vm.onBodyChange("rewritten body", "<p>rewritten body</p>")
+
+            // Switching to Bob can't cleanly strip the old block, so the HTML is rebuilt from plaintext —
+            // which carries no formatting, so the body drops back to plaintext-only.
+            vm.selectFrom("imap:b")
+            advanceUntilIdle()
+
+            assertEquals("rewritten body\n\n-- \nBest, Bob", vm.state.value.body)
+            assertNull(vm.state.value.bodyHtml)
+        }
+
+    @Test
     fun `uses the persisted default account when no explicit from-account is given`() = runTest(testDispatcher) {
         val vm = viewModel(accounts = listOf(alice, bob), defaultAccountId = bob.id)
 
         assertEquals(bob.id, vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `seeds the remembered font onto a new message that already has an html signature`() = runTest(testDispatcher) {
+        val vm = viewModel(
+            signatures = mapOf("imap:a" to signature("imap:a", "Cheers, <b>Alice</b>")),
+            lastFontCss = "Georgia, serif",
+            lastFontSizePt = 14,
+        )
+
+        // The rich signature already made an HTML body, so seeding the remembered font wraps that
+        // existing HTML (the bodyHtml != null branch) rather than rebuilding it from plaintext.
+        val html = vm.state.value.bodyHtml
+        assertTrue(html != null && html.contains("font-family:Georgia, serif"), "html=$html")
+        assertTrue(html!!.contains("<b>Alice</b>"), "html=$html")
     }
 
     @Test
