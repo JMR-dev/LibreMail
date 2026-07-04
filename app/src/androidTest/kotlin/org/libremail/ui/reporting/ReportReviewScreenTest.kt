@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.reporting
 
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -17,6 +19,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -121,6 +124,23 @@ class ReportReviewScreenTest {
             .performTextInput("me@example.com")
 
         composeTestRule.onNodeWithText(string(R.string.report_submit)).performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun tappingCopy_putsThePayloadOnTheSystemClipboard_andShowsAConfirmation() {
+        // Exercises the #237 migration off LocalClipboardManager/ClipboardManager end-to-end: the
+        // real system clipboard (not a fake) must contain the exact payload after the suspend
+        // LocalClipboard/Clipboard call completes.
+        val store = setContent()
+
+        composeTestRule.onNodeWithText(string(R.string.report_copy)).performScrollTo().performClick()
+
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText(string(R.string.report_copied)).fetchSemanticsNodes().isNotEmpty()
+        }
+        val clipboardManager = context.getSystemService(ClipboardManager::class.java)
+        val clipText = clipboardManager?.primaryClip?.getItemAt(0)?.text?.toString()
+        assertEquals(store.find(reportId)!!.toSubmissionPayload(), clipText)
     }
 
     @Test

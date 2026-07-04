@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.reporting
 
+import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
@@ -39,10 +40,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -57,7 +59,7 @@ import org.libremail.R
 fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     // Latches once the post-submit confirmation dialog is acknowledged, so it can't reappear
@@ -188,8 +190,10 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
             Row(Modifier.fillMaxWidth()) {
                 TextButton(
                     onClick = {
-                        clipboard.setText(AnnotatedString(viewModel.payload()))
-                        scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
+                        scope.launch {
+                            copyReportPayloadToClipboard(clipboard, viewModel.payload())
+                            snackbarHostState.showSnackbar(copiedMessage)
+                        }
                     },
                     modifier = Modifier.weight(1f),
                 ) {
@@ -226,6 +230,21 @@ fun ReportReviewScreen(onDone: () -> Unit, viewModel: ReportReviewViewModel = hi
             },
         )
     }
+}
+
+/** Label attached to the clip so OS-level clipboard UI (e.g. clipboard history) can identify it. */
+private const val REPORT_CLIP_LABEL = "LibreMail report"
+
+/**
+ * Copies [payload] to the system clipboard as plain text via the suspend [Clipboard] API (#237 —
+ * `LocalClipboardManager`/`ClipboardManager` are deprecated in favor of `LocalClipboard`).
+ *
+ * Kept as a plain suspend function rather than inlined in the composable so the "Copy report"
+ * action's clipboard interaction is unit-testable directly against a fake/mock [Clipboard],
+ * without a Compose UI test or emulator.
+ */
+internal suspend fun copyReportPayloadToClipboard(clipboard: Clipboard, payload: String) {
+    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(REPORT_CLIP_LABEL, payload)))
 }
 
 @Composable
