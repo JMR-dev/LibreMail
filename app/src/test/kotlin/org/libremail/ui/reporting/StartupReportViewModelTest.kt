@@ -163,4 +163,16 @@ class StartupReportViewModelTest {
         assertNull(vm.pendingCrash.value)
         assertNull(store.find("c"))
     }
+
+    @Test
+    fun `the injected constructor gates the crash age against the real system clock`() = runTest(dispatcher) {
+        val store = store()
+        // Created against the real wall clock so the injected `now = System.currentTimeMillis` gate
+        // (exercised only via the @Inject constructor, not the test's fixed-clock one) sees it as fresh.
+        store.save(crash("c", createdAt = System.currentTimeMillis()))
+        val vm = StartupReportViewModel(store)
+        subscribe(vm)
+
+        assertEquals("c", vm.pendingCrash.value?.id)
+    }
 }

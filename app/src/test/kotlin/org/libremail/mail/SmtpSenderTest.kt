@@ -15,6 +15,7 @@ import org.libremail.domain.model.OutgoingMessage
 import org.libremail.domain.model.SmtpParams
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -288,4 +289,96 @@ class SmtpSenderTest {
         // Jakarta Mail strips the Bcc header before transmission, so it must not appear on the wire.
         received.forEach { assertNull(it.getHeader("Bcc")) }
     }
+
+    @Test
+    fun `send copies cc recipients on the wire`() = runTest {
+        sender.send(
+            params = params(),
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                cc = "carol@example.org",
+                subject = "With CC",
+                body = "Hello cc.",
+            ),
+        )
+
+        // To + Cc are both in the envelope, so GreenMail delivers two copies; Cc stays on the wire.
+        greenMail.waitForIncomingEmail(2)
+        val received = greenMail.receivedMessages
+        assertEquals(2, received.size)
+        assertTrue(GreenMailUtil.getWholeMessage(received[0]).contains("carol@example.org"), "missing Cc header")
+    }
+
+    @Test
+    fun `an inline image plus a regular attachment nests a related body inside mixed`() = runTest {
+        val image = File.createTempFile("libremail-inline", ".png").apply { writeText("PNGDATA") }
+        val doc = File.createTempFile("libremail-doc", ".txt").apply { writeText("attached doc") }
+
+        sender.send(
+            params = params(),
+            from = "sender@example.org",
+            message = OutgoingMessage(
+                accountId = "x",
+                to = "bob@example.org",
+                subject = "Inline + file",
+                body = "See image and file",
+                bodyHtml = "<p>See <img src=\"cid:logo@libremail\"></p>",
+            ),
+            attachments = listOf(
+                SendableAttachment(image, contentId = "logo@libremail", isInline = true),
+                SendableAttachment(doc),
+            ),
+        )
+
+        greenMail.waitForIncomingEmail(1)
+        val received = greenMail.receivedMessages.single()
+        // A regular attachment makes the top level multipart/mixed; the inline image wraps the body in
+        // a multipart/related nested as the first mixed part (the `bodyPart` inline branch).
+        assertTrue(received.contentType.contains("multipart/mixed", ignoreCase = true), received.contentType)
+        val raw = GreenMailUtil.getWholeMessage(received)
+        assertTrue(raw.contains("multipart/related", ignoreCase = true), "inline body must be wrapped in related")
+        assertTrue(raw.contains("<logo@libremail>"), "inline part must carry a matching Content-ID")
+        assertTrue(raw.contains(doc.name), "regular attachment must be present")
+        image.delete()
+        doc.delete()
+    }
+
+    @Test
+    fun `send fails and delivers nothing when a required STARTTLS upgrade is unavailable`() = runTest {
+        // The plain GreenMail server does not advertise STARTTLS; with a strict (required) STARTTLS
+        // policy the client refuses to fall back to plaintext, so send throws and nothing is delivered.
+        // Exercises the STARTTLS + XOAUTH2 branches of the property builder and the connect error path.
+        assertFailsWith<Exception> {
+            sender.send(
+                params = params(security = MailSecurity.STARTTLS, useXoauth2 = true),
+                from = "sender@example.org",
+                message = OutgoingMessage(accountId = "x", to = "bob@example.org", subject = "No TLS", body = "x"),
+            )
+        }
+        assertTrue(greenMail.receivedMessages.isEmpty())
+    }
+
+    @Test
+    fun `send fails when implicit TLS cannot be negotiated`() = runTest {
+        // Driving the implicit-TLS (SSL_TLS) path at the plain SMTP port makes the handshake fail, so
+        // send throws — covering the ssl.enable branch of the property builder and the connect error path.
+        assertFailsWith<Exception> {
+            sender.send(
+                params = params(security = MailSecurity.SSL_TLS),
+                from = "sender@example.org",
+                message = OutgoingMessage(accountId = "x", to = "bob@example.org", subject = "No TLS", body = "x"),
+            )
+        }
+    }
+
+    private fun params(security: MailSecurity = MailSecurity.NONE, useXoauth2: Boolean = false) = SmtpParams(
+        host = "127.0.0.1",
+        port = greenMail.smtp.port,
+        security = security,
+        username = "sender@example.org",
+        secret = "secret",
+        useXoauth2 = useXoauth2,
+    )
 }
