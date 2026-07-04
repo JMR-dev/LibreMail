@@ -40,7 +40,7 @@ import org.libremail.data.local.entity.SignatureEntity
         AccountSettingsEntity::class,
         SignatureEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AccountDatabase : RoomDatabase() {

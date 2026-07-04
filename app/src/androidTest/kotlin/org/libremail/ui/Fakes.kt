@@ -62,6 +62,11 @@ class FakeAccountRepository(
         accountsFlow.value = accountsFlow.value.filterNot { it.id == id }
     }
 
+    override suspend fun reorderAccounts(orderedIds: List<String>) {
+        val byId = accountsFlow.value.associateBy { it.id }
+        accountsFlow.value = orderedIds.mapNotNull { byId[it] }
+    }
+
     override suspend fun resetBackfillProgress(accountId: String?) = Unit
 }
 

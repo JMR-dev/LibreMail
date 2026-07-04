@@ -64,6 +64,9 @@ class SettingsViewModel @Inject constructor(
 
     fun toggleAdvanced() = _advancedExpanded.update { !it }
 
+    /** Persist the account order the user produced by dragging in Settings (issue #164). */
+    fun reorderAccounts(orderedIds: List<String>) = update { accountRepository.reorderAccounts(orderedIds) }
+
     /** Re-read the battery-optimization status; call when the screen resumes (e.g. back from Settings). */
     fun refreshBatteryStatus() {
         _batteryUnrestricted.value = batteryOptimizationManager.isIgnoringBatteryOptimizations()
