@@ -5,9 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,11 +36,24 @@ class ProblemReportsViewModel @Inject constructor(
     private val _created = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val created: SharedFlow<String> = _created
 
+    /** True while a manual report is being collected; gates the button against a double-tap (#304). */
+    private val _creating = MutableStateFlow(false)
+    val creating: StateFlow<Boolean> = _creating.asStateFlow()
+
     fun createManualReport() {
+        // Flip [_creating] synchronously before the launch so a double-tap can't collect and save two
+        // reports (and emit two "open review" navigations). Reset on completion — unlike a save-and-pop
+        // screen, this list stays put, so the user may legitimately create another later (#304).
+        if (_creating.value) return
+        _creating.value = true
         viewModelScope.launch {
-            val report = collector.collectManual()
-            store.save(report)
-            _created.tryEmit(report.id)
+            try {
+                val report = collector.collectManual()
+                store.save(report)
+                _created.tryEmit(report.id)
+            } finally {
+                _creating.value = false
+            }
         }
     }
 

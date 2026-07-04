@@ -4,6 +4,7 @@ package org.libremail.ui.reporting
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -90,6 +92,29 @@ class ProblemReportsViewModelTest {
             assertEquals("fresh", awaitItem())
         }
         verify(exactly = 1) { store.save(match { it.id == "fresh" }) }
+    }
+
+    @Test
+    fun `a rapid double-tap on Create makes only one report`() {
+        // Runs on a StandardTestDispatcher so the collect coroutine is queued: the second tap lands
+        // before it runs, exercising the synchronous `creating` guard so only one report is made (#304).
+        val standardMain = StandardTestDispatcher()
+        Dispatchers.setMain(standardMain)
+        val store = mockk<ReportStore>(relaxed = true)
+        every { store.reports } returns MutableStateFlow(emptyList())
+        every { store.save(any()) } just Runs
+        val collector = mockk<DiagnosticsCollector>()
+        coEvery { collector.collectManual() } returns report("fresh")
+        runTest(standardMain) {
+            val vm = ProblemReportsViewModel(store, collector)
+
+            vm.createManualReport()
+            vm.createManualReport() // double-tap before the first collect runs
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { collector.collectManual() }
+            verify(exactly = 1) { store.save(match { it.id == "fresh" }) }
+        }
     }
 
     @Test

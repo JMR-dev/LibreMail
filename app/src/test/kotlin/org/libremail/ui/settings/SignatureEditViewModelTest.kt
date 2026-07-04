@@ -9,6 +9,7 @@ import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -146,6 +147,28 @@ class SignatureEditViewModelTest {
         advanceUntilIdle()
 
         coVerify { repo.create(ACCOUNT, "Trimmed", "<i>body</i>") }
+    }
+
+    @Test
+    fun `a rapid double-tap on Save creates the signature only once`() {
+        // Runs on a StandardTestDispatcher so the save coroutine is queued (not run eagerly): the
+        // second tap lands before it runs, exercising the synchronous `saving` guard (#304).
+        val standardMain = StandardTestDispatcher()
+        Dispatchers.setMain(standardMain)
+        val repo = mockk<SignatureRepository>(relaxed = true)
+        coEvery { repo.create(any(), any(), any()) } returns "new-id"
+        var savedCount = 0
+        runTest(standardMain) {
+            val vm = viewModel(repo)
+            vm.onBodyChange("body", null)
+
+            vm.save { savedCount++ }
+            vm.save { savedCount++ } // double-tap before the first save is dispatched
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { repo.create(any(), any(), any()) }
+            assertEquals(1, savedCount)
+        }
     }
 
     @Test
