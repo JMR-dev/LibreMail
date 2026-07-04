@@ -3,10 +3,12 @@ package org.libremail.ui.reader
 
 import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -21,6 +23,7 @@ import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
 import java.io.File
@@ -103,5 +106,73 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertTrue(0 in vm.state.value.downloaded)
+    }
+
+    /** Builds a reader whose message loads and whose [MailRepository.buildReplyDraft] returns [draftId]. */
+    private fun replyViewModel(repo: MailRepository, mode: ReplyMode, draftId: String = "draft-x"): ReaderViewModel {
+        coEvery { repo.openMessage(messageId) } returns Result.success(message)
+        every { repo.observeAttachments(messageId) } returns flowOf(emptyList())
+        coEvery { repo.downloadedAttachmentParts(messageId) } returns emptySet()
+        coEvery { repo.buildReplyDraft(messageId, mode) } returns Result.success(draftId)
+        return viewModel(repo)
+    }
+
+    @Test
+    fun `reply routes through buildReplyDraft and emits OpenCompose`() = runTest(dispatcher) {
+        // #303: the open-email reply must reuse the mailbox's high-fidelity draft (quoted original +
+        // signature), not a bare prefill — so it goes through buildReplyDraft and opens that draft.
+        val repo = mockk<MailRepository>(relaxed = true)
+        val vm = replyViewModel(repo, ReplyMode.REPLY, draftId = "draft-42")
+        advanceUntilIdle()
+
+        vm.reply(ReplyMode.REPLY)
+        advanceUntilIdle()
+
+        assertEquals(ReaderEvent.OpenCompose("draft-42"), vm.events.first())
+        coVerify(exactly = 1) { repo.buildReplyDraft(messageId, ReplyMode.REPLY) }
+    }
+
+    @Test
+    fun `forward passes the FORWARD mode to buildReplyDraft`() = runTest(dispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val vm = replyViewModel(repo, ReplyMode.FORWARD)
+        advanceUntilIdle()
+
+        vm.reply(ReplyMode.FORWARD)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.buildReplyDraft(messageId, ReplyMode.FORWARD) }
+    }
+
+    @Test
+    fun `a rapid double-tap on reply builds only one draft`() = runTest(dispatcher) {
+        // #304: composing is flipped synchronously, so the second tap (before the first draft resolves)
+        // is dropped rather than building a second draft and opening compose twice.
+        val repo = mockk<MailRepository>(relaxed = true)
+        val vm = replyViewModel(repo, ReplyMode.REPLY)
+        advanceUntilIdle()
+
+        vm.reply(ReplyMode.REPLY)
+        vm.reply(ReplyMode.REPLY)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.buildReplyDraft(messageId, ReplyMode.REPLY) }
+    }
+
+    @Test
+    fun `a failed reply emits ComposeFailed and clears the composing flag`() = runTest(dispatcher) {
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.openMessage(messageId) } returns Result.success(message)
+        every { repo.observeAttachments(messageId) } returns flowOf(emptyList())
+        coEvery { repo.downloadedAttachmentParts(messageId) } returns emptySet()
+        coEvery { repo.buildReplyDraft(messageId, ReplyMode.REPLY) } returns Result.failure(RuntimeException("boom"))
+
+        val vm = viewModel(repo)
+        advanceUntilIdle()
+        vm.reply(ReplyMode.REPLY)
+        advanceUntilIdle()
+
+        assertEquals(ReaderEvent.ComposeFailed("boom"), vm.events.first())
+        assertEquals(false, vm.state.value.composing)
     }
 }

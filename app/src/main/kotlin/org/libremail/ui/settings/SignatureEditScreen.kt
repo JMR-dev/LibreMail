@@ -52,7 +52,7 @@ fun SignatureEditScreen(onBack: () -> Unit, viewModel: SignatureEditViewModel = 
                     }
                 },
                 actions = {
-                    TextButton(onClick = { viewModel.save(onBack) }) {
+                    TextButton(onClick = { viewModel.save(onBack) }, enabled = !state.saving) {
                         Text(stringResource(R.string.signature_save))
                     }
                 },

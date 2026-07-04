@@ -62,11 +62,12 @@ internal fun ClickRow(
     onClick: () -> Unit,
     subtitle: String? = null,
     titleColor: Color = Color.Unspecified,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

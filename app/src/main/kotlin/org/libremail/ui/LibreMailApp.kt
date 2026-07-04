@@ -126,7 +126,7 @@ fun LibreMailApp(
         ) {
             ReaderScreen(
                 onBack = navController::popBackStack,
-                onReply = { to, subject, from -> navController.navigate(Routes.compose(to, subject, from)) },
+                onOpenCompose = { draftId -> navController.navigate(Routes.composeDraft(draftId)) },
             )
         }
         composable(
