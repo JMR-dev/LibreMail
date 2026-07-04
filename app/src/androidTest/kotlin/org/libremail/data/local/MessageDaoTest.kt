@@ -76,6 +76,13 @@ class MessageDaoTest {
         inInbox = inInbox,
         bodyFetched = bodyFetched,
         uid = uid,
+        // Mirror production's Unicode-casefold population (issue #232): Mappers.toEntity + MessageDao's
+        // updateHeaderContent/updateBody write `lowercase()` copies of the searchable fields, and the
+        // *SearchSummaries queries match against these `*Fold` columns — so fixtures must set them too.
+        senderFold = sender.lowercase(),
+        senderEmailFold = senderEmail.lowercase(),
+        subjectFold = subject.lowercase(),
+        snippetFold = snippet.lowercase(),
     )
 
     /** Refreshes a [PagingSource] and returns the first loaded page's ids in order. */

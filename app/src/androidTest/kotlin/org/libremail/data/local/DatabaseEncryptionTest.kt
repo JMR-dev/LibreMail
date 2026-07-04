@@ -147,7 +147,7 @@ class DatabaseEncryptionTest {
         } finally {
             encrypted.close()
         }
-        assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 18, version)
+        assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 19, version)
     }
 
     private fun openPlaintext(): LibreMailDatabase =
