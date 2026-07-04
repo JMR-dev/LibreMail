@@ -367,7 +367,8 @@ class MailRepositoryImplTest {
         val result = repository.trash(listOf(id))
 
         assertTrue(result.isSuccess)
-        coVerify { imapClient.deleteMessage(any(), "INBOX", "7") }
+        // The trash fallback deletes the whole group in one batch call, not a per-UID loop (issue #295).
+        coVerify { imapClient.deleteMessages(any(), "INBOX", listOf("7")) }
     }
 
     @Test
@@ -394,7 +395,8 @@ class MailRepositoryImplTest {
 
         repository.expunge(listOf(id))
 
-        coVerify { imapClient.deleteMessage(any(), "Trash", "3") }
+        // Expunge routes the group through the batch, targeted UID EXPUNGE path (issue #295).
+        coVerify { imapClient.deleteMessages(any(), "Trash", listOf("3")) }
     }
 
     @Test
