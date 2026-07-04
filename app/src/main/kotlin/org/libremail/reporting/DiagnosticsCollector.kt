@@ -5,19 +5,24 @@ import android.os.Build
 import kotlinx.coroutines.flow.first
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.domain.model.Account
+import org.libremail.domain.model.AuthType
+import org.libremail.domain.repository.AccountRepository
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Assembles a [DebugReport] from app/device metadata, a stack trace (for crashes), a minimal
- * non-PII settings summary, and the recent in-app log buffer. Only the fields listed in [summarize]
- * are captured — deliberately no account emails, server names, or message content.
+ * Assembles a [DebugReport] from app/device metadata, a stack trace (for crashes), a minimal non-PII
+ * settings summary, a PII-free account summary, and the recent in-app log buffer. Only the fields
+ * listed in [summarize] / [summarizeAccounts] are captured — deliberately no account emails, server
+ * names, or message content.
  */
 @Singleton
 class DiagnosticsCollector @Inject constructor(
     private val appVersion: AppVersionProvider,
     private val settingsRepository: SettingsRepository,
+    private val accountRepository: AccountRepository,
     private val logBuffer: RingLogBuffer,
 ) {
     // Cached so a crash report (built synchronously on the crashing thread) can still include
@@ -26,36 +31,47 @@ class DiagnosticsCollector @Inject constructor(
     @Volatile
     private var cachedSettings: Map<String, String> = emptyMap()
 
-    /** Pre-reads settings so a later crash report can include them. Safe to call and ignore. */
+    // Same rationale as [cachedSettings]: a crash report can't read the DB-backed account list on the
+    // crashing thread, so a warmed snapshot is used. Accounts live in the non-auth AccountDatabase, so
+    // reading them never blocks on the encrypted cache.
+    @Volatile
+    private var cachedAccounts: List<String> = emptyList()
+
+    /** Pre-reads settings + accounts so a later crash report can include them. Safe to call and ignore. */
     suspend fun warmSettingsCache() {
         cachedSettings = summarize(settingsRepository.settings.first())
+        cachedAccounts = summarizeAccounts(accountRepository.observeAccounts().first())
     }
 
     /** Builds a report for a user-initiated ("Report a problem") request; includes live settings. */
     suspend fun collectManual(): DebugReport {
         val settings = summarize(settingsRepository.settings.first())
+        val accounts = summarizeAccounts(accountRepository.observeAccounts().first())
         cachedSettings = settings
-        return build(ReportKind.MANUAL, throwable = null, settings = settings)
+        cachedAccounts = accounts
+        return build(ReportKind.MANUAL, throwable = null, settings = settings, accounts = accounts)
     }
 
     /** Builds a crash report synchronously; it must not block or throw on the crashing thread. */
     fun collectCrash(throwable: Throwable): DebugReport =
-        build(ReportKind.CRASH, throwable = throwable, settings = cachedSettings)
+        build(ReportKind.CRASH, throwable = throwable, settings = cachedSettings, accounts = cachedAccounts)
 
-    private fun build(kind: ReportKind, throwable: Throwable?, settings: Map<String, String>) = DebugReport(
-        id = UUID.randomUUID().toString(),
-        createdAtMillis = System.currentTimeMillis(),
-        kind = kind,
-        appVersionName = appVersion.versionName,
-        appVersionCode = appVersion.versionCode,
-        androidRelease = Build.VERSION.RELEASE ?: "",
-        androidSdkInt = Build.VERSION.SDK_INT,
-        deviceManufacturer = Build.MANUFACTURER ?: "",
-        deviceModel = Build.MODEL ?: "",
-        stackTrace = throwable?.stackTraceToString(),
-        settings = settings,
-        logs = logBuffer.snapshot().map { it.formatted() },
-    )
+    private fun build(kind: ReportKind, throwable: Throwable?, settings: Map<String, String>, accounts: List<String>) =
+        DebugReport(
+            id = UUID.randomUUID().toString(),
+            createdAtMillis = System.currentTimeMillis(),
+            kind = kind,
+            appVersionName = appVersion.versionName,
+            appVersionCode = appVersion.versionCode,
+            androidRelease = Build.VERSION.RELEASE ?: "",
+            androidSdkInt = Build.VERSION.SDK_INT,
+            deviceManufacturer = Build.MANUFACTURER ?: "",
+            deviceModel = Build.MODEL ?: "",
+            stackTrace = throwable?.stackTraceToString(),
+            settings = settings,
+            accounts = accounts,
+            logs = logBuffer.snapshot().map { it.formatted() },
+        )
 
     private fun summarize(settings: AppSettings): Map<String, String> = linkedMapOf(
         "dynamicColor" to settings.dynamicColor.toString(),
@@ -66,4 +82,30 @@ class DiagnosticsCollector @Inject constructor(
         "encryptCache" to settings.encryptCache.toString(),
         "fetchPolicy" to settings.fetchPolicy.name,
     )
+
+    /**
+     * One PII-free "<provider> (<authType>)" entry per account (issue #235); the account count is the
+     * list size. Deliberately NO email address or server hostname: [providerLabel] buckets the IMAP host
+     * to a coarse known-provider name (or "Other" for custom domains), so a custom mail host never leaks.
+     */
+    private fun summarizeAccounts(accounts: List<Account>): List<String> =
+        accounts.map { "${providerLabel(it)} (${it.authType.name})" }
+}
+
+/** Coarse, non-PII provider bucket for an account — never the raw host or email (issue #235). */
+private fun providerLabel(account: Account): String = when (account.authType) {
+    AuthType.OAUTH_OUTLOOK -> "Outlook"
+    AuthType.PASSWORD_IMAP -> imapProviderLabel(account.imap.host)
+}
+
+private fun imapProviderLabel(host: String): String {
+    val h = host.lowercase()
+    return when {
+        "gmail" in h || "googlemail" in h -> "Gmail"
+        "yahoo" in h -> "Yahoo"
+        "icloud" in h || "me.com" in h || "mac.com" in h -> "iCloud"
+        "outlook" in h || "office365" in h || "hotmail" in h || "live.com" in h -> "Outlook"
+        "aol" in h -> "AOL"
+        else -> "Other"
+    }
 }
