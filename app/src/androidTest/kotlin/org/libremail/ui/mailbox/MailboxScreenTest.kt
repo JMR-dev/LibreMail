@@ -14,7 +14,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.SavedStateHandle
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
+import androidx.paging.PagingData
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -283,5 +287,47 @@ class MailboxScreenTest {
         waitForText("Cached")
 
         composeTestRule.onNodeWithContentDescription(string(R.string.message_available_offline)).assertIsDisplayed()
+    }
+
+    // Issue #219: on return from the reader the inbox's LazyPagingItems is cold — it presents
+    // itemCount == 0 with refresh == Loading before the window repopulates. The empty-state gate must
+    // hold "No messages yet" back through that window, so the empty state never flashes.
+    @Test
+    fun emptyState_isHidden_whileTheInboxPagerIsStillLoading() {
+        val loadingEmpty = flowOf(
+            PagingData.from(
+                emptyList<Message>(),
+                LoadStates(
+                    refresh = LoadState.Loading,
+                    prepend = LoadState.NotLoading(endOfPaginationReached = false),
+                    append = LoadState.NotLoading(endOfPaginationReached = false),
+                ),
+            ),
+        )
+        setContent(FakeMailRepository(pagedOverride = loadingEmpty))
+
+        // The screen has composed (its compose FAB shows), but the empty state stays gated off.
+        composeTestRule.onNodeWithText(string(R.string.action_compose)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.mailbox_empty)).assertDoesNotExist()
+    }
+
+    // The flip side of the gate: once the pager settles (refresh done, no further page) with no rows,
+    // the inbox really is empty and "No messages yet" must show.
+    @Test
+    fun emptyState_isShown_onceTheInboxPagerSettlesEmpty() {
+        val settledEmpty = flowOf(
+            PagingData.from(
+                emptyList<Message>(),
+                LoadStates(
+                    refresh = LoadState.NotLoading(endOfPaginationReached = false),
+                    prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                    append = LoadState.NotLoading(endOfPaginationReached = true),
+                ),
+            ),
+        )
+        setContent(FakeMailRepository(pagedOverride = settledEmpty))
+
+        waitForText(string(R.string.mailbox_empty))
+        composeTestRule.onNodeWithText(string(R.string.mailbox_empty)).assertIsDisplayed()
     }
 }

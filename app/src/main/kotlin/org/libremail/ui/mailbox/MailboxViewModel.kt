@@ -5,6 +5,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
+import androidx.paging.PagingDataEvent
+import androidx.paging.PagingDataPresenter
 import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -149,6 +152,20 @@ class MailboxViewModel @Inject constructor(
                 }
             }
             .cachedIn(viewModelScope)
+
+    /**
+     * An always-on, invisible presenter that holds [pagedMessages]'s cached pager open across a reader
+     * visit (issue #219). `collectAsLazyPagingItems` is the mailbox's only presenter, so it is torn down
+     * the instant the user opens a message — leaving the `cachedIn` pager with no downstream collector.
+     * Opening an unread message writes `setRead`, invalidating the Room `PagingSource`; with nothing
+     * collecting, the fresh generation would cold-load only once the mailbox re-enters composition,
+     * flashing the empty state and stalling for a frame. Keeping this second collector subscribed lets
+     * that generation load in the background while the reader is up, so the return replays a full window
+     * with no empty frame. It renders nothing — the UI's `LazyPagingItems` still drives the visible list.
+     */
+    private val keepAlivePresenter = object : PagingDataPresenter<Message>() {
+        override suspend fun presentPagingDataEvent(event: PagingDataEvent<Message>) = Unit
+    }
 
     val draftCount: StateFlow<Int> = mailRepository.observeDrafts()
         .map { it.size }
@@ -319,6 +336,13 @@ class MailboxViewModel @Inject constructor(
     }
 
     init {
+        // Keep the cached pager warm across reader visits (issue #219). collectLatest hands each new
+        // generation — including the one produced when opening a message invalidates the source via
+        // setRead — to the presenter, which drives its initial load in the background so the return to
+        // the inbox never cold-reloads or flashes the empty state.
+        viewModelScope.launch {
+            pagedMessages.collectLatest { keepAlivePresenter.collectFrom(it) }
+        }
         // Fall back to the unified inbox if the filtered account is removed. The list.isNotEmpty()
         // guard avoids clobbering a seeded account filter during the initial empty emission (before
         // the account list first loads from the database).

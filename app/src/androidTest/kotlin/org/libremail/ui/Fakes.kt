@@ -76,6 +76,10 @@ class FakeMailRepository(
     private val attachments: List<Attachment> = emptyList(),
     private val downloadedParts: Set<Int> = emptySet(),
     private val unreadCounts: List<UnreadCount> = emptyList(),
+    // When set, every paged query returns this instead of a static page over [messages]. Lets a UI test
+    // drive an explicit LoadState (e.g. refresh = Loading) through collectAsLazyPagingItems to exercise
+    // the empty-state gate (issue #219).
+    private val pagedOverride: Flow<PagingData<Message>>? = null,
 ) : MailRepository {
 
     val sentMessages = mutableListOf<OutgoingMessage>()
@@ -89,19 +93,21 @@ class FakeMailRepository(
     val replyDrafts = mutableListOf<Pair<String, ReplyMode>>()
 
     override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> =
-        flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
+        pagedOverride ?: flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
 
     override fun pagedFolderMessages(accountId: String, folder: String): Flow<PagingData<Message>> =
-        flowOf(PagingData.from(messages.filter { it.accountId == accountId && it.folder == folder && it.inInbox }))
+        pagedOverride ?: flowOf(
+            PagingData.from(messages.filter { it.accountId == accountId && it.folder == folder && it.inInbox }),
+        )
 
     override fun pagedUnifiedSearchMessages(folder: String, query: String): Flow<PagingData<Message>> =
-        flowOf(PagingData.from(messages.filter { it.folder == folder && it.matchesSearch(query) }))
+        pagedOverride ?: flowOf(PagingData.from(messages.filter { it.folder == folder && it.matchesSearch(query) }))
 
     override fun pagedFolderSearchMessages(
         accountId: String,
         folder: String,
         query: String,
-    ): Flow<PagingData<Message>> = flowOf(
+    ): Flow<PagingData<Message>> = pagedOverride ?: flowOf(
         PagingData.from(
             messages.filter { it.accountId == accountId && it.folder == folder && it.matchesSearch(query) },
         ),
