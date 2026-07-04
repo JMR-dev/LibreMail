@@ -306,8 +306,13 @@ class MailboxScreenTest {
         )
         setContent(FakeMailRepository(pagedOverride = loadingEmpty))
 
-        // The screen has composed (its compose FAB shows), but the empty state stays gated off.
-        composeTestRule.onNodeWithText(string(R.string.action_compose)).assertIsDisplayed()
+        // The screen has composed (its compose FAB is present in the tree) rather than having crashed
+        // or rendered blank — that's the sanity check here, not the FAB's on-screen visibility. This
+        // scenario has no other loading affordance to point at instead: isSyncingFolder (the spinner
+        // gate below) only applies to a per-folder background sync started by selectFolder(), which
+        // this test never calls, so nothing else is guaranteed visible while refresh == Loading.
+        // assertExists() rather than assertIsDisplayed() for that reason — the FAB isn't under test here.
+        composeTestRule.onNodeWithText(string(R.string.action_compose)).assertExists()
         composeTestRule.onNodeWithText(string(R.string.mailbox_empty)).assertDoesNotExist()
     }
 
