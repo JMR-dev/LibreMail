@@ -81,6 +81,8 @@ class FakeMailRepository(
     private val attachments: List<Attachment> = emptyList(),
     private val downloadedParts: Set<Int> = emptySet(),
     private val unreadCounts: List<UnreadCount> = emptyList(),
+    drafts: List<Draft> = emptyList(),
+    outbox: List<OutboxMessage> = emptyList(),
     // When set, every paged query returns this instead of a static page over [messages]. Lets a UI test
     // drive an explicit LoadState (e.g. refresh = Loading) through collectAsLazyPagingItems to exercise
     // the empty-state gate (issue #219).
@@ -96,6 +98,14 @@ class FakeMailRepository(
     val expungedIds = mutableListOf<List<String>>()
     val movedToFolder = mutableListOf<Pair<List<String>, String>>()
     val replyDrafts = mutableListOf<Pair<String, ReplyMode>>()
+    val canceledOutboxIds = mutableListOf<String>()
+    var retryOutboxCount = 0
+        private set
+
+    // Backed by mutable state so a delete/cancel is reflected in the observed list, letting UI tests
+    // assert the row actually disappears (mirroring the real DB-backed repository's reactivity).
+    private val draftsFlow = MutableStateFlow(drafts)
+    private val outboxFlow = MutableStateFlow(outbox)
 
     override fun pagedUnifiedFolderMessages(folder: String): Flow<PagingData<Message>> =
         pagedOverride ?: flowOf(PagingData.from(messages.filter { it.folder == folder && it.inInbox }))
@@ -190,9 +200,9 @@ class FakeMailRepository(
         return sendResult
     }
 
-    override fun observeDrafts(): Flow<List<Draft>> = flowOf(emptyList())
+    override fun observeDrafts(): Flow<List<Draft>> = draftsFlow
 
-    override suspend fun getDraft(id: String): Draft? = null
+    override suspend fun getDraft(id: String): Draft? = draftsFlow.value.firstOrNull { it.id == id }
 
     override suspend fun saveDraft(draft: Draft) {
         savedDrafts += draft
@@ -200,13 +210,19 @@ class FakeMailRepository(
 
     override suspend fun deleteDraft(id: String) {
         deletedDraftIds += id
+        draftsFlow.value = draftsFlow.value.filterNot { it.id == id }
     }
 
-    override fun observeOutbox(): Flow<List<OutboxMessage>> = flowOf(emptyList())
+    override fun observeOutbox(): Flow<List<OutboxMessage>> = outboxFlow
 
-    override suspend fun cancelOutboxMessage(id: String) {}
+    override suspend fun cancelOutboxMessage(id: String) {
+        canceledOutboxIds += id
+        outboxFlow.value = outboxFlow.value.filterNot { it.id == id }
+    }
 
-    override suspend fun retryOutbox() {}
+    override suspend fun retryOutbox() {
+        retryOutboxCount++
+    }
 
     override suspend fun searchServer(query: String, accountId: String?, folder: String) {}
 
