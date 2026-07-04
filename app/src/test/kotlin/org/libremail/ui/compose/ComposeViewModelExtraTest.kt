@@ -307,6 +307,167 @@ class ComposeViewModelExtraTest {
         coVerify { mailRepository.deleteDraft("d1") }
     }
 
+    // --- nav-argument edges ----------------------------------------------------------------------
+
+    @Test
+    fun `a blank draft argument is treated as a brand-new composition`() = runTest(dispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_DRAFT to "   ")),
+            mailRepository = mailRepository,
+        )
+        advanceUntilIdle()
+
+        // The blank id fails the isNotBlank filter, so no draft is loaded and From defaults normally.
+        coVerify(exactly = 0) { mailRepository.getDraft(any()) }
+        assertEquals("imap:a", vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `a blank from argument falls back to the first available account`() = runTest(dispatcher) {
+        val vm = viewModel(savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_FROM to "  ")))
+        advanceUntilIdle()
+
+        assertEquals("imap:a", vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `a resumed draft with no account keeps the existing from-account`() = runTest(dispatcher) {
+        val mailRepository = mockk<MailRepository>(relaxed = true)
+        coEvery { mailRepository.getDraft("d1") } returns org.libremail.domain.model.Draft(
+            id = "d1",
+            accountId = null, // no account stored on the draft
+            to = "x@example.org",
+            cc = "",
+            subject = "Hi",
+            body = "Body",
+            updatedAt = 0L,
+        )
+        val vm = viewModel(
+            savedState = SavedStateHandle(mapOf(Routes.COMPOSE_ARG_DRAFT to "d1", Routes.COMPOSE_ARG_FROM to "imap:a")),
+            mailRepository = mailRepository,
+        )
+        advanceUntilIdle()
+
+        // draft.accountId is null, so the from-account seeded from the nav arg is preserved.
+        assertEquals("imap:a", vm.state.value.fromAccountId)
+    }
+
+    @Test
+    fun `a new composition waits for the first non-empty account list`() = runTest(dispatcher) {
+        val accountsFlow = MutableStateFlow<List<Account>>(emptyList())
+        val accountRepository = mockk<AccountRepository>()
+        every { accountRepository.observeAccounts() } returns accountsFlow
+        val accountSettingsRepository = mockk<AccountSettingsRepository>()
+        coEvery { accountSettingsRepository.get(any()) } answers { AccountSettings(firstArg()) }
+        val signatureRepository = mockk<SignatureRepository>(relaxed = true)
+        coEvery { signatureRepository.getDefault(any()) } returns null
+        val settingsRepository = mockk<SettingsRepository>()
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        val vm = ComposeViewModel(
+            savedStateHandle = SavedStateHandle(),
+            mailRepository = mockk(relaxed = true),
+            accountRepository = accountRepository,
+            contactsRepository = mockk(relaxed = true),
+            accountSettingsRepository = accountSettingsRepository,
+            signatureRepository = signatureRepository,
+            settingsRepository = settingsRepository,
+        )
+        advanceUntilIdle()
+        assertNull(vm.state.value.fromAccountId) // still waiting: the first emission was empty
+
+        accountsFlow.value = listOf(alice)
+        advanceUntilIdle()
+
+        assertEquals("imap:a", vm.state.value.fromAccountId)
+    }
+
+    // --- body/attachment reconciliation & contact-search cancellation ----------------------------
+
+    @Test
+    fun `onBodyChange keeps a regular (non-inline) attachment`() = runTest(dispatcher) {
+        val vm = viewModel()
+        advanceUntilIdle()
+        vm.addAttachments(listOf(OutgoingAttachment("content://a", "a.pdf")))
+
+        vm.onBodyChange("no images at all", null)
+
+        // A non-inline attachment is never pruned by a body edit (the `!isInline` branch).
+        assertTrue(vm.state.value.attachments.any { it.uri == "content://a" })
+    }
+
+    @Test
+    fun `a second recipient edit cancels the previous contact search`() = runTest(dispatcher) {
+        val contacts = mockk<ContactsRepository>()
+        coEvery { contacts.search(any()) } returns listOf(ContactSuggestion("Bob", "bob@example.org"))
+        val vm = viewModel(contactsRepository = contacts)
+        advanceUntilIdle()
+        vm.onContactsPermission(granted = true)
+
+        vm.onToChange("bo") // starts a search job
+        vm.onToChange("bob") // cancels the in-flight job, starts a new one
+        advanceUntilIdle()
+
+        assertEquals(listOf(ContactSuggestion("Bob", "bob@example.org")), vm.state.value.suggestions)
+    }
+
+    // --- autosave content detection --------------------------------------------------------------
+
+    @Test
+    fun `autosave persists a draft that has only one non-empty field`() = runTest(dispatcher) {
+        val setters = listOf<(ComposeViewModel) -> Unit>(
+            { it.onCcChange("c@example.org") },
+            { it.onBccChange("b@example.org") },
+            { it.onSubjectChange("Subject") },
+            { it.onBodyChange("Body", null) },
+            { it.addAttachments(listOf(OutgoingAttachment("content://a", "a.pdf"))) },
+        )
+        setters.forEach { setField ->
+            val mail = mockk<MailRepository>(relaxed = true)
+            val vm = viewModel(mailRepository = mail)
+            advanceUntilIdle()
+
+            setField(vm)
+            vm.flushDraft()
+            advanceUntilIdle()
+
+            coVerify(atLeast = 1) { mail.saveDraft(any()) }
+        }
+    }
+
+    @Test
+    fun `autosave on an empty new composition neither saves nor deletes`() = runTest(dispatcher) {
+        val mail = mockk<MailRepository>(relaxed = true)
+        val vm = viewModel(mailRepository = mail)
+        advanceUntilIdle()
+
+        vm.flushDraft()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { mail.saveDraft(any()) }
+        coVerify(exactly = 0) { mail.deleteDraft(any()) }
+    }
+
+    // --- post-send guards ------------------------------------------------------------------------
+
+    @Test
+    fun `a successful send finishes the screen and a later exit is a no-op`() = runTest(dispatcher) {
+        val mail = mockk<MailRepository>(relaxed = true)
+        coEvery { mail.sendMessage(any()) } returns Result.success(Unit)
+        val vm = viewModel(mailRepository = mail)
+        advanceUntilIdle()
+
+        vm.onToChange("bob@example.org")
+        vm.send()
+        advanceUntilIdle()
+        assertFalse(vm.state.value.sending)
+
+        // Already navigated after the send, so onExit returns immediately without a new draft write.
+        vm.onExit()
+        advanceUntilIdle()
+        coVerify(exactly = 1) { mail.sendMessage(any()) }
+    }
+
     @Test
     fun `ComposeUiState and PendingInlineImage carry value semantics`() {
         val state = ComposeUiState(
