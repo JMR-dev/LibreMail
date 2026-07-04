@@ -306,13 +306,21 @@ class MailboxScreenTest {
         )
         setContent(FakeMailRepository(pagedOverride = loadingEmpty))
 
-        // The screen has composed (its compose FAB is present in the tree) rather than having crashed
-        // or rendered blank — that's the sanity check here, not the FAB's on-screen visibility. This
-        // scenario has no other loading affordance to point at instead: isSyncingFolder (the spinner
-        // gate below) only applies to a per-folder background sync started by selectFolder(), which
-        // this test never calls, so nothing else is guaranteed visible while refresh == Loading.
-        // assertExists() rather than assertIsDisplayed() for that reason — the FAB isn't under test here.
-        composeTestRule.onNodeWithText(string(R.string.action_compose)).assertExists()
+        // Prove the screen composed (didn't crash or render blank) before checking the gate. The
+        // compose FAB is unconditionally in the Scaffold, so it's the sanity anchor — but assert its
+        // presence by POLLING, not with a one-shot check. Under a never-completing refresh == Loading
+        // pager the LazyPagingItems presenter settles non-deterministically, so a synchronous check on
+        // the FAB is racy: it has flaked both as "found but not displayed" (assertIsDisplayed) and "not
+        // found yet" (assertExists) across CI runs. waitForText polls existence for up to 5s — tolerating
+        // that transient absence — and checks existence rather than on-screen display, so it's immune to
+        // both failure modes. The FAB itself isn't under test here; the empty-state gate is.
+        waitForText(string(R.string.action_compose))
+
+        // The gate under test (issue #219): the empty state stays hidden while refresh == Loading, so
+        // "No messages yet" never flashes on return from the reader. This is the stable, meaningful
+        // assertion — NoMessagesState is composed only once the pager is "settled" (refresh NotLoading
+        // AND append end-of-pagination reached), which this frozen Loading state never reaches, so the
+        // string can never appear regardless of when the tree happens to settle.
         composeTestRule.onNodeWithText(string(R.string.mailbox_empty)).assertDoesNotExist()
     }
 
