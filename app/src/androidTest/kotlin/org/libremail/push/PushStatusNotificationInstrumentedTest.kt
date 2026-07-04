@@ -66,4 +66,16 @@ class PushStatusNotificationInstrumentedTest {
             notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
         )
     }
+
+    @Test
+    fun build_afterDataSyncFgsTimeout_saysInstantDeliveryPaused() {
+        // The dataSync FGS runtime-cap fallback (#302): the timed-out text takes precedence over the
+        // mode the service was in when the platform fired onTimeout (still IDLE at that point).
+        val notification = PushStatusNotification.build(context, PushMode.IDLE, timedOut = true)
+
+        assertEquals(
+            context.getString(R.string.notif_push_status_text_timed_out),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
+        )
+    }
 }
