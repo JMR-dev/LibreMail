@@ -11,10 +11,17 @@ import org.libremail.data.local.entity.AccountEntity
 
 @Dao
 interface AccountDao {
-    @Query("SELECT * FROM accounts ORDER BY sortOrder")
+    /**
+     * Every listing surface (Settings, the drawer switcher, the unified-inbox filter chips) follows
+     * the user-defined [AccountEntity.sortOrder] (issue #164); `email` is only a tiebreaker for rows
+     * that share a sortOrder (e.g. inserted via plain [upsert] rather than [insertAtEnd]/[reorder]),
+     * so equal-sortOrder accounts still list in a stable, deterministic order.
+     */
+    @Query("SELECT * FROM accounts ORDER BY sortOrder, email")
     fun observeAll(): Flow<List<AccountEntity>>
 
-    @Query("SELECT * FROM accounts ORDER BY sortOrder")
+    /** See [observeAll] — same ordering: sortOrder, then email as a tiebreaker. */
+    @Query("SELECT * FROM accounts ORDER BY sortOrder, email")
     suspend fun getAll(): List<AccountEntity>
 
     @Query("SELECT * FROM accounts WHERE id = :id LIMIT 1")
