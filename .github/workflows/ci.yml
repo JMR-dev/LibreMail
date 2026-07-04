@@ -346,9 +346,10 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: warn
 
-      # JaCoCo XML + HTML coverage for the JVM unit tests (issue #192). Reporting only — no
-      # threshold gate yet, so a coverage regression does not fail CI (a jacocoTestCoverageVerification
-      # gate is a natural follow-up once there's a baseline to enforce).
+      # JaCoCo XML + HTML coverage for the JVM unit tests (issue #192), scoped to the JVM-testable
+      # surface (issues #290/#292). The report is generated and uploaded first, then a no-regression
+      # gate (issue #251) fails the job if overall LINE coverage drops below the floor pinned in
+      # app/build.gradle.kts. Kept in this unit-test job so it is part of the `CI passed` gate.
       - name: Generate JaCoCo coverage report
         if: ${{ !cancelled() }}
         run: ./gradlew :app:jacocoTestReport --stacktrace
@@ -360,6 +361,13 @@ jobs:
           name: jacoco-coverage-report
           path: app/build/reports/jacoco/jacocoTestReport/
           if-no-files-found: warn
+
+      # No-regression coverage gate (issue #251): fails CI if scoped LINE coverage regresses below the
+      # floor pinned in app/build.gradle.kts. Runs after the upload so the HTML/XML report is always
+      # archived for triage even when this step goes red.
+      - name: Verify JaCoCo coverage (no-regression floor)
+        if: ${{ !cancelled() }}
+        run: ./gradlew :app:jacocoTestCoverageVerification --stacktrace
 
   static-analysis:
     name: Static analysis
