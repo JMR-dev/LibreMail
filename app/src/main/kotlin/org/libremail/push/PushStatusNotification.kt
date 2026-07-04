@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.libremail.R
@@ -34,22 +35,33 @@ internal object PushStatusNotification {
     }
 
     /**
-     * The ongoing status notification. Its text tells the truth per [mode]: "connected for instant
-     * delivery" versus the low-battery 15-minute polling fallback (#90).
+     * The ongoing status notification. Its text tells the truth per [statusTextRes]: "connected for
+     * instant delivery" versus the 15-minute polling fallback — low battery (#90) or the dataSync FGS
+     * runtime-cap timeout ([timedOut], #302).
      */
-    fun build(context: Context, mode: PushMode): Notification {
-        val text = if (mode == PushMode.POLLING) {
-            context.getString(R.string.notif_push_status_text_low_battery)
-        } else {
-            context.getString(R.string.notif_push_status_text)
-        }
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+    fun build(context: Context, mode: PushMode, timedOut: Boolean = false): Notification =
+        NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentTitle(context.getString(R.string.notif_push_status_title))
-            .setContentText(text)
+            .setContentText(context.getString(statusTextRes(mode, timedOut)))
             .setOngoing(true)
             .setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+
+    /**
+     * The status-text resource for the current push state — pulled out as a pure function so the
+     * "which message for which state" decision is unit-testable on the JVM. ([build] itself can only
+     * be asserted in an instrumented test: the unit-test `android.jar`'s `NotificationCompat` is a
+     * no-op stub — see `PushStatusNotificationInstrumentedTest`.) [timedOut] marks the Android 14+
+     * dataSync FGS runtime-cap fallback (#302); like the low-battery [PushMode.POLLING] fallback (#90)
+     * it drops to the 15-minute periodic sync, but for a different reason, so it gets its own text and
+     * takes precedence over [mode] (the platform delivers the timeout while push is nominally IDLE).
+     */
+    @StringRes
+    fun statusTextRes(mode: PushMode, timedOut: Boolean): Int = when {
+        timedOut -> R.string.notif_push_status_text_timed_out
+        mode == PushMode.POLLING -> R.string.notif_push_status_text_low_battery
+        else -> R.string.notif_push_status_text
     }
 }
