@@ -10,6 +10,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.flow.flowOf
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -17,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.domain.repository.AccountRepository
 import org.libremail.reporting.AppVersionProvider
 import org.libremail.reporting.DebugReport
 import org.libremail.reporting.DiagnosticsCollector
@@ -75,6 +79,7 @@ class ProblemReportsScreenTest {
         val collector = DiagnosticsCollector(
             AppVersionProvider(context),
             SettingsRepository(context),
+            mockk<AccountRepository> { every { observeAccounts() } returns flowOf(emptyList()) },
             RingLogBuffer(),
         )
         val viewModel = ProblemReportsViewModel(store, collector)
