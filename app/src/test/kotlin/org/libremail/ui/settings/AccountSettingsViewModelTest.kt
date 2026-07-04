@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -252,6 +253,30 @@ class AccountSettingsViewModelTest {
             }
             assertEquals(true, removed)
         }
+
+    @Test
+    fun `a rapid double-tap on Remove deletes the account and navigates back only once`() {
+        // Runs on a StandardTestDispatcher so the delete coroutine is queued: the second tap lands
+        // before it runs, exercising the synchronous `removing` guard. Otherwise a double onBack would
+        // over-pop past the mailbox (#304).
+        val standardMain = StandardTestDispatcher()
+        Dispatchers.setMain(standardMain)
+        val accounts = mockk<AccountRepository>(relaxed = true)
+        every { accounts.observeAccounts() } returns MutableStateFlow(listOf(account))
+        val settingsRepository = mockk<SettingsRepository>(relaxed = true)
+        every { settingsRepository.settings } returns MutableStateFlow(AppSettings())
+        var removedCount = 0
+        runTest(standardMain) {
+            val vm = viewModel(accountRepository = accounts, settingsRepository = settingsRepository)
+
+            vm.removeAccount { removedCount++ }
+            vm.removeAccount { removedCount++ } // double-tap before the first delete runs
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { accounts.deleteAccount(ACCOUNT) }
+            assertEquals(1, removedCount)
+        }
+    }
 
     private companion object {
         const val ACCOUNT = "imap:me@example.org"

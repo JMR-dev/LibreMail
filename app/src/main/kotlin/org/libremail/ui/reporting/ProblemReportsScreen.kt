@@ -43,6 +43,7 @@ fun ProblemReportsScreen(
     viewModel: ProblemReportsViewModel = hiltViewModel(),
 ) {
     val reports by viewModel.reports.collectAsStateWithLifecycle()
+    val creating by viewModel.creating.collectAsStateWithLifecycle()
 
     // A newly created manual report opens straight into review.
     LaunchedEffect(Unit) {
@@ -71,6 +72,7 @@ fun ProblemReportsScreen(
         ) {
             Button(
                 onClick = viewModel::createManualReport,
+                enabled = !creating,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),

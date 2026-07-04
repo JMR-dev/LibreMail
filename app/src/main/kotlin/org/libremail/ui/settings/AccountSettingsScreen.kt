@@ -40,6 +40,7 @@ fun AccountSettingsScreen(
     val signatureCount by viewModel.signatureCount.collectAsStateWithLifecycle()
     val defaultSignatureName by viewModel.defaultSignatureName.collectAsStateWithLifecycle()
     val isDefaultAccount by viewModel.isDefaultAccount.collectAsStateWithLifecycle()
+    val removing by viewModel.removing.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val fallbackTitle = stringResource(R.string.settings_account_title)
 
@@ -116,6 +117,7 @@ fun AccountSettingsScreen(
             ClickRow(
                 title = stringResource(R.string.account_remove),
                 titleColor = MaterialTheme.colorScheme.error,
+                enabled = !removing,
                 onClick = { viewModel.removeAccount(onBack) },
             )
         }

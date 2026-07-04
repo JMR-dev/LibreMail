@@ -5,8 +5,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -60,6 +62,10 @@ class AccountSettingsViewModel @Inject constructor(
     /** This account's notification channel id, for deep-linking into Android's system settings. */
     val notificationChannelId: String = MailNotifier.channelId(accountId)
 
+    /** True once account removal is in flight; gates the button so a double-tap can't over-pop (#304). */
+    private val _removing = MutableStateFlow(false)
+    val removing: StateFlow<Boolean> = _removing.asStateFlow()
+
     fun setSignatureEnabled(value: Boolean) {
         viewModelScope.launch { accountSettingsRepository.setSignatureEnabled(accountId, value) }
     }
@@ -101,6 +107,10 @@ class AccountSettingsViewModel @Inject constructor(
     }
 
     fun removeAccount(onRemoved: () -> Unit) {
+        // [_removing] is flipped synchronously before the launch so a rapid double-tap can't delete
+        // twice and fire [onRemoved] (a back-navigation) twice, over-popping past the mailbox (#304).
+        if (_removing.value) return
+        _removing.value = true
         viewModelScope.launch {
             accountRepository.deleteAccount(accountId)
             // Don't strand the preference on a deleted account; only clears it if this account was

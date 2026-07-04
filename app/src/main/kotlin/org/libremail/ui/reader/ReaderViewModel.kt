@@ -17,6 +17,7 @@ import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
 import java.io.File
@@ -33,13 +34,21 @@ data class ReaderUiState(
     val downloaded: Set<Int> = emptySet(),
     val loadRemoteImages: Boolean = false,
     val deleted: Boolean = false,
+    /** True while a reply/forward draft is being built (a brief network round-trip); gates re-entry. */
+    val composing: Boolean = false,
     val error: String? = null,
 )
 
-/** One-shot effects the reader screen acts on (launching a viewer, showing a message). */
+/** One-shot effects the reader screen acts on (launching a viewer, opening compose, showing a message). */
 sealed interface ReaderEvent {
     data class OpenFile(val file: File, val mimeType: String, val name: String) : ReaderEvent
     data class DownloadFailed(val name: String) : ReaderEvent
+
+    /** A reply/forward draft was built; the screen opens compose on it. */
+    data class OpenCompose(val draftId: String) : ReaderEvent
+
+    /** Building the reply/forward draft failed; the screen surfaces [message] (or a generic fallback). */
+    data class ComposeFailed(val message: String?) : ReaderEvent
 }
 
 @HiltViewModel
@@ -121,6 +130,24 @@ class ReaderViewModel @Inject constructor(
     }
 
     fun loadRemoteImages() = _state.update { it.copy(loadRemoteImages = true) }
+
+    /**
+     * Builds a reply/reply-all/forward draft from the open message and opens compose on it — the same
+     * high-fidelity path the mailbox uses (quotes the original into a `<blockquote>`, bakes the
+     * signature, prefixes Re:/Fwd:), instead of a bare prefill (#303). [composing] is flipped
+     * synchronously before the launch so a double-tap can't build two drafts.
+     */
+    fun reply(mode: ReplyMode) {
+        if (_state.value.composing) return
+        _state.update { it.copy(composing = true) }
+        viewModelScope.launch {
+            repository.buildReplyDraft(messageId, mode).fold(
+                onSuccess = { draftId -> _events.send(ReaderEvent.OpenCompose(draftId)) },
+                onFailure = { e -> _events.send(ReaderEvent.ComposeFailed(e.message)) },
+            )
+            _state.update { it.copy(composing = false) }
+        }
+    }
 
     fun delete() {
         viewModelScope.launch {
