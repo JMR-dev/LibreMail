@@ -410,6 +410,11 @@ class MailSyncConcurrencyTest {
         coEvery { dao.updateHeaderContent(any(), any(), any(), any(), any(), any()) } answers {
             store.updateHeaderContent(firstArg(), secondArg(), thirdArg(), arg(3), arg(4), arg(5))
         }
+        coEvery { dao.updateHeaderContents(any()) } answers {
+            firstArg<List<MessageEntity>>().forEach {
+                store.updateHeaderContent(it.id, it.sender, it.senderEmail, it.subject, it.timestampMillis, it.uid)
+            }
+        }
         coEvery { dao.deleteByIds(any()) } answers { store.deleteByIds(firstArg()) }
         coEvery { dao.deleteSyncedByAccountFolder(any(), any()) } answers {
             store.deleteSyncedByAccountFolder(firstArg(), secondArg())

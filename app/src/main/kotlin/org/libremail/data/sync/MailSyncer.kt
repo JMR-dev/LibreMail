@@ -122,18 +122,11 @@ class MailSyncer @Inject constructor(
                     val ids = entities.map { it.id }
                     messageDao.insertNew(entities)
                     // Mark every fetched message as synced (upgrades any former search-only row) and refresh
-                    // its display fields — without touching cached bodies or optimistic read/star flags.
+                    // its display fields — without touching cached bodies or optimistic read/star flags. The
+                    // per-row refreshes run in a single transaction (issue #310) so a whole recent window
+                    // costs one commit instead of one fsync per message (amplified on the encrypted cache).
                     messageDao.markSynced(ids)
-                    entities.forEach {
-                        messageDao.updateHeaderContent(
-                            id = it.id,
-                            sender = it.sender,
-                            senderEmail = it.senderEmail,
-                            subject = it.subject,
-                            timestampMillis = it.timestampMillis,
-                            uid = it.uid,
-                        )
-                    }
+                    messageDao.updateHeaderContents(entities)
                     // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older
                     // history paged in by the background backfill (issue #12) survives each foreground sync
                     // instead of being wiped by a whole-folder "not in the recent 50" delete. Bound the

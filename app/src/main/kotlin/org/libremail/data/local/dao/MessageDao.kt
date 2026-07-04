@@ -6,6 +6,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
@@ -36,11 +37,14 @@ interface MessageDao {
      * by [pagingUnifiedFolderSearchSummaries] (issue #214). Profiling (see
      * `docs/perf/issue-124-unified-inbox-paging.md`) showed the first page loads flat regardless of
      * total cache size on the existing indices, so no `(folder, …)` index / schema migration is added.
+     * Breaks ties on the `id` primary key (issue #311): `timestampMillis` isn't unique — bulk mail
+     * shares a second — so without a unique tiebreaker two rows tied at a LIMIT/OFFSET page boundary
+     * could duplicate or skip across pages. `id` is in the projection, so the tiebreaker adds no index.
      */
     @Query(
         "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC",
+            "WHERE folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC, id",
     )
     fun pagingUnifiedFolderSummaries(folder: String): PagingSource<Int, MessageSummary>
 
@@ -56,7 +60,7 @@ interface MessageDao {
     @Query(
         "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
-            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC",
+            "WHERE accountId = :accountId AND folder = :folder AND inInbox = 1 ORDER BY timestampMillis DESC, id",
     )
     fun pagingFolderSummaries(accountId: String, folder: String): PagingSource<Int, MessageSummary>
 
@@ -70,13 +74,14 @@ interface MessageDao {
      * server-search hits `MailRepository.searchServer` inserts — exactly what the old filter saw.
      * Matches the Unicode-casefolded `*Fold` columns (issue #232) with a pattern built from the
      * lowercased query, so search is case-insensitive beyond ASCII — unlike the old ASCII-only `LIKE`.
+     * Breaks ties on the `id` primary key for a total page order, like the browse pagers (issue #311).
      */
     @Query(
         "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
             "WHERE folder = :folder AND (senderFold LIKE :pattern ESCAPE '\\' OR " +
             "senderEmailFold LIKE :pattern ESCAPE '\\' OR subjectFold LIKE :pattern ESCAPE '\\' OR " +
-            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC, id",
     )
     fun pagingUnifiedFolderSearchSummaries(folder: String, pattern: String): PagingSource<Int, MessageSummary>
 
@@ -91,7 +96,7 @@ interface MessageDao {
             "isRead, isStarred, folder, inInbox, bodyFetched FROM messages " +
             "WHERE accountId = :accountId AND folder = :folder AND (senderFold LIKE :pattern ESCAPE '\\' OR " +
             "senderEmailFold LIKE :pattern ESCAPE '\\' OR subjectFold LIKE :pattern ESCAPE '\\' OR " +
-            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC",
+            "snippetFold LIKE :pattern ESCAPE '\\') ORDER BY timestampMillis DESC, id",
     )
     fun pagingFolderSearchSummaries(
         accountId: String,
@@ -189,6 +194,28 @@ interface MessageDao {
         timestampMillis: Long,
         uid: Long,
     )
+
+    /**
+     * Applies [updateHeaderContent] to every [messages] row in a single transaction (issue #310). A
+     * foreground sync / pull-to-refresh refreshes a whole recent window at once; running each row's
+     * UPDATE in its own implicit transaction fsyncs the journal once per message — N commits per folder
+     * per sync, amplified on the encrypted cache — so this collapses them into one commit. Refreshes the
+     * same display fields (plus the materialized [MessageEntity.uid] and the casefold search columns) as
+     * the single-row overload, still leaving cached bodies and optimistic read/star flags untouched.
+     */
+    @Transaction
+    suspend fun updateHeaderContents(messages: List<MessageEntity>) {
+        for (message in messages) {
+            updateHeaderContent(
+                id = message.id,
+                sender = message.sender,
+                senderEmail = message.senderEmail,
+                subject = message.subject,
+                timestampMillis = message.timestampMillis,
+                uid = message.uid,
+            )
+        }
+    }
 
     /** Marks rows as folder-synced (e.g. a former search-only row that the sync now returns). */
     @Query("UPDATE messages SET inInbox = 1 WHERE id IN (:ids)")
