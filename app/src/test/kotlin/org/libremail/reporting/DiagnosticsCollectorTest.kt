@@ -15,6 +15,7 @@ import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.repository.AccountRepository
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -38,7 +39,26 @@ class DiagnosticsCollectorTest {
         assertEquals(ReportKind.CRASH, report.kind)
         assertEquals("1.2.3", report.appVersionName)
         assertEquals(42L, report.appVersionCode)
-        assertTrue(report.stackTrace.orEmpty().contains("kaboom"))
+        // The trace is captured but scrubbed of message free-text (PII guard, #294): the exception
+        // class survives while the free-text message ("kaboom") is dropped.
+        assertTrue(report.stackTrace.orEmpty().contains("RuntimeException"))
+        assertFalse(report.stackTrace.orEmpty().contains("kaboom"))
+    }
+
+    @Test
+    fun `crash report scrubs server host, port and email from the stack trace message`() = runTest {
+        val boom = RuntimeException("Failed to connect to imap.example.com/93.184.216.34:993 for user@example.com")
+
+        val trace = collector.collectCrash(boom).stackTrace.orEmpty()
+
+        // No server host, IP, port or email leaks out of the captured trace message.
+        assertFalse(trace.contains("imap.example.com"))
+        assertFalse(trace.contains("93.184.216.34"))
+        assertFalse(trace.contains(":993"))
+        assertFalse(trace.contains("user@example.com"))
+        // Class + frame info survives so the report is still actionable.
+        assertTrue(trace.contains("RuntimeException"))
+        assertTrue(trace.contains("DiagnosticsCollectorTest"))
     }
 
     @Test

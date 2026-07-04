@@ -67,7 +67,8 @@ class DiagnosticsCollector @Inject constructor(
             androidSdkInt = Build.VERSION.SDK_INT,
             deviceManufacturer = Build.MANUFACTURER ?: "",
             deviceModel = Build.MODEL ?: "",
-            stackTrace = throwable?.stackTraceToString(),
+            // Scrub PII (server host:port, emails) out of the trace before it enters the report (#294).
+            stackTrace = throwable?.let { StackTraceScrubber.scrub(it.stackTraceToString()) },
             settings = settings,
             accounts = accounts,
             logs = logBuffer.snapshot().map { it.formatted() },
