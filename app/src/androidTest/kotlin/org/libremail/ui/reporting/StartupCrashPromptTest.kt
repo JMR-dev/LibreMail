@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -57,7 +59,9 @@ class StartupCrashPromptTest {
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
-    private fun store() = ReportStore(dir)
+    // Unconfined scope runs ReportStore's initial scan inline so a reopened store (simulating a
+    // relaunch) is readable synchronously, as before the scan moved off-thread (#296).
+    private fun store() = ReportStore(dir, CoroutineScope(Dispatchers.Unconfined))
 
     private fun crash(id: String, createdAt: Long) = DebugReport(
         id = id,
