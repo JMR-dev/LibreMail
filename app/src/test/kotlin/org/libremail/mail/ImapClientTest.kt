@@ -268,6 +268,62 @@ class ImapClientTest {
     }
 
     @Test
+    fun `deleteMessages expunges only the given uids and spares other Deleted-flagged mail`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Target", "delete this")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Bystander", "flagged elsewhere")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Untouched", "no flag at all")
+        greenMail.waitForIncomingEmail(3)
+        val bySubject = client.fetchRecent(params(), "INBOX", limit = 50).associateBy { it.subject }
+
+        // Simulate a second client (or a partial earlier move): "Bystander" is flagged \Deleted but has
+        // NOT been expunged — setFlag closes the folder with expunge=false, so the flag persists.
+        client.setFlag(params(), "INBOX", bySubject.getValue("Bystander").uid, Flags.Flag.DELETED, value = true)
+
+        // Delete only "Target". The old untargeted mailbox.expunge() would ALSO permanently drop the
+        // \Deleted "Bystander"; a targeted UID EXPUNGE removes just the target (issue #295).
+        client.deleteMessages(params(), "INBOX", listOf(bySubject.getValue("Target").uid))
+
+        val remaining = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        assertFalse(remaining.contains("Target"), "the targeted message must be expunged, remaining=$remaining")
+        assertTrue(remaining.contains("Bystander"), "an unrelated \\Deleted message must survive, remaining=$remaining")
+        assertTrue(remaining.contains("Untouched"), "an unflagged message must survive, remaining=$remaining")
+    }
+
+    @Test
+    fun `deleteMessages removes every uid in the batch`() = runTest {
+        listOf("A", "B", "C", "D").forEach {
+            GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", it, "Body $it")
+        }
+        greenMail.waitForIncomingEmail(4)
+        val bySubject = client.fetchRecent(params(), "INBOX", limit = 50).associateBy { it.subject }
+
+        client.deleteMessages(params(), "INBOX", listOf(bySubject.getValue("A").uid, bySubject.getValue("C").uid))
+
+        val remaining = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }.toSet()
+        assertEquals(setOf("B", "D"), remaining, "remaining=$remaining")
+    }
+
+    @Test
+    fun `moveMessages expunges only the moved uids and spares other Deleted-flagged mail`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Move me", "relocate this")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Bystander", "flagged elsewhere")
+        greenMail.waitForIncomingEmail(2)
+        appendMessage("Archive", "carol@example.org", "Seed", "Creates the Archive folder")
+        val bySubject = client.fetchRecent(params(), "INBOX", limit = 50).associateBy { it.subject }
+        // "Bystander" is flagged \Deleted (by another client) but left in the source folder, un-expunged.
+        client.setFlag(params(), "INBOX", bySubject.getValue("Bystander").uid, Flags.Flag.DELETED, value = true)
+
+        client.moveMessages(params(), "INBOX", listOf(bySubject.getValue("Move me").uid), "Archive")
+
+        val inbox = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        assertFalse(inbox.contains("Move me"), "the moved message must leave the source, inbox=$inbox")
+        // The move's expunge must be targeted: an unrelated \Deleted message must NOT be dropped (#295).
+        assertTrue(inbox.contains("Bystander"), "an unrelated \\Deleted message must survive the move, inbox=$inbox")
+        val archive = client.fetchRecent(params(), "Archive", limit = 50).map { it.subject }
+        assertTrue(archive.contains("Move me"), "archive=$archive")
+    }
+
+    @Test
     fun `fetchRecent returns empty for an empty folder`() = runTest {
         createFolder("Empty")
 
