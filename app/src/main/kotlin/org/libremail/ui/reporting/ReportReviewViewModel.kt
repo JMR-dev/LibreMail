@@ -111,19 +111,20 @@ class ReportReviewViewModel @Inject constructor(
      * still considers actionable.
      */
     fun submit() {
+        // Re-entry guard + validation run SYNCHRONOUSLY, and SUBMITTING is flipped BEFORE the async
+        // save/enqueue, so a double-tap can't launch two uploads before the first flips the flag (#304).
+        if (submitState.value == SubmitUiState.SUBMITTING) return
+        if (!ReportSubmissionRules.isCommentLongEnough(comment.value)) return
+        if (!ReportSubmissionRules.isValidEmail(email.value)) return
+        val report = store.find(reportId) ?: return
+        submitState.value = SubmitUiState.SUBMITTING
         viewModelScope.launch {
-            val currentSubmit = submitState.value
-            if (currentSubmit == SubmitUiState.SUBMITTING) return@launch
-            if (!ReportSubmissionRules.isCommentLongEnough(comment.value)) return@launch
-            if (!ReportSubmissionRules.isValidEmail(email.value)) return@launch
-            val report = store.find(reportId) ?: return@launch
             store.save(report.copy(userComment = comment.value, userEmail = email.value))
             if (!submitter.isEnabled) {
                 submitState.value = SubmitUiState.UNAVAILABLE
                 return@launch
             }
             submitter.submit(reportId)
-            submitState.value = SubmitUiState.SUBMITTING
             submitter.status(reportId).collect { submitState.value = it.toUi() }
         }
     }
