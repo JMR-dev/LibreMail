@@ -3,6 +3,8 @@ package org.libremail.reporting
 
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -23,9 +25,13 @@ class CrashReporterTest {
     private val settingsRepository = mockk<SettingsRepository>()
     private val accountRepository = mockk<AccountRepository>()
 
+    // Unconfined scope runs ReportStore's initial scan inline so a reopened store is readable
+    // synchronously, as before the scan moved off-thread (#296).
+    private fun newStore() = ReportStore(tempFolder.root, CoroutineScope(Dispatchers.Unconfined))
+
     @Test
     fun `persisting a forced crash saves a report offered on next launch`() {
-        val store = ReportStore(tempFolder.root)
+        val store = newStore()
         val buffer = RingLogBuffer()
         val collector = DiagnosticsCollector(appVersion, settingsRepository, accountRepository, buffer)
         val reporter = CrashReporter(collector, store, buffer)
@@ -39,7 +45,7 @@ class CrashReporterTest {
         assertTrue(saved.logs.any { it.contains("Uncaught exception") })
 
         // Still available to a fresh store instance, simulating the next app launch.
-        val nextLaunch = ReportStore(tempFolder.root)
+        val nextLaunch = newStore()
         assertEquals(1, nextLaunch.reports.value.size)
         assertEquals(ReportKind.CRASH, nextLaunch.reports.value.single().kind)
     }
@@ -48,7 +54,7 @@ class CrashReporterTest {
     fun `capture only persists — it has no path to transmit`() {
         // CrashReporter is constructed without any submitter/scheduler, so a crash can only ever be
         // written to the local store. Nothing here can send data off the device.
-        val store = ReportStore(tempFolder.root)
+        val store = newStore()
         val buffer = RingLogBuffer()
         val collector = DiagnosticsCollector(appVersion, settingsRepository, accountRepository, buffer)
         val reporter = CrashReporter(collector, store, buffer)
