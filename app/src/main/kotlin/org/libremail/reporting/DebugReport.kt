@@ -28,6 +28,8 @@ data class DebugReport(
     val stackTrace: String?,
     val settings: Map<String, String>,
     val logs: List<String>,
+    /** One PII-free "<provider> (<authType>)" entry per account (issue #235); size is the account count. */
+    val accounts: List<String> = emptyList(),
     val userComment: String = "",
     /** Reply-to address the user supplied when submitting (see #159); required for online submit. */
     val userEmail: String = "",
@@ -66,6 +68,7 @@ data class DebugReport(
             .put("userComment", userComment)
             .put("userEmail", userEmail)
             .put("settings", settingsJson)
+            .put("accounts", JSONArray(accounts))
             .put("logs", JSONArray(logs))
         if (stackTrace != null) json.put("stackTrace", stackTrace)
         return json
@@ -84,6 +87,9 @@ data class DebugReport(
             val logsJson = json.getJSONArray("logs")
             val logs = ArrayList<String>(logsJson.length())
             for (i in 0 until logsJson.length()) logs.add(logsJson.getString(i))
+            val accountsJson = json.optJSONArray("accounts")
+            val accounts = ArrayList<String>(accountsJson?.length() ?: 0)
+            if (accountsJson != null) for (i in 0 until accountsJson.length()) accounts.add(accountsJson.getString(i))
             return DebugReport(
                 id = json.getString("id"),
                 createdAtMillis = json.getLong("createdAtMillis"),
@@ -97,6 +103,7 @@ data class DebugReport(
                 stackTrace = if (json.has("stackTrace")) json.getString("stackTrace") else null,
                 settings = settings,
                 logs = logs,
+                accounts = accounts,
                 userComment = json.optString("userComment", ""),
                 userEmail = json.optString("userEmail", ""),
                 surfaced = json.optBoolean("surfaced", false),
