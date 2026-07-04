@@ -576,7 +576,7 @@ class MailRepositoryImplCoverageTest {
 
         assertTrue(result.isSuccess)
         coVerify { messageDao.deleteByIds(listOf(id)) } // local removal still happens
-        coVerify(exactly = 0) { imapClient.deleteMessage(any(), any(), any()) } // nothing pushed server-side
+        coVerify(exactly = 0) { imapClient.deleteMessages(any(), any(), any()) } // nothing pushed server-side
     }
 
     // --- role-folder resolution: a same-role folder that is not selectable ----------------------
