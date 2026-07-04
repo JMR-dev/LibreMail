@@ -4,12 +4,14 @@ package org.libremail.reporting
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.flow.flowOf
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.domain.repository.AccountRepository
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -30,6 +32,9 @@ class CrashReporterInstallTest {
         every { versionCode } returns 1L
     }
     private val settingsRepository = mockk<SettingsRepository>()
+    private val accountRepository = mockk<AccountRepository> {
+        every { observeAccounts() } returns flowOf(emptyList())
+    }
 
     private var original: Thread.UncaughtExceptionHandler? = null
 
@@ -49,7 +54,7 @@ class CrashReporterInstallTest {
         Thread.setDefaultUncaughtExceptionHandler(previous)
         val store = ReportStore(tempFolder.root)
         val buffer = RingLogBuffer()
-        val collector = DiagnosticsCollector(appVersion, settingsRepository, buffer)
+        val collector = DiagnosticsCollector(appVersion, settingsRepository, accountRepository, buffer)
         val reporter = CrashReporter(collector, store, buffer)
 
         reporter.install()
@@ -70,7 +75,7 @@ class CrashReporterInstallTest {
         Thread.setDefaultUncaughtExceptionHandler(mockk(relaxed = true))
         val store = ReportStore(tempFolder.root)
         val buffer = RingLogBuffer()
-        val collector = DiagnosticsCollector(appVersion, settingsRepository, buffer)
+        val collector = DiagnosticsCollector(appVersion, settingsRepository, accountRepository, buffer)
         val reporter = CrashReporter(collector, store, buffer)
         reporter.install()
         val installed = requireNotNull(Thread.getDefaultUncaughtExceptionHandler())
