@@ -8,11 +8,18 @@ Managed Devices (GMD). Companion to `api37_e2e.py`; born from issue #269.
 ## Usage
 
 ```bash
-# from the repo root, in Git Bash:
+# in Git Bash, from anywhere — invoke the script by path:
 .claude/skills/preflight/local_instrumented.sh org.libremail.ui.compose.ComposeScreenE2ETest
 # multiple classes (comma-separated, no spaces):
 .claude/skills/preflight/local_instrumented.sh org.libremail.a.FooTest,org.libremail.b.BarTest
 ```
+
+The script is CWD-independent: it resolves its own repo/worktree root from its script
+location (three directories up from `.claude/skills/preflight`) and `cd`s there before
+invoking gradlew, so it always builds *that* tree's `:app` — never whatever tree your
+shell happens to be sitting in. This matters most when you have several worktrees
+checked out side by side; run the copy of this script that lives inside the worktree you
+want to test, regardless of your current directory (issue #284).
 
 It cold-boots **one** emulator (`-no-snapshot`, no GMD), waits for `sys.boot_completed`,
 runs `:app:connectedDebugAndroidTest` filtered to the class(es) you pass, then tears the
