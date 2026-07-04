@@ -25,6 +25,7 @@ import org.libremail.data.local.MIGRATION_15_16
 import org.libremail.data.local.MIGRATION_16_17
 import org.libremail.data.local.MIGRATION_17_18
 import org.libremail.data.local.MIGRATION_18_19
+import org.libremail.data.local.MIGRATION_19_20
 import org.libremail.data.local.MIGRATION_1_2
 import org.libremail.data.local.MIGRATION_2_3
 import org.libremail.data.local.MIGRATION_3_4
@@ -69,6 +70,7 @@ object DatabaseModule {
                 MIGRATION_16_17,
                 MIGRATION_17_18,
                 MIGRATION_18_19,
+                MIGRATION_19_20,
             )
             // No destructive fallback: the migration chain is complete, and silently dropping the
             // mail/message tables would lose cached data. A missing migration should fail loudly in
