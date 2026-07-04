@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.reporting
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -64,7 +65,9 @@ class StartupReportViewModelTest {
 
     private fun crash(id: String, createdAt: Long) = report(id, ReportKind.CRASH, createdAt)
 
-    private fun store() = ReportStore(tempFolder.root)
+    // Unconfined scope runs ReportStore's initial scan inline so a store built over an existing dir
+    // is readable synchronously, as before the scan moved off-thread (#296).
+    private fun store() = ReportStore(tempFolder.root, CoroutineScope(Dispatchers.Unconfined))
 
     private fun viewModel(store: ReportStore) = StartupReportViewModel(store, now = { now })
 
