@@ -262,6 +262,122 @@ class MailboxViewModelExtraTest {
     }
 
     @Test
+    fun `a blank account nav argument is ignored, opening the unified inbox`() = runTest(dispatcher) {
+        val f = fixture(initialAccountId = "   ")
+        backgroundScope.launch { f.vm.accounts.collect {} }
+        runCurrent()
+
+        // The blank arg fails the isNotBlank filter, so no account filter is seeded.
+        assertNull(f.vm.selectedAccountId.value)
+    }
+
+    @Test
+    fun `folderUnreadCounts is empty when there is no drawer account`() = runTest(dispatcher) {
+        val f = fixture(accounts = emptyList())
+        backgroundScope.launch { f.vm.folderUnreadCounts.collect {} }
+        runCurrent()
+
+        assertTrue(f.vm.folderUnreadCounts.value.isEmpty())
+    }
+
+    @Test
+    fun `currentFolderRole is null when the selected folder is not in the drawer list`() = runTest(dispatcher) {
+        val f = fixture()
+        backgroundScope.launch { f.vm.currentFolderRole.collect {} }
+        f.vm.selectFolder("imap:a", "Work") // no "Work" folder is listed
+        advanceUntilIdle()
+
+        assertNull(f.vm.currentFolderRole.value)
+    }
+
+    @Test
+    fun `a selection action with no selection is a no-op`() = runTest(dispatcher) {
+        val f = fixture()
+
+        // No selection, so runOnSelection returns before launching anything.
+        f.vm.archiveSelected()
+        f.vm.moveSelected("Archive")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { f.repo.archive(any()) }
+        coVerify(exactly = 0) { f.repo.moveToFolder(any(), any()) }
+    }
+
+    @Test
+    fun `a selection failure with no message surfaces the generic fallback text`() = runTest(dispatcher) {
+        val f = fixture()
+        coEvery { f.repo.archive(any()) } returns Result.failure(RuntimeException()) // null message
+        f.vm.startSelection("imap:a:INBOX:1", "imap:a")
+
+        f.vm.archiveSelected()
+        advanceUntilIdle()
+
+        assertEquals("Action failed", f.vm.error.value)
+    }
+
+    @Test
+    fun `onDrawerOpened does nothing when there is no drawer account`() = runTest(dispatcher) {
+        val f = fixture(accounts = emptyList())
+        backgroundScope.launch { f.vm.drawerAccount.collect {} }
+        runCurrent()
+
+        f.vm.onDrawerOpened()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { f.repo.refreshFolders(any()) }
+    }
+
+    @Test
+    fun `requestDelete in a non-trash non-spam folder confirms a non-permanent delete`() = runTest(dispatcher) {
+        val f = fixture()
+        f.vm.startSelection("imap:a:INBOX:1", "imap:a")
+
+        // currentFolderRole stays null (INBOX default), so the delete is the reversible trash kind.
+        f.vm.requestDelete()
+
+        assertEquals(PendingAction.Delete(1, permanent = false), f.vm.pendingConfirm.value)
+    }
+
+    @Test
+    fun `refreshing the unified view of a non-inbox folder syncs everything`() = runTest(dispatcher) {
+        val f = fixture()
+        // Point at a concrete folder, then drop back to the unified account view without resetting it.
+        f.vm.selectFolder("imap:a", "Work")
+        f.vm.selectAccount(null)
+        runCurrent()
+
+        f.vm.refresh()
+        advanceUntilIdle()
+
+        // account == null but folder != INBOX -> the final else branch: sync every account.
+        coVerify { f.syncer.syncAll() }
+    }
+
+    @Test
+    fun `confirmPending with nothing pending is a no-op`() = runTest(dispatcher) {
+        val f = fixture()
+
+        f.vm.confirmPending() // the null `pending` arm
+        advanceUntilIdle()
+
+        assertNull(f.vm.pendingConfirm.value)
+        coVerify(exactly = 0) { f.repo.reportSpam(any()) }
+        coVerify(exactly = 0) { f.repo.trash(any()) }
+        coVerify(exactly = 0) { f.repo.expunge(any()) }
+    }
+
+    @Test
+    fun `a failed refresh with no message surfaces the generic fallback text`() = runTest(dispatcher) {
+        val f = fixture()
+        coEvery { f.syncer.syncAll() } returns Result.failure(IllegalStateException()) // null message
+
+        f.vm.refresh()
+        advanceUntilIdle()
+
+        assertEquals("Sync failed", f.vm.error.value)
+    }
+
+    @Test
     fun `mailbox events and pending actions carry value semantics`() {
         val open = MailboxEvent.OpenCompose("draft-1")
         val (draftId) = open

@@ -30,6 +30,7 @@ import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.DraftEntity
+import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.FolderUnreadCount
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.MessageRouting
@@ -576,6 +577,59 @@ class MailRepositoryImplCoverageTest {
         assertTrue(result.isSuccess)
         coVerify { messageDao.deleteByIds(listOf(id)) } // local removal still happens
         coVerify(exactly = 0) { imapClient.deleteMessage(any(), any(), any()) } // nothing pushed server-side
+    }
+
+    // --- role-folder resolution: a same-role folder that is not selectable ----------------------
+
+    @Test
+    fun `archive ignores a same-role folder that is not selectable and fails with no target`() = runTest {
+        val id = "acct:INBOX:30"
+        coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        // The only ARCHIVE-role folder is a non-selectable container (e.g. Gmail's "[Gmail]" parent),
+        // so it can't be a move target; with no selectable archive folder, the archive fails.
+        coEvery { folderDao.getForAccountOnce("acct") } returns listOf(
+            FolderEntity(
+                accountId = "acct",
+                fullName = "[Gmail]",
+                displayName = "[Gmail]",
+                role = "ARCHIVE",
+                selectable = false,
+                sortOrder = 0,
+            ),
+        )
+        coEvery { imapClient.listFolders(any()) } returns emptyList()
+
+        assertTrue(repository.archive(listOf(id)).isFailure)
+        coVerify(exactly = 0) { imapClient.moveMessages(any(), any(), any(), any()) }
+    }
+
+    // --- cancelOutboxMessage ---------------------------------------------------------------------
+
+    @Test
+    fun `cancelOutboxMessage deletes the row and its staging dir, releasing attachment grants`() = runTest {
+        val cache = Files.createTempDirectory("outbox").toFile()
+        every { context.cacheDir } returns cache
+        File(cache, "outbox/o1").mkdirs()
+        coEvery { outboxDao.getById("o1") } returns outboxEntity("o1").copy(
+            attachments = """[{"uri":"content://pick/a","name":"a.txt"}]""",
+        )
+
+        repository.cancelOutboxMessage("o1")
+
+        coVerify { outboxDao.delete("o1") }
+        assertFalse(File(cache, "outbox/o1").exists())
+    }
+
+    @Test
+    fun `cancelOutboxMessage tolerates an already-removed row`() = runTest {
+        every { context.cacheDir } returns Files.createTempDirectory("outbox").toFile()
+        coEvery { outboxDao.getById("gone") } returns null
+
+        repository.cancelOutboxMessage("gone")
+
+        coVerify { outboxDao.delete("gone") }
     }
 
     // --- fixtures -------------------------------------------------------------------------------
