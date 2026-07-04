@@ -326,7 +326,7 @@ class MailRepositoryImpl @Inject constructor(
         val routings = messageDao.getRoutingByIds(ids)
         messageDao.deleteByIds(ids) // optimistic
         forEachAccountFolder(routings) { params, folder, group ->
-            group.forEach { imapClient.deleteMessage(params, folder, uidOf(it.id)) }
+            imapClient.deleteMessages(params, folder, group.map { uidOf(it.id) })
         }
     }
 
@@ -387,7 +387,7 @@ class MailRepositoryImpl @Inject constructor(
                 when (val dest = destByAccount[group.first().accountId]) {
                     null ->
                         if (fallbackExpunge) {
-                            group.forEach { imapClient.deleteMessage(params, folder, uidOf(it.id)) }
+                            imapClient.deleteMessages(params, folder, group.map { uidOf(it.id) })
                         } else {
                             error("No ${role.name.lowercase()} folder for this account")
                         }
