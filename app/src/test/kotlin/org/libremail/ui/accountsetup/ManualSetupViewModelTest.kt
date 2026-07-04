@@ -136,6 +136,25 @@ class ManualSetupViewModelTest {
     }
 
     @Test
+    fun `testAndSave lowercases the domain in the id but keeps the local-part casing`() = runTest(dispatcher) {
+        // Generic IMAP servers may treat the local part case-sensitively, so only the domain is
+        // lowercased for the id (issue #305); the displayed email keeps the typed casing.
+        val repo = mockk<AccountRepository>()
+        val account = slot<Account>()
+        coEvery { repo.addImapAccount(capture(account), any()) } returns Result.success(emptyList())
+        val vm = ManualSetupViewModel(repo)
+        vm.onEmail("  User@Example.ORG  ")
+        vm.onPassword("secret")
+        vm.onImapHost("imap.example.org")
+        vm.onSmtpHost("smtp.example.org")
+
+        vm.testAndSave()
+
+        assertEquals("imap:User@example.org", account.captured.id)
+        assertEquals("User@Example.ORG", account.captured.email)
+    }
+
+    @Test
     fun `testAndSave falls back to the default ports when the port fields are blank`() = runTest(dispatcher) {
         val repo = mockk<AccountRepository>()
         val account = slot<Account>()
