@@ -13,6 +13,7 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
+import org.libremail.domain.model.normalizeEmailForAccountId
 import org.libremail.domain.repository.AccountRepository
 import javax.inject.Inject
 
@@ -65,7 +66,9 @@ class ManualSetupViewModel @Inject constructor(private val accountRepository: Ac
             return
         }
         val account = Account(
-            id = "imap:${f.email.trim()}",
+            // Generic IMAP: lowercase only the domain for the id (issue #305). An arbitrary server's
+            // local part MAY be case-sensitive (RFC 5321), so it is left as typed.
+            id = "imap:${normalizeEmailForAccountId(f.email, lowercaseLocalPart = false)}",
             email = f.email.trim(),
             displayName = f.email.trim(),
             authType = AuthType.PASSWORD_IMAP,

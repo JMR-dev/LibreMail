@@ -145,9 +145,21 @@ class MailProviderTest {
     fun `createAccount trims the email and derives a stable id and display name`() {
         val account = MailProvider.GMAIL.createAccount("  User@Gmail.com  ")
 
+        // The displayed email/name keep the user's casing, but the id lowercases the whole address so
+        // it is stable across casing (issue #305).
         assertEquals("User@Gmail.com", account.email)
-        assertEquals("imap:User@Gmail.com", account.id)
+        assertEquals("imap:user@gmail.com", account.id)
         assertEquals("User@Gmail.com", account.displayName)
+    }
+
+    @Test
+    fun `createAccount lowercases the whole address in the id so casing never duplicates an account`() {
+        // A consumer provider treats the address case-insensitively, so any casing maps to one id.
+        assertEquals(
+            MailProvider.GMAIL.createAccount("User@Gmail.com").id,
+            MailProvider.GMAIL.createAccount("user@gmail.com").id,
+        )
+        assertEquals("imap:user@gmail.com", MailProvider.GMAIL.createAccount("USER@GMAIL.COM").id)
     }
 
     @Test
