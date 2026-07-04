@@ -167,6 +167,41 @@ class MessageDaoTest {
     }
 
     @Test
+    fun browsePagingBreaksTimestampTiesByAscendingIdForATotalPageOrder() = runBlocking {
+        // Bulk mail can share a timestamp (issue #311): without a unique tiebreaker, rows tied at a
+        // LIMIT/OFFSET page boundary can duplicate or skip. Insertion order is scrambled so the ORDER BY
+        // — not the storage order — must produce the result.
+        dao.insertNew(
+            listOf(
+                message("tie-c", timestampMillis = 1_000),
+                message("tie-a", timestampMillis = 1_000),
+                message("tie-b", timestampMillis = 1_000),
+                message("newer", timestampMillis = 2_000),
+            ),
+        )
+
+        // Newest timestamp first, then ties broken by ascending id — a deterministic total order.
+        val expected = listOf("newer", "tie-a", "tie-b", "tie-c")
+        assertEquals(expected, dao.pagingUnifiedFolderSummaries("INBOX").refreshIds())
+        assertEquals(expected, dao.pagingFolderSummaries("acct", "INBOX").refreshIds())
+    }
+
+    @Test
+    fun searchPagingBreaksTimestampTiesByAscendingIdForATotalPageOrder() = runBlocking {
+        dao.insertNew(
+            listOf(
+                message("hit-c", subject = "report", timestampMillis = 1_000),
+                message("hit-a", subject = "report", timestampMillis = 1_000),
+                message("hit-b", subject = "report", timestampMillis = 1_000),
+            ),
+        )
+
+        val expected = listOf("hit-a", "hit-b", "hit-c")
+        assertEquals(expected, dao.pagingUnifiedFolderSearchSummaries("INBOX", "%report%").refreshIds())
+        assertEquals(expected, dao.pagingFolderSearchSummaries("acct", "INBOX", "%report%").refreshIds())
+    }
+
+    @Test
     fun getUnfetchedIdsReturnsOnlySyncedRowsMissingABody() = runBlocking {
         dao.insertNew(
             listOf(
@@ -230,6 +265,59 @@ class MessageDaoTest {
         assertEquals(true, row.isStarred)
         assertEquals("cached", row.body)
         assertEquals(true, row.inInbox)
+    }
+
+    @Test
+    fun updateHeaderContentsRefreshesEveryRowInTheBatchAndLeavesFlagsAndBodiesUntouched() = runBlocking {
+        dao.insertNew(
+            listOf(
+                message("acct:1", isRead = true, isStarred = false, body = "cached-1", uid = 0),
+                message("acct:2", isRead = false, isStarred = true, body = "cached-2", uid = 0),
+            ),
+        )
+
+        // The sync path (issue #310) refreshes a whole recent window at once via this single-transaction
+        // batch. Only the six header fields of each passed entity are applied; the rest are ignored.
+        dao.updateHeaderContents(
+            listOf(
+                message(
+                    "acct:1",
+                    sender = "Charles",
+                    senderEmail = "charles@example.org",
+                    subject = "One",
+                    timestampMillis = 5_000L,
+                    uid = 42L,
+                ),
+                message(
+                    "acct:2",
+                    sender = "Grace",
+                    senderEmail = "grace@example.org",
+                    subject = "Two",
+                    timestampMillis = 6_000L,
+                    uid = 43L,
+                ),
+            ),
+        )
+
+        val one = requireNotNull(dao.getById("acct:1"))
+        assertEquals("Charles", one.sender)
+        assertEquals("charles@example.org", one.senderEmail)
+        assertEquals("One", one.subject)
+        assertEquals(5_000L, one.timestampMillis)
+        assertEquals(42L, one.uid)
+        // The casefold search columns track the refreshed headers (issue #232).
+        assertEquals("charles", one.senderFold)
+        assertEquals("one", one.subjectFold)
+        // Flags and the cached body are deliberately left untouched.
+        assertTrue(one.isRead)
+        assertEquals("cached-1", one.body)
+
+        val two = requireNotNull(dao.getById("acct:2"))
+        assertEquals("Grace", two.sender)
+        assertEquals("Two", two.subject)
+        assertEquals(43L, two.uid)
+        assertTrue(two.isStarred)
+        assertEquals("cached-2", two.body)
     }
 
     @Test

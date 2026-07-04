@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.libremail.di.DatabaseModule
 import java.lang.reflect.Modifier
 
 /**
@@ -303,6 +304,23 @@ class MigrationTest {
                 "(DatabaseModule registers no destructive fallback, so a gap crashes upgrades)",
             (1 until latestExportedSchemaVersion()).map { it to it + 1 },
             allAppMigrations.map { it.startVersion to it.endVersion },
+        )
+    }
+
+    /**
+     * The replay tests discover migrations reflectively, but nothing there checks that [DatabaseModule]
+     * actually *registers* them. With no destructive fallback, a migration authored, schema-committed,
+     * and replay-tested but omitted from `addMigrations` still crash-loops every upgrading user at first
+     * database open (issue #312). Assert the builder's registered set ([DatabaseModule.ALL_MIGRATIONS])
+     * is exactly the reflectively-discovered set, so such an omission fails here instead.
+     */
+    @Test
+    fun databaseModuleRegistersEveryDeclaredMigration() {
+        assertEquals(
+            "DatabaseModule.ALL_MIGRATIONS must register every Migration in Migrations.kt " +
+                "(no destructive fallback, so a forgotten step crash-loops upgrades)",
+            allAppMigrations.map { it.startVersion to it.endVersion },
+            DatabaseModule.ALL_MIGRATIONS.sortedBy { it.startVersion }.map { it.startVersion to it.endVersion },
         )
     }
 
