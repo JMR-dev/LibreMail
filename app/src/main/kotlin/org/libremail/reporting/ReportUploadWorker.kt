@@ -9,27 +9,27 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.libremail.BuildConfig
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
  * Posts a single user-submitted report to the ingest endpoint. It runs ONLY when the user tapped
- * Submit (enqueued by [ReportUploadScheduler]); nothing here runs automatically. The endpoint is
- * [BuildConfig.DEBUG_REPORT_ENDPOINT] — empty by default, because the ingest server (issue #34) is
- * out of scope for this repo, so submissions no-op with a clear failure until an endpoint is set.
+ * Submit (enqueued by [ReportUploadScheduler]); nothing here runs automatically. The [endpoint] is
+ * injected (see [DebugReportEndpoint]) from `BuildConfig.DEBUG_REPORT_ENDPOINT` — empty by default,
+ * because the ingest server (issue #34) is out of scope for this repo, so submissions no-op with a
+ * clear failure until an endpoint is set.
  */
 @HiltWorker
 class ReportUploadWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val store: ReportStore,
+    @DebugReportEndpoint private val endpoint: String,
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
         val id = inputData.getString(KEY_REPORT_ID) ?: return Result.success()
         val report = store.find(id) ?: return Result.success() // discarded before the job ran
-        val endpoint = BuildConfig.DEBUG_REPORT_ENDPOINT
         if (endpoint.isBlank()) return Result.failure() // no ingest server configured in this build
         return withContext(Dispatchers.IO) {
             runCatching { post(endpoint, report.toSubmissionPayload()) }.fold(
