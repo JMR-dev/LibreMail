@@ -246,6 +246,7 @@
     <string name="notif_push_status_title">Watching for new mail</string>
     <string name="notif_push_status_text">Connected for instant delivery</string>
     <string name="notif_push_status_text_low_battery">Battery low — checking every 15 minutes until it recovers</string>
+    <string name="notif_push_status_text_timed_out">Instant delivery paused — checking every 15 minutes for now</string>
 
     <!-- Settings -->
     <string name="settings_accounts">Accounts</string>
