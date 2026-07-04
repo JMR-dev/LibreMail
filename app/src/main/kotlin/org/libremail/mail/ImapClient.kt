@@ -348,22 +348,43 @@ class ImapClient(private val reuseConnections: Boolean) {
             }
         }
 
-    suspend fun deleteMessage(params: ImapConnectionParams, folder: String, uid: String) = withContext(Dispatchers.IO) {
-        withStore(params) { store ->
-            val mailbox = store.getFolder(folder)
-            mailbox.open(Folder.READ_WRITE)
-            try {
-                (mailbox as UIDFolder).getMessageByUID(uid.toLong())?.setFlag(Flags.Flag.DELETED, true)
-                mailbox.expunge()
-            } finally {
-                runCatching { mailbox.close(false) }
+    /**
+     * Deletes a single message by UID. Delegates to [deleteMessages] so even a lone delete uses the
+     * same **targeted** UID EXPUNGE — never the untargeted expunge that would also remove other
+     * `\Deleted`-flagged mail in the folder (issue #295).
+     */
+    suspend fun deleteMessage(params: ImapConnectionParams, folder: String, uid: String) =
+        deleteMessages(params, folder, listOf(uid))
+
+    /**
+     * Permanently deletes the messages with [uids] from [folder] in a **single** IMAP session: opens
+     * the folder once, flags the matched messages `\Deleted`, then issues one targeted UID EXPUNGE via
+     * [expungeTargeted]. This is the batch, data-safe path the repository's multi-message delete/expunge
+     * routes through — one login + one expunge for the whole selection, instead of the N logins + N
+     * expunges a per-UID [deleteMessage] loop would pay, and it never touches unrelated `\Deleted` mail
+     * (issue #295). A no-op when [uids] is empty or none of them resolve to a message in [folder].
+     */
+    suspend fun deleteMessages(params: ImapConnectionParams, folder: String, uids: List<String>) =
+        withContext(Dispatchers.IO) {
+            if (uids.isEmpty()) return@withContext
+            withStore(params) { store ->
+                val mailbox = store.getFolder(folder)
+                mailbox.open(Folder.READ_WRITE)
+                try {
+                    val uidFolder = mailbox as UIDFolder
+                    val messages = uids.mapNotNull { uidFolder.getMessageByUID(it.toLong()) }.toTypedArray()
+                    if (messages.isEmpty()) return@withStore
+                    mailbox.setFlags(messages, Flags(Flags.Flag.DELETED), true)
+                    expungeTargeted(mailbox, messages)
+                } finally {
+                    runCatching { mailbox.close(false) }
+                }
             }
         }
-    }
 
     /**
      * Moves messages from [sourceFolder] to [destFolder] by UID. Implemented as copy + \Deleted +
-     * expunge so it works on every IMAP server (no reliance on the RFC 6851 MOVE extension).
+     * targeted expunge so it works on every IMAP server (no reliance on the RFC 6851 MOVE extension).
      */
     suspend fun moveMessages(
         params: ImapConnectionParams,
@@ -381,11 +402,25 @@ class ImapClient(private val reuseConnections: Boolean) {
                 if (messages.isEmpty()) return@withStore
                 mailbox.copyMessages(messages, store.getFolder(destFolder))
                 mailbox.setFlags(messages, Flags(Flags.Flag.DELETED), true)
-                mailbox.expunge()
+                expungeTargeted(mailbox, messages)
             } finally {
                 runCatching { mailbox.close(false) }
             }
         }
+    }
+
+    /**
+     * Permanently removes exactly [messages] — which the caller has already flagged `\Deleted` — with a
+     * **targeted** UID EXPUNGE (RFC 4315, [IMAPFolder.expunge]). Deliberately never the untargeted
+     * [Folder.expunge], which expunges *every* `\Deleted`-flagged message in [mailbox] — including ones
+     * a second client, Gmail, or a partial earlier move left flagged — the data-loss bug in issue #295.
+     * Every folder this client opens is an [IMAPFolder], so the cast holds in production and under
+     * GreenMail. The server must advertise UIDPLUS (Gmail, Outlook, and GreenMail do); on one that does
+     * not, Angus raises "UID EXPUNGE not supported" here rather than silently falling back to the
+     * unrelated-mail-destroying untargeted expunge — a loud failure is the correct, safe outcome.
+     */
+    private fun expungeTargeted(mailbox: Folder, messages: Array<Message>) {
+        (mailbox as IMAPFolder).expunge(messages)
     }
 
     /**
