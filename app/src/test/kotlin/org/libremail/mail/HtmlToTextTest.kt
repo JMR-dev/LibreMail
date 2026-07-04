@@ -54,4 +54,27 @@ class HtmlToTextTest {
         assertTrue(converted.contains("Hello there"), converted)
         assertFalse(converted.contains("Hello    there"), converted)
     }
+
+    @Test
+    fun `out-of-range and surrogate numeric references are left verbatim`() {
+        // 0, a lone surrogate, and code points above U+10FFFF are not valid scalar values, so both
+        // the decimal and hex forms are kept as-is (exercises every branch of the range/surrogate guard).
+        assertEquals("&#0;", HtmlToText.convert("&#0;"))
+        assertEquals("&#55296;", HtmlToText.convert("&#55296;")) // 0xD800, a lone high surrogate
+        assertEquals("&#xD800;", HtmlToText.convert("&#xD800;"))
+        assertEquals("&#9999999;", HtmlToText.convert("&#9999999;")) // > U+10FFFF (decimal)
+        assertEquals("&#xffffff;", HtmlToText.convert("&#xffffff;")) // > U+10FFFF (hex)
+    }
+
+    @Test
+    fun `supplementary-plane numeric references decode to their character`() {
+        // U+1F600 GRINNING FACE — a valid supplementary-plane scalar value in decimal and hex.
+        assertEquals("😀", HtmlToText.convert("&#128512;"))
+        assertEquals("😀", HtmlToText.convert("&#x1F600;"))
+    }
+
+    @Test
+    fun `named dash entities are decoded`() {
+        assertEquals("a—b–c", HtmlToText.convert("a&mdash;b&ndash;c"))
+    }
 }

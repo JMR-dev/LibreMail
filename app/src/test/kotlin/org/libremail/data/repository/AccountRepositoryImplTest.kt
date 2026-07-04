@@ -183,6 +183,15 @@ class AccountRepositoryImplTest {
     }
 
     @Test
+    fun `reorderAccounts forwards the new order to the dao (issue 240)`() = runTest {
+        coEvery { accountDao.reorder(any()) } just Runs
+
+        repository.reorderAccounts(listOf("c", "a", "b"))
+
+        coVerify { accountDao.reorder(listOf("c", "a", "b")) }
+    }
+
+    @Test
     fun `resetBackfillProgress for one account clears only that account and re-kicks backfill`() = runTest {
         repository.resetBackfillProgress("acct")
 
