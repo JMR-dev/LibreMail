@@ -2,7 +2,11 @@
 package org.libremail.ui.mailbox
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.paging.PagingSource
+import androidx.paging.PagingState
 import app.cash.turbine.test
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -18,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -38,6 +43,7 @@ import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.domain.repository.MailRepository
 import org.libremail.ui.navigation.Routes
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -87,6 +93,44 @@ class MailboxViewModelTest {
         runCurrent()
         verify { repo.pagedFolderSearchMessages("imap:a", "INBOX", "world") }
     }
+
+    // Issue #219: returning from the reader must not cold-reload the inbox. The mailbox's only paging
+    // presenter (collectAsLazyPagingItems) is gone while a message is open, so opening an unread message
+    // — which writes setRead and invalidates the Room PagingSource — would otherwise leave the fresh
+    // generation to cold-load on return, flashing "No messages". The ViewModel keeps its own always-on
+    // collector on the cached pager so that generation instead loads in the background while reading.
+    @Test
+    fun `keeps the cached pager warm so a post-setRead invalidation reloads with no UI collector`() =
+        runTest(testDispatcher) {
+            val loads = AtomicInteger(0)
+            val sources = mutableListOf<PagingSource<Int, Message>>()
+            val warmInbox = Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                countingSource(listOf(msg("imap:a:INBOX:1", "imap:a", "INBOX")), loads).also { sources += it }
+            }.flow
+            val repo = mockk<MailRepository>(relaxed = true)
+            every { repo.observeDrafts() } returns flowOf(emptyList())
+            every { repo.observeOutbox() } returns flowOf(emptyList())
+            every { repo.observeUnreadCounts() } returns MutableStateFlow(emptyList())
+            every { repo.observeFolders(any()) } returns MutableStateFlow(emptyList())
+            every { repo.pagedUnifiedFolderMessages(any()) } returns warmInbox
+            val accountRepository = mockk<AccountRepository>(relaxed = true)
+            every { accountRepository.observeAccounts() } returns MutableStateFlow(listOf(alice))
+
+            // Construct with NO collector on vm.pagedMessages — exactly the reader-is-on-top state.
+            val vm = MailboxViewModel(repo, accountRepository, mockk(relaxed = true), SavedStateHandle())
+            advanceUntilIdle()
+
+            // The keep-alive presenter drove the initial page load with no LazyPagingItems attached.
+            assertEquals(1, loads.get())
+
+            // Opening an unread message writes setRead, invalidating the source → a new generation.
+            sources.last().invalidate()
+            advanceUntilIdle()
+
+            // That generation loaded in the background, so the return replays a full window: no cold
+            // reload, no empty-state flash.
+            assertEquals(2, loads.get())
+        }
 
     @Test
     fun `selecting a concrete account pages that account's folder`() = runTest(testDispatcher) {
@@ -651,6 +695,16 @@ class MailboxViewModelTest {
             SavedStateHandle(mapOf(Routes.MAILBOX_ARG_ACCOUNT to it))
         } ?: SavedStateHandle()
         return MailboxViewModel(repo, accountRepository, syncer, savedState)
+    }
+
+    /** An in-memory [PagingSource] that counts loads, so a test can watch the pager (re)load a generation. */
+    private fun countingSource(data: List<Message>, loads: AtomicInteger) = object : PagingSource<Int, Message>() {
+        override suspend fun load(params: LoadParams<Int>): LoadResult<Int, Message> {
+            loads.incrementAndGet()
+            return LoadResult.Page(data = data, prevKey = null, nextKey = null)
+        }
+
+        override fun getRefreshKey(state: PagingState<Int, Message>): Int? = null
     }
 
     private fun account(id: String, email: String) = Account(
