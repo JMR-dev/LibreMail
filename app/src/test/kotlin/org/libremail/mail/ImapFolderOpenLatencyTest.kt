@@ -113,6 +113,24 @@ class ImapFolderOpenLatencyTest {
     }
 
     @Test
+    fun `a batch delete opens one connection and pays one LOGIN for the whole selection`() = runTest {
+        seedInbox(3)
+        val uids = client.fetchRecent(params(), "INBOX", limit = 50).map { it.uid } // the fetch: connection 1
+        proxy.awaitClientStreamsSettled()
+        val connectionsBefore = proxy.connectionCount
+        val loginsBefore = proxy.authCommandCount()
+
+        client.deleteMessages(params(), "INBOX", uids)
+        proxy.awaitClientStreamsSettled()
+
+        // Deleting all THREE messages is a single CONNECT + LOGIN + SELECT + STORE + UID EXPUNGE + LOGOUT
+        // — one connection and one LOGIN for the whole batch, not the three connects / three LOGINs a
+        // per-UID deleteMessage() loop would pay (the #295 N-login inefficiency).
+        assertEquals(1, proxy.connectionCount - connectionsBefore, "batch delete must open exactly one connection")
+        assertEquals(1, proxy.authCommandCount() - loginsBefore, "batch delete must pay exactly one LOGIN")
+    }
+
+    @Test
     fun `opening a folder then reading a message uses two separate connections (compounding cost)`() = runTest {
         seedInbox(1)
 
