@@ -1,0 +1,21 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Debug-only test harness for issue #221 (never merged into a release APK — this manifest belongs to
+      the debug source set). Hosts ColdOpenCacheProbe in a dedicated ":coldopen" process so an
+      instrumented test can observe a GENUINE cold open of a pre-encrypted cache: a process where nothing
+      has yet loaded SQLCipher's process-global native library. The instrumentation process can't offer
+      that — minting the encrypted fixture (or any earlier test) loads the .so there, masking the 592a797
+      nativeOpen crash. The provider is exported="false" and inert unless ContentResolver.call() targets
+      it, so it has no effect on ordinary debug runs.
+    -->
+    <application>
+        <provider
+            android:name="org.libremail.data.local.coldopen.ColdOpenCacheProbe"
+            android:authorities="${applicationId}.coldopen"
+            android:exported="false"
+            android:process=":coldopen" />
+    </application>
+
+</manifest>
