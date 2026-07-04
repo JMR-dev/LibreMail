@@ -14,6 +14,7 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkStatic
 import io.mockk.runs
 import io.mockk.unmockkAll
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -30,6 +31,7 @@ import org.junit.Test
 import org.libremail.BuildConfig
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * Drives the Outlook/Microsoft OAuth wrapper in a pure JVM test. The AppAuth types it builds
@@ -64,18 +66,23 @@ class OutlookAuthManagerTest {
     }
 
     @Test
-    fun `exchangeToken mints an Exchange token and reads the account email from the id_token`() = runTest {
+    fun `exchangeToken builds the result from the code-exchange token without a second refresh`() = runTest {
         installStatics()
         stubResponse(authResponseWithCode("auth-code"))
         stubTokenRequests(
-            tokenResponse(access = "code-access", idToken = jwt("email" to "me@example.com"), refresh = "rt"),
-            tokenResponse(access = "outlook-access", idToken = null, refresh = "rt"),
+            tokenResponse(access = "code-access", idToken = jwt("email" to "me@example.com"), refresh = "durable-rt"),
         )
 
         val result = authManager().exchangeToken(mockk<Intent>())
 
         assertEquals("me@example.com", result.email)
-        assertEquals("outlook-access", result.accessToken) // the Exchange-scoped token, not the code one
+        // The code exchange already named the Exchange Online resource, so its access token is used
+        // directly for IMAP verification — not a token from a second, redundant refresh round-trip.
+        assertEquals("code-access", result.accessToken)
+        // The durable AuthState — carrying the refresh token for later token refreshes — is persisted.
+        assertTrue(result.authStateJson.contains("durable-rt"))
+        // Exactly one token request (the code exchange); the redundant second refresh is gone.
+        verify(exactly = 1) { anyConstructed<AuthorizationService>().performTokenRequest(any(), any()) }
     }
 
     @Test
@@ -84,7 +91,6 @@ class OutlookAuthManagerTest {
         stubResponse(authResponseWithCode("auth-code"))
         stubTokenRequests(
             tokenResponse("code-access", jwt("email" to "", "preferred_username" to "alt@example.com"), "rt"),
-            tokenResponse("outlook-access", null, "rt"),
         )
 
         assertEquals("alt@example.com", authManager().exchangeToken(mockk<Intent>()).email)
