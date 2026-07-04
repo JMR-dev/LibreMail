@@ -2,6 +2,7 @@
 package org.libremail.data.local
 
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -57,12 +58,19 @@ class DatabaseProvisionerInstrumentedTest {
     private val keyStore = mockk<DatabaseKeyStore>()
     private val settingsRepository = mockk<SettingsRepository>()
     private val migrator = mockk<AccountDataMigrator>()
-    private val context = mockk<Context>()
+
+    // A real ContextWrapper, NOT a mockk<Context>: mocking android.content.Context makes MockK walk the
+    // whole framework class with kotlin-reflect (isKotlinInline), which trips an ART parameter-annotation
+    // length mismatch and throws ArrayIndexOutOfBoundsException on API 31/32 (it passes on API 29). The
+    // wrapper routes the provisioner's cache lookup to the test DB and delegates everything else.
+    private val context: Context = object : ContextWrapper(appContext) {
+        override fun getDatabasePath(name: String): File =
+            if (name == DatabaseFiles.NAME) dbFile else super.getDatabasePath(name)
+    }
 
     @Before
     fun setUp() {
         clean()
-        every { context.getDatabasePath(DatabaseFiles.NAME) } returns dbFile
         coEvery { keyStore.isClearPending() } returns false
         coEvery { keyStore.resolvePassphrase(any()) } returns passphrase
         coEvery { migrator.migrateIfNeeded() } just Runs
