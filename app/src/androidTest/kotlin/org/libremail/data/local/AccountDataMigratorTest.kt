@@ -222,10 +222,37 @@ class AccountDataMigratorTest {
     }
 
     @Test
+    fun copiedAccountsGetAStableAlphabeticalInitialSortOrder() = runBlocking<Unit> {
+        // Insert three accounts in non-alphabetical order so the assertion proves the initial order is
+        // by email (the pre-#111 listing) rather than the copy's insertion order (issue #164). sortOrder
+        // is a destination-only column the v14 cache never had, so it is assigned entirely by the copy.
+        helper.createDatabase(cacheName, 14).apply {
+            listOf("c" to "carol@example.org", "a" to "ada@example.org", "b" to "bob@example.org")
+                .forEach { (id, email) ->
+                    execSQL(
+                        "INSERT INTO accounts (id, email, displayName, authType, imap_host, imap_port, " +
+                            "imap_security, smtp_host, smtp_port, smtp_security) VALUES " +
+                            "('$id', '$email', '$id', 'PASSWORD_IMAP', 'imap.example.org', 993, 'SSL_TLS', " +
+                            "'smtp.example.org', 465, 'SSL_TLS')",
+                    )
+                }
+            close()
+        }
+
+        AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
+
+        openAccountsDb().apply {
+            // getAll orders by sortOrder; the copy ranked by email, so ada(0) < bob(1) < carol(2).
+            assertEquals(listOf("a", "b", "c"), accountDao().getAll().map { it.id })
+            close()
+        }
+    }
+
+    @Test
     fun migratorDdlMatchesExportedAccountDatabaseSchema() {
         val schema = JSONObject(
             InstrumentationRegistry.getInstrumentation().context.assets
-                .open("org.libremail.data.local.AccountDatabase/1.json")
+                .open("org.libremail.data.local.AccountDatabase/2.json")
                 .bufferedReader().use { it.readText() },
         ).getJSONObject("database")
         val entities = schema.getJSONArray("entities")
