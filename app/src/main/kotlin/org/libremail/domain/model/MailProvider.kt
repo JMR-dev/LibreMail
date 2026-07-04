@@ -116,7 +116,9 @@ enum class MailProvider(
     fun createAccount(email: String, displayName: String = email): Account {
         val address = email.trim()
         return Account(
-            id = "imap:$address",
+            // Consumer providers treat addresses case-insensitively, so the id lowercases the whole
+            // address (issue #305) while the displayed [email] keeps the user's casing.
+            id = "imap:${normalizeEmailForAccountId(address, lowercaseLocalPart = true)}",
             email = address,
             displayName = displayName.trim().ifBlank { address },
             authType = AuthType.PASSWORD_IMAP,

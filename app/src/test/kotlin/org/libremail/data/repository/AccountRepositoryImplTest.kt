@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.repository
 
+import android.content.Context
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -13,11 +14,15 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import org.libremail.data.attachment.AttachmentUriGrants
+import org.libremail.data.attachmentCacheDir
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.BackfillProgressDao
+import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.FolderDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.entity.AccountEntity
+import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.security.CredentialStore
 import org.libremail.data.settings.AccountSettingsRepository
@@ -30,6 +35,7 @@ import org.libremail.domain.model.ServerConfig
 import org.libremail.mail.FetchedFolder
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -42,26 +48,32 @@ import kotlin.test.assertTrue
  */
 class AccountRepositoryImplTest {
 
+    private val context = mockk<Context>(relaxed = true)
     private val accountDao = mockk<AccountDao>()
     private val messageDao = mockk<MessageDao>(relaxed = true)
     private val folderDao = mockk<FolderDao>(relaxed = true)
     private val backfillProgressDao = mockk<BackfillProgressDao>(relaxed = true)
+    private val draftDao = mockk<DraftDao>(relaxed = true)
     private val credentialStore = mockk<CredentialStore>(relaxed = true)
     private val imapClient = mockk<ImapClient>()
     private val syncScheduler = mockk<SyncScheduler>(relaxed = true)
     private val accountSettingsRepository = mockk<AccountSettingsRepository>(relaxed = true)
     private val mailNotifier = mockk<MailNotifier>(relaxed = true)
+    private val attachmentUriGrants = mockk<AttachmentUriGrants>(relaxed = true)
 
     private val repository = AccountRepositoryImpl(
+        context = context,
         accountDao = accountDao,
         messageDao = messageDao,
         folderDao = folderDao,
         backfillProgressDao = backfillProgressDao,
+        draftDao = draftDao,
         credentialStore = credentialStore,
         imapClient = imapClient,
         syncScheduler = syncScheduler,
         accountSettingsRepository = accountSettingsRepository,
         mailNotifier = mailNotifier,
+        attachmentUriGrants = attachmentUriGrants,
     )
 
     @Test
@@ -180,6 +192,37 @@ class AccountRepositoryImplTest {
         coVerify { messageDao.deleteByAccount("acct") }
         coVerify { folderDao.deleteForAccount("acct") }
         coVerify { backfillProgressDao.deleteForAccount("acct") }
+        coVerify { draftDao.deleteByAccount("acct") }
+    }
+
+    @Test
+    fun `deleteAccount purges on-disk attachment caches and releases draft URI grants`() = runTest {
+        // A real temp cacheDir with one message's attachment cache dir populated on disk.
+        val cacheDir = File(System.getProperty("java.io.tmpdir"), "libremail-delete-test-${System.nanoTime()}")
+        every { context.cacheDir } returns cacheDir
+        val messageId = "acct:INBOX:1"
+        val attachmentDir = attachmentCacheDir(cacheDir, messageId).apply { mkdirs() }
+        File(attachmentDir, "0/report.pdf").apply { parentFile?.mkdirs() }.writeText("bytes")
+
+        // The account owns that message and a draft carrying a picked attachment URI.
+        coEvery { accountDao.deleteById("acct") } just Runs
+        coEvery { messageDao.getIdsForAccount("acct") } returns listOf(messageId)
+        coEvery { draftDao.getByAccount("acct") } returns listOf(
+            draftEntity(id = "d1", attachments = """[{"uri":"content://pick/1","name":"report.pdf"}]"""),
+        )
+        val released = slot<Collection<String>>()
+        coEvery { attachmentUriGrants.releaseUnreferenced(capture(released)) } just Runs
+
+        repository.deleteAccount("acct")
+
+        // The message ids must be read BEFORE the rows are deleted, and the on-disk cache purged.
+        coVerify { messageDao.getIdsForAccount("acct") }
+        assertFalse(attachmentDir.exists(), "attachment cache dir must be deleted with the account")
+        // The deleted draft's picked-URI grant is released.
+        coVerify { draftDao.deleteByAccount("acct") }
+        assertEquals(listOf("content://pick/1"), released.captured.toList())
+
+        cacheDir.deleteRecursively()
     }
 
     @Test
@@ -225,6 +268,17 @@ class AccountRepositoryImplTest {
         authType = "PASSWORD_IMAP",
         imap = ServerConfigEmbedded("imap.example.org", 993, "SSL_TLS"),
         smtp = ServerConfigEmbedded("smtp.example.org", 465, "SSL_TLS"),
+    )
+
+    private fun draftEntity(id: String, attachments: String) = DraftEntity(
+        id = id,
+        accountId = "acct",
+        toAddresses = "",
+        ccAddresses = "",
+        subject = "",
+        body = "",
+        updatedAt = 0L,
+        attachments = attachments,
     )
 
     private val params = ImapConnectionParams(

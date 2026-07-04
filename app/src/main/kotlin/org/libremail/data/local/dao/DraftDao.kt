@@ -23,9 +23,17 @@ interface DraftDao {
     @Query("SELECT * FROM drafts")
     suspend fun getAll(): List<DraftEntity>
 
+    /** The drafts composed under [accountId] — enumerated to release their URI grants on account delete (#299). */
+    @Query("SELECT * FROM drafts WHERE accountId = :accountId")
+    suspend fun getByAccount(accountId: String): List<DraftEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(draft: DraftEntity)
 
     @Query("DELETE FROM drafts WHERE id = :id")
     suspend fun delete(id: String)
+
+    /** Removes every draft composed under [accountId] (the account is being deleted, #299). */
+    @Query("DELETE FROM drafts WHERE accountId = :accountId")
+    suspend fun deleteByAccount(accountId: String)
 }
