@@ -66,6 +66,19 @@ class SyncSchedulerTest {
         }
     }
 
+    @Test
+    fun `periodic report purge is enqueued with UPDATE so upgrades re-apply its schedule`() {
+        scheduler.schedulePeriodicReportPurge()
+
+        verify {
+            workManager.enqueueUniquePeriodicWork(
+                "libremail_periodic_report_purge",
+                ExistingPeriodicWorkPolicy.UPDATE,
+                any<PeriodicWorkRequest>(),
+            )
+        }
+    }
+
     // The one-shot kicks are a separate concern from #96 and keep their existing policies: syncNow and
     // pruneNow REPLACE for a clean immediate attempt; backfillNow KEEPs an in-flight all-account run.
 
