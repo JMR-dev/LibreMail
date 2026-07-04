@@ -26,6 +26,7 @@ class ReportUploadWorkerTest {
                 if (inputId == null) workDataOf() else workDataOf(ReportUploadWorker.KEY_REPORT_ID to inputId)
         },
         store,
+        endpoint = "", // default build ships no ingest endpoint; the transmit path is covered separately
     )
 
     private fun report(id: String) = DebugReport(
