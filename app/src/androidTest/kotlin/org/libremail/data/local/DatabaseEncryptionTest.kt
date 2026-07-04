@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -64,6 +65,89 @@ class DatabaseEncryptionTest {
             assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
             close()
         }
+    }
+
+    @Test
+    fun isEncryptedIsFalseForMissingEmptyAndPlaintextFiles() = runBlocking<Unit> {
+        val missing = File(dbFile.parentFile, "$dbName.missing")
+        assertFalse("a non-existent file is not encrypted", DatabaseEncryption.isEncrypted(missing))
+
+        val empty = File(dbFile.parentFile, "$dbName.empty")
+        empty.delete()
+        empty.createNewFile()
+        assertFalse("a zero-length file is not encrypted", DatabaseEncryption.isEncrypted(empty))
+
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+        assertFalse("a plaintext SQLite file is not encrypted", DatabaseEncryption.isEncrypted(dbFile))
+    }
+
+    @Test
+    fun ensureEncryptedNoOpsOnMissingEmptyOrAlreadyEncryptedFiles() = runBlocking<Unit> {
+        // Missing / empty: nothing to convert (the factory creates a fresh DB encrypted).
+        val empty = File(dbFile.parentFile, "$dbName.empty")
+        empty.createNewFile()
+        DatabaseEncryption.ensureEncrypted(File(dbFile.parentFile, "$dbName.missing"), passphrase)
+        DatabaseEncryption.ensureEncrypted(empty, passphrase)
+
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+        assertTrue(DatabaseEncryption.isEncrypted(dbFile))
+
+        // A second call on an already-encrypted file is an idempotent no-op; the data stays readable.
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+        assertTrue("the file stays encrypted", DatabaseEncryption.isEncrypted(dbFile))
+        openEncrypted().apply {
+            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            close()
+        }
+    }
+
+    @Test
+    fun ensurePlaintextNoOpsOnAnAlreadyPlaintextFile() = runBlocking<Unit> {
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+
+        // Already plaintext: decrypt must be a no-op (and must not corrupt the file).
+        DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
+
+        assertFalse(DatabaseEncryption.isEncrypted(dbFile))
+        openPlaintext().apply {
+            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            close()
+        }
+    }
+
+    @Test
+    fun schemaVersionIsCarriedOntoTheEncryptedFile() = runBlocking<Unit> {
+        // A first Room open stamps PRAGMA user_version to the schema version; the conversion must carry
+        // it across (sqlcipher_export copies tables but not that pragma), or Room would attempt a bogus
+        // migration on the re-keyed file.
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+
+        val encrypted = SQLiteDatabase.openOrCreateDatabase(
+            dbFile.absolutePath,
+            passphrase.toByteArray(Charsets.US_ASCII),
+            null,
+            null,
+        )
+        val version = try {
+            encrypted.version
+        } finally {
+            encrypted.close()
+        }
+        assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 19, version)
     }
 
     private fun openPlaintext(): LibreMailDatabase =
