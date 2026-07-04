@@ -92,6 +92,8 @@ androidx-paging-testing = { group = "androidx.paging", name = "paging-testing", 
 # DataStore (settings) / WorkManager (sync) — wired in later increments
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+# TestListenableWorkerBuilder for instrumented CoroutineWorker tests (issue #226).
+androidx-work-testing = { group = "androidx.work", name = "work-testing", version.ref = "work" }
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
