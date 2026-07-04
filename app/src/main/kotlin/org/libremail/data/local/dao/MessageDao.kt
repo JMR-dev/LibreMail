@@ -217,6 +217,15 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
+    /**
+     * Ids of every row belonging to [accountId] (all folders; synced rows plus transient search-only
+     * hits). Lets [org.libremail.data.repository.AccountRepositoryImpl.deleteAccount] enumerate a
+     * deleted account's messages to purge their on-disk attachment cache before [deleteByAccount]
+     * removes the rows that name them (issue #299).
+     */
+    @Query("SELECT id FROM messages WHERE accountId = :accountId")
+    suspend fun getIdsForAccount(accountId: String): List<String>
+
     @Query("DELETE FROM messages WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: String)
 
