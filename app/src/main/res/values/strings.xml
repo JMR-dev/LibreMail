@@ -150,6 +150,7 @@
 
     <!-- Reader -->
     <string name="reader_reply">Reply</string>
+    <string name="reader_reply_failed">Couldn\'t start the reply</string>
     <string name="attachments_title">Attachments</string>
     <string name="attachment_downloaded">Downloaded</string>
     <string name="message_available_offline">Available offline</string>
