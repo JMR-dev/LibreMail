@@ -2,8 +2,9 @@
 package org.libremail.data.sync
 
 import android.content.Context
-import android.util.Log
 import androidx.work.ListenableWorker.Result
+import com.icegreen.greenmail.util.GreenMail
+import com.icegreen.greenmail.util.ServerSetupTest
 import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -25,12 +26,16 @@ import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.security.EncryptedCacheGuard
+import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.SmtpParams
 import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
 import org.libremail.mail.SendableAttachment
 import org.libremail.mail.SmtpSender
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
+import org.libremail.reporting.accountLogRef
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -42,6 +47,11 @@ import kotlin.test.assertTrue
  * the outbox: sending each queued message over SMTP or Microsoft Graph, deleting it on success,
  * flagging failures for a retry, and — crucially for the "may have sent" case — never auto-retrying
  * a Graph request that might already have delivered.
+ *
+ * It also logs breadcrumbs via [AppLog] (outbox-drain size, per-message send result, the Graph→SMTP
+ * fallback) — asserted here against a real [RingLogBuffer] rather than a mocked `Log`, per #328. Those
+ * assertions double as the regression cover for #297: `account.email` must never reach a log line,
+ * only the non-PII [accountLogRef].
  */
 class SendWorkerTest {
 
@@ -56,6 +66,7 @@ class SendWorkerTest {
     private val lazyConnection = mockk<Lazy<MailConnectionFactory>> { every { get() } returns connectionFactory }
     private val lazyGrants = mockk<Lazy<AttachmentUriGrants>> { every { get() } returns attachmentUriGrants }
     private val cacheGuard = mockk<EncryptedCacheGuard>()
+    private val logBuffer = RingLogBuffer()
 
     private lateinit var cacheDir: File
     private lateinit var appContext: Context
@@ -66,6 +77,16 @@ class SendWorkerTest {
         appContext = mockk(relaxed = true)
         every { appContext.cacheDir } returns cacheDir
         coEvery { cacheGuard.isCacheLocked() } returns false
+        // AppLog forwards every call to Logcat; stub the Android stub (by fully-qualified name, so
+        // this file — like the production code it exercises — never imports android.util.Log; only
+        // AppLog.kt may) so a JVM unit test doesn't crash on the unmocked method, and install a real
+        // buffer so the breadcrumb + #297 no-PII assertions below read actual recorded lines rather
+        // than a `Log` verification.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>(), any()) } returns 0
+        AppLog.install(logBuffer)
     }
 
     @After
@@ -129,6 +150,17 @@ class SendWorkerTest {
     }
 
     @Test
+    fun `doWork logs the outbox-drain breadcrumb with the queued count`() = runTest {
+        coEvery { outboxDao.getAll() } returns listOf(entity())
+        coEvery { accountDao.getById("acct") } returns account("acct", "PASSWORD_IMAP")
+        coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
+
+        worker().doWork()
+
+        assertTrue(logBuffer.snapshot().map { it.message }.contains("outbox drain: 1 queued"))
+    }
+
+    @Test
     fun `drops a queued message whose account was removed`() = runTest {
         val row = entity()
         coEvery { outboxDao.getAll() } returns listOf(row)
@@ -142,7 +174,7 @@ class SendWorkerTest {
     }
 
     @Test
-    fun `sends a password account message over SMTP then clears it`() = runTest {
+    fun `sends a password account message over SMTP then clears it, logging a PII-free breadcrumb`() = runTest {
         coEvery { outboxDao.getAll() } returns listOf(entity())
         coEvery { accountDao.getById("acct") } returns account("acct", "PASSWORD_IMAP")
         coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
@@ -152,10 +184,13 @@ class SendWorkerTest {
         coVerify { smtpSender.send(any(), "acct@example.org", any(), any()) }
         coVerify { outboxDao.delete("m1") }
         coVerify { attachmentUriGrants.releaseUnreferenced(any()) }
+        val messages = logBuffer.snapshot().map { it.message }
+        assertTrue(messages.contains("sent ${accountLogRef("acct")} via SMTP"), "messages=$messages")
+        messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
     }
 
     @Test
-    fun `an SMTP failure flags the row and retries`() = runTest {
+    fun `an SMTP failure flags the row, retries, and logs a PII-free failure breadcrumb`() = runTest {
         coEvery { outboxDao.getAll() } returns listOf(entity())
         coEvery { accountDao.getById("acct") } returns account("acct", "PASSWORD_IMAP")
         coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
@@ -165,10 +200,13 @@ class SendWorkerTest {
 
         coVerify { outboxDao.setError("m1", "smtp down") }
         coVerify(exactly = 0) { outboxDao.delete(any()) }
+        val messages = logBuffer.snapshot().map { it.message }
+        assertTrue(messages.contains("send failed for ${accountLogRef("acct")}; will retry"), "messages=$messages")
+        messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
     }
 
     @Test
-    fun `sends an Outlook message over Graph`() = runTest {
+    fun `sends an Outlook message over Graph, logging a PII-free breadcrumb`() = runTest {
         coEvery { outboxDao.getAll() } returns listOf(entity())
         coEvery { accountDao.getById("acct") } returns account("acct", "OAUTH_OUTLOOK")
         coEvery { connectionFactory.graphTokenFor(any()) } returns "graph-token"
@@ -178,6 +216,9 @@ class SendWorkerTest {
         coVerify { graphSender.send("graph-token", any(), any()) }
         coVerify { outboxDao.delete("m1") }
         coVerify(exactly = 0) { smtpSender.send(any(), any(), any(), any()) }
+        val messages = logBuffer.snapshot().map { it.message }
+        assertTrue(messages.contains("sent ${accountLogRef("acct")} via Graph"), "messages=$messages")
+        messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
     }
 
     @Test
@@ -212,9 +253,7 @@ class SendWorkerTest {
     }
 
     @Test
-    fun `a Graph transport error falls back to SMTP`() = runTest {
-        mockkStatic(Log::class)
-        every { Log.w(any(), any<String>(), any<Throwable>()) } returns 0
+    fun `a Graph transport error falls back to SMTP and logs a PII-free fallback breadcrumb`() = runTest {
         coEvery { outboxDao.getAll() } returns listOf(entity())
         coEvery { accountDao.getById("acct") } returns account("acct", "OAUTH_OUTLOOK")
         coEvery { connectionFactory.graphTokenFor(any()) } throws RuntimeException("token refresh failed")
@@ -224,6 +263,75 @@ class SendWorkerTest {
 
         coVerify { smtpSender.send(any(), "acct@example.org", any(), any()) }
         coVerify { outboxDao.delete("m1") }
+        val messages = logBuffer.snapshot().map { it.message }
+        assertTrue(
+            messages.any { it.startsWith("Graph send failed for ${accountLogRef("acct")}; falling back to SMTP") },
+            "messages=$messages",
+        )
+        messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
+    }
+
+    @Test
+    fun `regression #297 - no send breadcrumb ever contains the account email`() = runTest {
+        coEvery { outboxDao.getAll() } returns listOf(entity())
+        coEvery { accountDao.getById("acct") } returns account("acct", "OAUTH_OUTLOOK")
+        coEvery { connectionFactory.graphTokenFor(any()) } throws RuntimeException("token refresh failed")
+        coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
+
+        worker().doWork()
+
+        val snapshot = logBuffer.snapshot()
+        // This path logs the outbox-drain, the Graph->SMTP fallback (with a scrubbed throwable), and
+        // the send-result breadcrumbs — the richest set of log lines for one message. None may carry
+        // the account's raw email, only the non-reversible accountLogRef.
+        assertTrue(snapshot.isNotEmpty(), "expected breadcrumbs to be recorded")
+        snapshot.forEach { entry ->
+            assertFalse(entry.message.contains("acct@example.org"), entry.message)
+            assertFalse(entry.message.contains("@example.org"), entry.message)
+        }
+    }
+
+    @Test
+    fun `sends over a real SMTP server end-to-end and logs a PII-free breadcrumb`() = runTest {
+        // The "connectivity/send" E2E surface for this ticket: a real SmtpSender talking to a real
+        // (in-process) SMTP server, rather than the mocked smtpSender used by the tests above.
+        val greenMail = GreenMail(ServerSetupTest.SMTP)
+        greenMail.start()
+        greenMail.setUser("acct@example.org", "smtp-secret")
+        try {
+            coEvery { outboxDao.getAll() } returns listOf(entity())
+            coEvery { accountDao.getById("acct") } returns account("acct", "PASSWORD_IMAP")
+            coEvery { connectionFactory.smtpParamsFor(any()) } returns SmtpParams(
+                host = "127.0.0.1",
+                port = greenMail.smtp.port,
+                security = MailSecurity.NONE,
+                username = "acct@example.org",
+                secret = "smtp-secret",
+                useXoauth2 = false,
+            )
+            val realSmtpWorker = SendWorker(
+                appContext,
+                mockk(relaxed = true),
+                lazyOutbox,
+                lazyAccount,
+                SmtpSender(),
+                graphSender,
+                lazyConnection,
+                cacheGuard,
+                lazyGrants,
+            )
+
+            assertEquals(Result.success(), realSmtpWorker.doWork())
+            greenMail.waitForIncomingEmail(1)
+
+            assertEquals(1, greenMail.receivedMessages.size)
+            coVerify { outboxDao.delete("m1") }
+            val messages = logBuffer.snapshot().map { it.message }
+            assertTrue(messages.contains("sent ${accountLogRef("acct")} via SMTP"), "messages=$messages")
+            messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
+        } finally {
+            greenMail.stop()
+        }
     }
 
     @Test
