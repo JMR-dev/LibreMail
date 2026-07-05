@@ -30,9 +30,11 @@ built-in GITHUB_TOKEN instead of a PAT, so an update push no longer auto-retrigg
 (GitHub's anti-recursion rule) — killing the merge-cascade that cancelled every open PR's
 run on every merge. The cost is that a freshly-updated PR's required checks go stale/absent
 on its NEW head SHA, so this scheduler deliberately (re-)triggers them in priority order (a
-poor-man's merge queue). A `workflow_dispatch` is EXEMPT from the anti-recursion rule, so
-even the GITHUB_TOKEN's dispatch DOES start the run — no PAT needed (the workflow grants its
-token `actions: write`). FAIL-OPEN, structurally: `ci.yml` KEEPS its `on: pull_request`
+poor-man's merge queue). The dispatch uses the AUTOUPDATE_TOKEN PAT, NOT the built-in
+GITHUB_TOKEN: a GITHUB_TOKEN-triggered run is held for MANUAL approval (`action_required`) and
+never runs un-attended, whereas a PAT dispatch runs as the authorized owner with no approval gate
+(#350's "no PAT needed" claim was wrong — see ci-trigger.yml + issue #351). FAIL-OPEN,
+structurally: `ci.yml` KEEPS its `on: pull_request`
 trigger, so any human push — and a brand-new PR — always gets CI regardless of this
 scheduler; the scheduler only fills the gap left by GITHUB_TOKEN auto-updates and can never
 leave a PR un-triggerable. Fork PRs (no token/secret access) are skipped by the scheduler and
@@ -685,11 +687,12 @@ def gather_trigger_snapshot() -> tuple[list[PullRequest], set[int], set[int], di
 
 
 def _dispatch_ci(pr_number: int, head_ref: str, head_sha: str) -> bool:
-    """Trigger `ci.yml` for one PR via a `workflow_dispatch` on the PR's head branch. A
-    workflow_dispatch is exempt from GitHub's anti-recursion rule, so even the built-in
-    GITHUB_TOKEN's dispatch DOES start a run — no PAT required (the workflow grants its token
-    `actions: write`). Running on the head branch puts the run's checks on the PR head SHA, so
-    they satisfy branch protection's required checks."""
+    """Trigger `ci.yml` for one PR via a `workflow_dispatch` on the PR's head branch. The
+    dispatch runs as GH_TOKEN, which ci-trigger.yml sets to the AUTOUPDATE_TOKEN PAT: a run
+    triggered by the built-in GITHUB_TOKEN is held for MANUAL approval (`action_required`) and
+    never runs un-attended, so the PAT (authorized owner) is what actually starts the run with no
+    approval gate (see issue #351). Running on the head branch puts the run's checks on the PR
+    head SHA, so they satisfy branch protection's required checks."""
     if not head_ref:
         _log(f"::warning::PR #{pr_number} has no head branch — cannot dispatch; skipping.")
         return False

@@ -10,10 +10,15 @@ name: CI trigger (traffic-controller)
 # re-runs every PR" thundering herd (the cascade; see the ci-merge-cascade note + issue #349).
 #
 # HOW IT TRIGGERS: `traffic_control.py --mode trigger` runs `gh workflow run ci.yml --ref
-# <pr-head-branch>`. A workflow_dispatch is EXEMPT from the anti-recursion rule, so even the
-# built-in GITHUB_TOKEN's dispatch DOES start the run — no PAT is required (this job grants its
-# token `actions: write`). The dispatched run executes on the PR's head branch, so its checks
-# land on the PR head SHA and satisfy branch protection's required checks.
+# <pr-head-branch>`, dispatching with the AUTOUPDATE_TOKEN PAT — NOT the built-in GITHUB_TOKEN.
+# A workflow run triggered by GITHUB_TOKEN is held in the `action_required` state waiting on
+# MANUAL approval and never runs un-attended (confirmed empirically on #285 / #350: it sits
+# `action_required`, while the same dispatch by an authorized user runs immediately) — which
+# would defeat the whole scheduler. A PAT dispatch runs AS the authorized token owner, so the
+# run starts immediately with no approval gate (this is the original #349 design; #350's "no
+# PAT needed / workflow_dispatch is anti-recursion-exempt" claim was WRONG — see #351).
+# AUTOUPDATE_TOKEN is therefore REQUIRED for this scheduler. The dispatched run executes on the
+# PR's head branch, so its checks land on the PR head SHA and satisfy branch protection.
 #
 # WHEN IT RUNS:
 #   • workflow_run, after "Auto-update PR branches" completes — the race-free moment: autoupdate
@@ -40,9 +45,13 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
-# Trigger-only; this workflow never gates a merge. `actions: write` lets the built-in
-# GITHUB_TOKEN dispatch ci.yml (workflow_dispatch) and cancel strictly-lower runs when a P0
-# emergency preempts. `pull-requests: read` + `contents: read` cover the PR/label enumeration.
+# Trigger-only; this workflow never gates a merge. The gh calls run as GH_TOKEN, which is
+# normally the AUTOUPDATE_TOKEN PAT (see the step below). These permissions govern the built-in
+# GITHUB_TOKEN, used only on the fail-open fallback path when AUTOUPDATE_TOKEN is absent:
+# `actions: write` lets it dispatch ci.yml (workflow_dispatch) and cancel strictly-lower runs
+# when a P0 emergency preempts; `pull-requests: read` + `contents: read` cover the PR/label
+# enumeration. (A GITHUB_TOKEN dispatch needs manual approval, so that fallback only actually
+# starts CI if repo settings don't gate GITHUB_TOKEN-triggered runs — the PAT is the real path.)
 permissions:
   contents: read
   pull-requests: read
@@ -73,7 +82,13 @@ jobs:
       # — and even a total failure here leaves ci.yml's `on: pull_request` path intact.
       - name: Trigger CI for the highest-priority PR(s) needing a run
         env:
-          GH_TOKEN: ${{ github.token }}
+          # AUTOUPDATE_TOKEN (a PAT) is REQUIRED here: a CI run dispatched by the built-in
+          # GITHUB_TOKEN is held for MANUAL approval (`action_required`) and never runs
+          # un-attended, so the scheduler must dispatch AS the PAT's authorized owner to start
+          # runs with no approval gate. `|| github.token` keeps this fail-open when the secret is
+          # absent, but that GITHUB_TOKEN fallback only actually starts CI if repo settings don't
+          # gate GITHUB_TOKEN-triggered runs — the PAT is the intended path (see #351).
+          GH_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           # Poor-man's merge-queue width: at most this many PRs run CI concurrently under the
           # scheduler (a P0 emergency bypasses this cap). Kept conservative because each PR
