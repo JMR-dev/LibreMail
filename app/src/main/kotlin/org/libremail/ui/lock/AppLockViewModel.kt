@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.SystemClock
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,6 +31,7 @@ import org.libremail.data.security.LockState
 import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
+import org.libremail.reporting.AppLog
 import org.libremail.restart.ProcessRestarter
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
@@ -149,6 +149,8 @@ class AppLockViewModel @Inject constructor(
                     keyInvalidated = databaseKeyCipher.isInvalidated(),
                 )
             }
+            // LockAction is a non-PII enum, so it's safe to record verbatim as a breadcrumb.
+            AppLog.i(TAG, "app-lock foreground decision: $action")
             when (action) {
                 LockAction.PROCEED -> _uiState.value = AppLockUiState.Unlocked
 
@@ -191,6 +193,7 @@ class AppLockViewModel @Inject constructor(
         viewModelScope.launch {
             when (withContext(defaultDispatcher) { unlockOrArm() }) {
                 UnlockResult.OK -> {
+                    AppLog.i(TAG, "auth seal unlocked; cache readable")
                     gate.onAuthenticated()
                     publish()
                 }
@@ -198,7 +201,7 @@ class AppLockViewModel @Inject constructor(
                 UnlockResult.UNRECOVERABLE -> {
                     // The passphrase is permanently unrecoverable (key invalidated or deleted by a
                     // screen-lock change). Wipe the cache safely at the next cold start and re-sync.
-                    Log.w(TAG, "encrypted cache passphrase unrecoverable; clearing cache")
+                    AppLog.w(TAG, "encrypted cache passphrase unrecoverable; clearing cache")
                     clearCacheAndRestart(disableAppLock = false)
                 }
 
@@ -240,7 +243,7 @@ class AppLockViewModel @Inject constructor(
         return runCatching { databaseKeyStore.sealWithAuth() }.fold(
             onSuccess = { UnlockResult.OK },
             onFailure = { e ->
-                Log.w(TAG, "arming auth seal failed", e)
+                AppLog.w(TAG, "arming auth seal failed", e)
                 UnlockResult.RETRY
             },
         )
@@ -249,17 +252,17 @@ class AppLockViewModel @Inject constructor(
     private suspend fun unwrapSealedPassphrase(): UnlockResult {
         // A sealed passphrase exists but its key is gone entirely: it can never be unwrapped.
         if (!databaseKeyCipher.hasKey()) {
-            Log.w(TAG, "auth-sealed passphrase present but key was deleted; cache unrecoverable")
+            AppLog.w(TAG, "auth-sealed passphrase present but key was deleted; cache unrecoverable")
             return UnlockResult.UNRECOVERABLE
         }
         return try {
             databaseKeyStore.unlockWithAuth()
             UnlockResult.OK
         } catch (e: KeyPermanentlyInvalidatedException) {
-            Log.w(TAG, "auth-bound key permanently invalidated", e)
+            AppLog.w(TAG, "auth-bound key permanently invalidated", e)
             UnlockResult.UNRECOVERABLE
         } catch (e: UserNotAuthenticatedException) {
-            Log.w(TAG, "auth window elapsed before unwrap; will retry", e)
+            AppLog.w(TAG, "auth window elapsed before unwrap; will retry", e)
             UnlockResult.RETRY
         } catch (e: CancellationException) {
             throw e
@@ -268,12 +271,13 @@ class AppLockViewModel @Inject constructor(
             // process right after a successful auth. Re-lock and let the user retry rather than wiping
             // the cache on an ambiguous error (a genuinely lost key still surfaces as UNRECOVERABLE
             // via hasKey()/KeyPermanentlyInvalidatedException above).
-            Log.w(TAG, "unexpected failure unwrapping auth-sealed passphrase; will retry", e)
+            AppLog.w(TAG, "unexpected failure unwrapping auth-sealed passphrase; will retry", e)
             UnlockResult.RETRY
         }
     }
 
     private suspend fun clearCacheAndRestart(disableAppLock: Boolean) {
+        AppLog.w(TAG, "clearing encrypted cache and restarting (disableAppLock=$disableAppLock)")
         withContext(defaultDispatcher) {
             // Record the wipe intent BEFORE flipping app-lock off, so a crash between the two writes
             // leaves the wipe still pending (recoverable) rather than a disabled gate over a stale key.
@@ -302,12 +306,12 @@ class AppLockViewModel @Inject constructor(
         try {
             operation.result.get(SYNC_ENQUEUE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (e: TimeoutException) {
-            Log.w(TAG, "re-sync enqueue not confirmed within timeout; restarting anyway", e)
+            AppLog.w(TAG, "re-sync enqueue not confirmed within timeout; restarting anyway", e)
         } catch (e: ExecutionException) {
-            Log.w(TAG, "re-sync enqueue failed; restarting anyway", e)
+            AppLog.w(TAG, "re-sync enqueue failed; restarting anyway", e)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            Log.w(TAG, "interrupted awaiting re-sync enqueue; restarting anyway", e)
+            AppLog.w(TAG, "interrupted awaiting re-sync enqueue; restarting anyway", e)
         }
     }
 

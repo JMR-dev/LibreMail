@@ -40,10 +40,13 @@ import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import org.libremail.restart.ProcessRestarter
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeoutException
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -65,14 +68,33 @@ import kotlin.test.assertTrue
  * restart, and CLEAR_AND_REQUIRE_AUTH keeps app-lock on) and the `onAuthenticated` unlock/arm
  * classification (OK / UNRECOVERABLE / RETRY), so a mutation that wipes user data or drops the lock is
  * caught here rather than only on a device.
+ *
+ * Issue #326 migrated this ViewModel's logging to [AppLog], so a [RingLogBuffer] is installed here and
+ * assertions about what got logged are against [logBuffer] — never `verify { Log... }` — matching how
+ * the rest of the suite treats [AppLog] as the seam instead of Logcat.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppLockViewModelTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
+    private val logBuffer = RingLogBuffer()
 
     @Before
-    fun setUp() = Dispatchers.setMain(dispatcher)
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+        // android.util.Log is a no-op stub that throws "not mocked" in JVM tests, and AppLog always
+        // forwards to it; stub every level up front (regardless of which breadcrumbs a given test
+        // exercises) so no test needs its own ad-hoc Log mocking, then install a real buffer so
+        // breadcrumbs can be asserted for real instead of via `verify { Log... }`.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
+    }
 
     @After
     fun tearDown() {
@@ -174,6 +196,8 @@ class AppLockViewModelTest {
         // anyway (the periodic sync will still refill the wiped cache later).
         verify { future.get(any(), any()) }
         verify { processRestarter.restart() }
+        // Issue #326: the swallowed timeout is still breadcrumbed so a report can explain the delay.
+        assertTrue(logBuffer.snapshot().any { it.message.startsWith("re-sync enqueue not confirmed within timeout") })
     }
 
     @Test
@@ -189,6 +213,8 @@ class AppLockViewModelTest {
         // A failed enqueue is swallowed like a timeout: recovery restarts anyway.
         verify { future.get(any(), any()) }
         verify { processRestarter.restart() }
+        // Issue #326: the swallowed failure is breadcrumbed too.
+        assertTrue(logBuffer.snapshot().any { it.message.startsWith("re-sync enqueue failed; restarting anyway") })
     }
 
     @Test
@@ -208,11 +234,14 @@ class AppLockViewModelTest {
         assertTrue(reInterrupted)
         verify { future.get(any(), any()) }
         verify { processRestarter.restart() }
+        // Issue #326: the swallowed interrupt is breadcrumbed too.
+        assertTrue(
+            logBuffer.snapshot().any { it.message.startsWith("interrupted awaiting re-sync enqueue") },
+        )
     }
 
     @Test
     fun `onAuthenticated rethrows a cancellation while unwrapping and never wipes the cache`() = runTest(dispatcher) {
-        stubLog()
         val session = mockk<PassphraseSession>(relaxed = true)
         every { session.isUnlocked() } returns false
         val databaseKeyStore = mockk<DatabaseKeyStore>(relaxed = true)
@@ -333,6 +362,12 @@ class AppLockViewModelTest {
             future.get(any(), any())
             processRestarter.restart()
         }
+        // Issue #326: the clear+restart recovery path is breadcrumbed with the disableAppLock flag.
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.level == 'W' && it.message == "clearing encrypted cache and restarting (disableAppLock=true)"
+            },
+        )
     }
 
     @Test
@@ -360,6 +395,12 @@ class AppLockViewModelTest {
             processRestarter.restart()
         }
         coVerify(exactly = 0) { settingsRepository.setAppLock(false) }
+        // Issue #326: app-lock stays on here, so the breadcrumb reflects disableAppLock=false.
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.level == 'W' && it.message == "clearing encrypted cache and restarting (disableAppLock=false)"
+            },
+        )
     }
 
     @Test
@@ -372,6 +413,8 @@ class AppLockViewModelTest {
 
         assertIs<AppLockUiState.Unlocked>(vm.uiState.value)
         verify(exactly = 0) { processRestarter.restart() }
+        // Issue #326: every foreground pass with app-lock on records its (non-PII) LockAction decision.
+        assertEquals("app-lock foreground decision: PROCEED", logBuffer.snapshot().single().message)
     }
 
     @Test
@@ -405,6 +448,11 @@ class AppLockViewModelTest {
         assertIs<AppLockUiState.Unlocked>(vm.uiState.value)
         coVerify(exactly = 0) { databaseKeyStore.unlockWithAuth() }
         coVerify(exactly = 0) { databaseKeyStore.sealWithAuth() }
+        // Issue #326: a successful unlock records a breadcrumb that the cache became readable, with
+        // no PII (account id/email never reach this ViewModel).
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("auth seal unlocked; cache readable", entry.message)
     }
 
     @Test
@@ -434,7 +482,6 @@ class AppLockViewModelTest {
 
     @Test
     fun `onAuthenticated clears the cache when the auth-bound key was deleted`() = runTest(dispatcher) {
-        stubLog()
         val (future, syncScheduler) = enqueueingScheduler()
         val session = mockk<PassphraseSession>(relaxed = true)
         every { session.isUnlocked() } returns false
@@ -462,11 +509,15 @@ class AppLockViewModelTest {
             future.get(any(), any())
             processRestarter.restart()
         }
+        // Issue #326: both the classification that made this UNRECOVERABLE and the ViewModel's own
+        // "clearing the cache" breadcrumb are recorded.
+        val messages = logBuffer.snapshot().filter { it.level == 'W' }.map { it.message }
+        assertTrue("auth-sealed passphrase present but key was deleted; cache unrecoverable" in messages)
+        assertTrue("encrypted cache passphrase unrecoverable; clearing cache" in messages)
     }
 
     @Test
     fun `onAuthenticated clears the cache when the auth-bound key was permanently invalidated`() = runTest(dispatcher) {
-        stubLog()
         val (_, syncScheduler) = enqueueingScheduler()
         val session = mockk<PassphraseSession>(relaxed = true)
         every { session.isUnlocked() } returns false
@@ -490,11 +541,12 @@ class AppLockViewModelTest {
 
         coVerify { databaseKeyStore.setClearPending() }
         verify { processRestarter.restart() }
+        // Issue #326: the permanent-invalidation classification is breadcrumbed too.
+        assertTrue(logBuffer.snapshot().any { it.message.startsWith("auth-bound key permanently invalidated") })
     }
 
     @Test
     fun `onAuthenticated re-locks for a retry when the auth window elapsed`() = runTest(dispatcher) {
-        stubLog()
         val gate = mockk<AppLockGate>(relaxed = true)
         every { gate.state } returns LockState.LOCKED
         val session = mockk<PassphraseSession>(relaxed = true)
@@ -520,11 +572,14 @@ class AppLockViewModelTest {
         verify { gate.lock() }
         assertIs<AppLockUiState.Locked>(vm.uiState.value)
         verify(exactly = 0) { processRestarter.restart() }
+        // Issue #326: breadcrumbed with the scrubbed throwable attached (the 3-arg AppLog.w overload),
+        // not just the bare message — the trailing newline is the scrubbed stack trace.
+        val entry = logBuffer.snapshot().single { it.message.startsWith("auth window elapsed before unwrap") }
+        assertTrue(entry.message.contains("\n"), entry.message)
     }
 
     @Test
     fun `onAuthenticated re-locks for a retry on an ambiguous unwrap failure`() = runTest(dispatcher) {
-        stubLog()
         val gate = mockk<AppLockGate>(relaxed = true)
         every { gate.state } returns LockState.LOCKED
         val session = mockk<PassphraseSession>(relaxed = true)
@@ -549,6 +604,12 @@ class AppLockViewModelTest {
         // An ambiguous error must NOT wipe the cache on an otherwise-successful auth: re-lock + retry.
         verify { gate.lock() }
         verify(exactly = 0) { processRestarter.restart() }
+        // Issue #326: the catch-all classification is breadcrumbed too.
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("unexpected failure unwrapping auth-sealed passphrase")
+            },
+        )
     }
 
     @Test
@@ -600,7 +661,6 @@ class AppLockViewModelTest {
 
     @Test
     fun `onAuthenticated re-locks for a retry when arming the auth seal fails`() = runTest(dispatcher) {
-        stubLog()
         val gate = mockk<AppLockGate>(relaxed = true)
         every { gate.state } returns LockState.LOCKED
         val session = mockk<PassphraseSession>(relaxed = true)
@@ -623,6 +683,25 @@ class AppLockViewModelTest {
         verify { gate.lock() }
         assertIs<AppLockUiState.Locked>(vm.uiState.value)
         verify(exactly = 0) { processRestarter.restart() }
+        // Issue #326: arming failures are breadcrumbed too.
+        assertTrue(logBuffer.snapshot().any { it.message.startsWith("arming auth seal failed") })
+    }
+
+    // --- AppLog breadcrumbs carry no PII (issue #326) ---------------------------------------------
+
+    @Test
+    fun `a cache-clear recovery breadcrumb never contains an email address`() = runTest(dispatcher) {
+        // AppLockViewModel only ever sees keystore/auth exceptions and enum decisions — never an
+        // account id or email — so no buffer line it writes should ever contain an "@". This pins that
+        // contract as the ViewModel evolves, rather than relying on code review alone to catch a leak.
+        val vm = clearOnForegroundViewModel()
+
+        vm.onForeground()
+        advanceUntilIdle()
+
+        val snapshot = logBuffer.snapshot()
+        assertTrue(snapshot.isNotEmpty())
+        snapshot.forEach { entry -> assertFalse(entry.message.contains("@"), entry.message) }
     }
 
     /** A [SyncScheduler] whose `syncNow()` returns an [Operation] whose result future can be stubbed. */
@@ -646,9 +725,6 @@ class AppLockViewModelTest {
     ): AppLockViewModel {
         mockkStatic(SystemClock::class)
         every { SystemClock.elapsedRealtime() } returns 1_000L
-        // android.util.Log is a no-op stub that throws "not mocked" in JVM tests; the timeout path logs.
-        mockkStatic(Log::class)
-        every { Log.w(any<String>(), any<String>(), any<Throwable>()) } returns 0
         mockkObject(KeyInvalidationPolicy)
         every { KeyInvalidationPolicy.decide(any(), any(), any(), any()) } returns LockAction.CLEAR_AND_REQUIRE_AUTH
         return viewModel(
@@ -674,7 +750,6 @@ class AppLockViewModelTest {
     ): AppLockViewModel {
         mockkStatic(SystemClock::class)
         every { SystemClock.elapsedRealtime() } returns FOREGROUND_AT
-        stubLog()
         mockkObject(KeyInvalidationPolicy)
         every { KeyInvalidationPolicy.decide(any(), any(), any(), any()) } returns action
         return viewModel(
@@ -684,13 +759,6 @@ class AppLockViewModelTest {
             syncScheduler = syncScheduler,
             processRestarter = processRestarter,
         )
-    }
-
-    /** android.util.Log is a no-op stub that throws "not mocked" in JVM tests; the recovery paths log. */
-    private fun stubLog() {
-        mockkStatic(Log::class)
-        every { Log.w(any<String>(), any<String>()) } returns 0
-        every { Log.w(any<String>(), any<String>(), any<Throwable>()) } returns 0
     }
 
     private companion object {
