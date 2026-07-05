@@ -23,18 +23,41 @@ import org.junit.Test
 import org.libremail.auth.OAuthResult
 import org.libremail.auth.OutlookAuthManager
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/**
+ * Issue #326 migrated this ViewModel's logging to [AppLog]: a [RingLogBuffer] is installed here and
+ * assertions about what got logged are against [logBuffer] — including that a failed sign-in whose
+ * throwable carries the account email never lets that email reach the buffer (the seam's
+ * `StackTraceScrubber` must redact it).
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AccountSetupViewModelTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
+    private val logBuffer = RingLogBuffer()
 
     @Before
-    fun setUp() = Dispatchers.setMain(dispatcher)
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+        // android.util.Log is a no-op stub that throws "not mocked" in JVM tests, and AppLog always
+        // forwards to it; stub every level up front, then install a real buffer so breadcrumbs can be
+        // asserted for real instead of via `verify { Log... }`.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
+    }
 
     @After
     fun tearDown() {
@@ -125,12 +148,15 @@ class AccountSetupViewModelTest {
         assertEquals("outlook:me@outlook.com", vm.state.value.addedAccountId)
         assertNull(vm.state.value.error)
         coVerify { accounts.addOutlookAccount("me@outlook.com", "tok", "{}") }
+        // Issue #326: the success breadcrumb never carries the account email.
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("Outlook account added", entry.message)
+        assertFalse(entry.message.contains("@"))
     }
 
     @Test
     fun `a failed token exchange returns to idle with the error surfaced`() = runTest(dispatcher) {
-        mockkStatic(Log::class)
-        every { Log.d(any(), any(), any()) } returns 0
         val manager = mockk<OutlookAuthManager>(relaxed = true)
         coEvery { manager.exchangeToken(any()) } throws IllegalStateException("Token exchange failed")
         val vm = viewModel(outlookAuthManager = manager)
@@ -141,12 +167,15 @@ class AccountSetupViewModelTest {
         assertEquals(SetupStatus.IDLE, vm.state.value.status)
         assertEquals("Token exchange failed", vm.state.value.error)
         assertNull(vm.state.value.addedAccountId)
+        // Issue #326: the migrated Log.d -> AppLog.d call records a debug breadcrumb in the buffer
+        // (unlike raw Log.d, this survives release builds — only the Logcat mirror is stripped there).
+        val entry = logBuffer.snapshot().single()
+        assertEquals('D', entry.level)
+        assertTrue(entry.message.startsWith("Outlook sign-in failed after redirect"), entry.message)
     }
 
     @Test
     fun `a persistence failure after exchange returns to idle with an error`() = runTest(dispatcher) {
-        mockkStatic(Log::class)
-        every { Log.d(any(), any(), any()) } returns 0
         val manager = mockk<OutlookAuthManager>(relaxed = true)
         coEvery { manager.exchangeToken(any()) } returns
             OAuthResult(email = "me@outlook.com", accessToken = "tok", authStateJson = "{}")
@@ -161,6 +190,26 @@ class AccountSetupViewModelTest {
         assertEquals(SetupStatus.IDLE, vm.state.value.status)
         assertEquals("IMAP verification failed", vm.state.value.error)
     }
+
+    @Test
+    fun `a failure whose message carries the account email is scrubbed before it reaches the buffer`() =
+        runTest(dispatcher) {
+            // Drives a failing Outlook sign-in with a known test email embedded in the thrown
+            // exception's message, and asserts no buffer line contains that address: AppLog.d's
+            // StackTraceScrubber must redact it from the throwable's recorded stack trace text.
+            val knownTestEmail = "me@outlook.com"
+            val manager = mockk<OutlookAuthManager>(relaxed = true)
+            coEvery { manager.exchangeToken(any()) } throws
+                IllegalStateException("Token exchange failed for $knownTestEmail")
+            val vm = viewModel(outlookAuthManager = manager)
+
+            vm.onOutlookResult(mockk<Intent>(relaxed = true))
+            advanceUntilIdle()
+
+            val snapshot = logBuffer.snapshot()
+            assertTrue(snapshot.isNotEmpty())
+            snapshot.forEach { entry -> assertFalse(entry.message.contains(knownTestEmail), entry.message) }
+        }
 
     @Test
     fun `consumeError clears a surfaced error`() {
