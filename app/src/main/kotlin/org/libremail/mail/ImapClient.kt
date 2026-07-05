@@ -34,6 +34,7 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.reporting.AppLog
 import java.util.Properties
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -190,7 +191,7 @@ class ImapClient(private val reuseConnections: Boolean) {
         beforeUid: Long,
         limit: Int,
     ): List<FetchedMessage> = withContext(Dispatchers.IO) {
-        withStore(params) { store ->
+        withStore(params, op = "backfill-page") { store ->
             val mailbox = store.getFolder(folder)
             mailbox.open(Folder.READ_ONLY)
             try {
@@ -270,15 +271,29 @@ class ImapClient(private val reuseConnections: Boolean) {
     /** Fetches a message body by UID from [folder] and marks it \Seen on the server. */
     suspend fun fetchBodyMarkingSeen(params: ImapConnectionParams, folder: String, uid: String): MessageContent =
         withContext(Dispatchers.IO) {
-            withStore(params) { store ->
+            withStore(params, op = "body-fetch") { store ->
                 val mailbox = store.getFolder(folder)
+                val selectStart = System.nanoTime()
                 mailbox.open(Folder.READ_WRITE)
+                val selectMs = (System.nanoTime() - selectStart) / NANOS_PER_MS
                 try {
                     val message = (mailbox as UIDFolder).getMessageByUID(uid.toLong())
                         ?: error("Message $uid not found")
+                    val fetchStart = System.nanoTime()
                     val content = (extractBody(message) ?: MessageContent("", isHtml = false))
                         .copy(attachments = collectAttachments(message))
+                    val fetchMs = (System.nanoTime() - fetchStart) / NANOS_PER_MS
+                    // RFC822.SIZE (server-reported wire size) is the download-budget signal; body char
+                    // count and attachment count round it out. All are numbers — never message content.
+                    val rfc822Bytes = runCatching { message.size }.getOrDefault(-1)
+                    val flagStart = System.nanoTime()
                     message.setFlag(Flags.Flag.SEEN, true)
+                    val flagMs = (System.nanoTime() - flagStart) / NANOS_PER_MS
+                    AppLog.d(
+                        PERF_TAG,
+                        "body-fetch select=${selectMs}ms body=${fetchMs}ms flag=${flagMs}ms " +
+                            "rfc822=${rfc822Bytes}B chars=${content.body.length} att=${content.attachments.size}",
+                    )
                     content
                 } finally {
                     runCatching { mailbox.close(false) }
@@ -292,7 +307,7 @@ class ImapClient(private val reuseConnections: Boolean) {
      */
     suspend fun fetchBodyPeek(params: ImapConnectionParams, folder: String, uid: String): MessageContent =
         withContext(Dispatchers.IO) {
-            withStore(params) { store ->
+            withStore(params, op = "prefetch-body") { store ->
                 val mailbox = store.getFolder(folder)
                 mailbox.open(Folder.READ_ONLY)
                 try {
@@ -314,7 +329,7 @@ class ImapClient(private val reuseConnections: Boolean) {
         uid: String,
         partIndex: Int,
     ): DownloadedAttachment = withContext(Dispatchers.IO) {
-        withStore(params) { store ->
+        withStore(params, op = "attachment") { store ->
             val mailbox = store.getFolder(folder)
             mailbox.open(Folder.READ_ONLY)
             try {
@@ -337,7 +352,7 @@ class ImapClient(private val reuseConnections: Boolean) {
 
     suspend fun setFlag(params: ImapConnectionParams, folder: String, uid: String, flag: Flags.Flag, value: Boolean) =
         withContext(Dispatchers.IO) {
-            withStore(params) { store ->
+            withStore(params, op = "flag") { store ->
                 val mailbox = store.getFolder(folder)
                 mailbox.open(Folder.READ_WRITE)
                 try {
@@ -597,21 +612,43 @@ class ImapClient(private val reuseConnections: Boolean) {
     }
 
     /**
+     * Live count of connect-per-operation IMAP connections currently open through [withStore] (this
+     * excludes the single long-lived IDLE connection, which does not go through here). Logged per op so
+     * a debug report can show how close we run to a provider's simultaneous-connection ceiling — Gmail
+     * allows 15 — under concurrent backfill + interactive load.
+     */
+    private val liveConnectionCount = AtomicInteger(0)
+
+    /**
      * Runs [block] against a connected [Store]. With the reuse flag OFF (default) this is the original
      * behaviour: a fresh, authenticated connection per call, torn down in `finally`. With it ON, the
      * call borrows a kept-alive per-account connection from [connectionCache] (established once, reused
      * across folder-opens) instead — see issue #125.
+     *
+     * [op] is a short, PII-free label for the caller's intent (e.g. `body-fetch`, `backfill-page`) used
+     * only in the perf breadcrumb below, so a debug report can attribute latency to connection
+     * establishment (`connect`) vs the operation's own server work (`work`).
      */
-    private suspend fun <T> withStore(params: ImapConnectionParams, block: (Store) -> T): T {
+    private suspend fun <T> withStore(params: ImapConnectionParams, op: String = "imap", block: (Store) -> T): T {
         val cache = connectionCache
         return if (cache != null) {
             cache.withStore(params, block)
         } else {
+            // Time CONNECT + TLS + LOGIN separately from the op's own work, and record how many
+            // connect-per-op sockets are live at once, so a slow op can be attributed and the provider
+            // connection ceiling observed. Logged in `finally` so a thrown/timed-out op is captured too.
+            val connectStart = System.nanoTime()
             val store = openConnectedStore(params)
+            val connectMs = (System.nanoTime() - connectStart) / NANOS_PER_MS
+            val live = liveConnectionCount.incrementAndGet()
+            val workStart = System.nanoTime()
             try {
                 block(store)
             } finally {
+                val workMs = (System.nanoTime() - workStart) / NANOS_PER_MS
+                AppLog.d(PERF_TAG, "$op connect=${connectMs}ms work=${workMs}ms live=$live")
                 runCatching { store.close() }
+                liveConnectionCount.decrementAndGet()
             }
         }
     }
@@ -664,6 +701,8 @@ class ImapClient(private val reuseConnections: Boolean) {
     private companion object {
         const val TIMEOUT_MS = "15000"
         const val TAG = "LibreMailIdle"
+        const val PERF_TAG = "ImapPerf"
+        const val NANOS_PER_MS = 1_000_000L
     }
 }
 

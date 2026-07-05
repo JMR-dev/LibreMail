@@ -4,6 +4,7 @@ package org.libremail.data.repository
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -19,6 +20,7 @@ import jakarta.mail.Flags
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.local.dao.AccountDao
@@ -96,6 +98,17 @@ class MailRepositoryImplCoverageTest {
         signatureRepository = signatureRepository,
         attachmentUriGrants = mockk<AttachmentUriGrants>(relaxed = true),
     )
+
+    // openMessage now breadcrumbs via AppLog (issue #358); android.util.Log is a no-op stub under plain
+    // JVM tests, so mock it class-wide so no test crashes on the unmocked method.
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+    }
 
     @After
     fun tearDown() = unmockkAll()

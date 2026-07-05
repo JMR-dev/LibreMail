@@ -19,6 +19,7 @@ import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
+import org.libremail.reporting.AppLog
 import org.libremail.ui.navigation.Routes
 import java.io.File
 import javax.inject.Inject
@@ -74,6 +75,10 @@ class ReaderViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            // Time the spinner: from launch to the state update that clears `loading` — what the user
+            // actually waits through. Covers openMessage (first-open body fetch) plus inline-image
+            // resolution, so a slow render can be split from a slow open in a debug report (issue #358).
+            val startNanos = System.nanoTime()
             repository.openMessage(messageId).fold(
                 onSuccess = { message ->
                     // Resolve inline cid: images BEFORE the first render and publish them in the SAME
@@ -86,6 +91,11 @@ class ReaderViewModel @Inject constructor(
                         emptyMap()
                     }
                     _state.update { it.copy(loading = false, message = message, inlineImages = images) }
+                    AppLog.d(
+                        READER_TAG,
+                        "reader ready took=${(System.nanoTime() - startNanos) / NANOS_PER_MS}ms " +
+                            "html=${message.isHtml} inline=${images.size}",
+                    )
                 },
                 onFailure = { e ->
                     _state.update {
@@ -95,6 +105,10 @@ class ReaderViewModel @Inject constructor(
                             e.message ?: "Could not load message",
                         )
                     }
+                    AppLog.w(
+                        READER_TAG,
+                        "reader load failed took=${(System.nanoTime() - startNanos) / NANOS_PER_MS}ms",
+                    )
                 },
             )
         }
@@ -154,5 +168,10 @@ class ReaderViewModel @Inject constructor(
             repository.deleteMessage(messageId)
             _state.update { it.copy(deleted = true) }
         }
+    }
+
+    private companion object {
+        const val READER_TAG = "Reader"
+        const val NANOS_PER_MS = 1_000_000L
     }
 }
