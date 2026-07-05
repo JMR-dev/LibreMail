@@ -2,6 +2,7 @@
 package org.libremail.data.repository
 
 import android.content.Context
+import android.util.Log
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import androidx.paging.testing.asSnapshot
@@ -12,13 +13,17 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
 import jakarta.mail.Flags
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AttachmentDao
@@ -47,6 +52,9 @@ import org.libremail.mail.FetchedFolder
 import org.libremail.mail.ImapClient
 import org.libremail.mail.MessageContent
 import org.libremail.mail.ReplyContext
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
+import org.libremail.reporting.accountLogRef
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.assertEquals
@@ -82,6 +90,20 @@ class MailRepositoryImplTest {
         // Grant-release wiring (deleteDraft / cancelOutboxMessage) is covered by MailRepositoryGrantsTest.
         attachmentUriGrants = mockk(relaxed = true),
     )
+
+    // openMessage now breadcrumbs via AppLog (issue #358); android.util.Log is a no-op stub under plain
+    // JVM tests, so mock it class-wide so no test crashes on the unmocked method.
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
 
     @Test
     fun `pagedUnifiedFolderMessages maps the paged summaries to domain messages`() = runTest {
@@ -212,6 +234,30 @@ class MailRepositoryImplTest {
         // The UID (5) must be resolved against the message's folder (Archive), since IMAP UIDs are
         // unique only within a folder.
         coVerify { imapClient.fetchBodyMarkingSeen(any(), "Archive", "5") }
+    }
+
+    @Test
+    fun `openMessage breadcrumbs a PII-free open via the account ref and folder label`() = runTest {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        val id = "acct:INBOX:7"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchBodyMarkingSeen(any(), "INBOX", "7") } returns
+            MessageContent("Body text", isHtml = false)
+        coEvery { messageDao.updateBody(id, any(), any(), any()) } just Runs
+        coEvery { messageDao.setRead(id, true) } just Runs
+
+        repository.openMessage(id)
+
+        val breadcrumb = buffer.snapshot().map { it.message }.single { it.startsWith("openMessage ") }
+        // Account via the hashed accountLogRef (never the raw id), system folder by name, branch + timing.
+        assertTrue(breadcrumb.contains(accountLogRef("acct")), breadcrumb)
+        assertTrue(breadcrumb.contains("folder=INBOX"), breadcrumb)
+        assertTrue(breadcrumb.contains("fetchedBody=true"), breadcrumb)
+        assertTrue(breadcrumb.contains("took="), breadcrumb)
     }
 
     @Test

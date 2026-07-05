@@ -49,6 +49,14 @@ class ImapClientTest {
         greenMail = GreenMail(ServerSetupTest.SMTP_IMAP)
         greenMail.start()
         greenMail.setUser("alice@example.org", "secret")
+
+        // Every IMAP op now breadcrumbs through AppLog (per-op connect/work timings, issue #358), and
+        // android.util.Log is a no-op stub under plain JVM tests. Mock it class-wide — fully qualified so
+        // this file still never imports android.util.Log — so no test crashes on the unmocked method.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.d(any(), any()) } returns 0
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
     }
 
     @After
@@ -100,6 +108,35 @@ class ImapClientTest {
 
         assertTrue(content.body.contains("quick brown fox"), "body=${content.body}")
         assertTrue(client.fetchRecent(params(), "INBOX", limit = 50).first().isRead, "should be marked read")
+    }
+
+    @Test
+    fun `fetchBodyMarkingSeen breadcrumbs connect and phase timings without leaking PII`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Secret subject", "Body.")
+        greenMail.waitForIncomingEmail(1)
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first().uid
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+
+        client.fetchBodyMarkingSeen(params(), "INBOX", uid)
+
+        val messages = buffer.snapshot().map { it.message }
+        // withStore labels the op and splits connect (CONNECT+TLS+LOGIN) from work — timings only.
+        assertTrue(
+            messages.any { it.startsWith("body-fetch connect=") && it.contains("work=") && it.contains("live=") },
+            "messages=$messages",
+        )
+        // fetchBodyMarkingSeen adds the select/body/flag phase split plus PII-free size counts.
+        assertTrue(
+            messages.any { it.startsWith("body-fetch select=") && it.contains("rfc822=") && it.contains("att=") },
+            "messages=$messages",
+        )
+        // Breadcrumbs are numbers and fixed labels only — never the subject, sender, or recipient.
+        messages.forEach { message ->
+            assertFalse(message.contains("Secret subject"), message)
+            assertFalse(message.contains("bob@example.org"), message)
+            assertFalse(message.contains("alice@example.org"), message)
+        }
     }
 
     @Test

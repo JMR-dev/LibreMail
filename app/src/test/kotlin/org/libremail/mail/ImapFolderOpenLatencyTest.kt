@@ -4,6 +4,9 @@ package org.libremail.mail
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -48,6 +51,14 @@ class ImapFolderOpenLatencyTest {
         greenMail.setUser("alice@example.org", "secret")
         // All IMAP traffic goes through the proxy so we can count it; the proxy forwards to GreenMail.
         proxy = CountingImapProxy(backendHost = "127.0.0.1", backendPort = greenMail.imap.port)
+
+        // Every IMAP op now breadcrumbs through AppLog (per-op connect/work timings, issue #358), and
+        // android.util.Log is a no-op stub under plain JVM tests. Mock it class-wide — fully qualified so
+        // this file still never imports android.util.Log — so no test crashes on the unmocked method.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.d(any(), any()) } returns 0
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
     }
 
     @After
@@ -55,6 +66,7 @@ class ImapFolderOpenLatencyTest {
         runBlocking { reuseClient.closeReusedConnections() } // release any kept-alive socket before the server stops
         proxy.close()
         greenMail.stop()
+        unmockkAll()
     }
 
     /** Points [ImapClient] at the counting proxy rather than directly at GreenMail. */

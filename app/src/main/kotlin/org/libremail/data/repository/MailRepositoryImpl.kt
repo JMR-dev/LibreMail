@@ -41,6 +41,7 @@ import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
+import org.libremail.data.sync.logSafeFolderLabel
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.Draft
 import org.libremail.domain.model.Folder
@@ -56,6 +57,8 @@ import org.libremail.domain.model.UnreadCount
 import org.libremail.domain.model.sanitizeAttachmentName
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -153,11 +156,15 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun openMessage(id: String): Result<Message> = withContext(Dispatchers.IO) {
         runCatching {
+            // Time the whole open so a debug report shows what the reader's spinner is waiting on — a
+            // cached open is a local read; a first open blocks on the IMAP body fetch below (issue #358).
+            val startNanos = System.nanoTime()
             // Route on the body-less projection: a cached, already-read message needs no account, no
             // credentials, and no network, so it skips the Keystore decrypt + DataStore read that
             // resolving connection params costs (issue #186). Only the fetch / SEEN-push branches below
             // pull the account and resolve params, and each does so lazily right where it is needed.
             val routing = messageDao.getRouting(id) ?: error("Message not found")
+            val fetchedBody = !routing.bodyFetched
             if (!routing.bodyFetched || !routing.isRead) {
                 val account = accountDao.getById(routing.accountId)?.toDomain()
                 if (account != null && !routing.bodyFetched) {
@@ -177,7 +184,14 @@ class MailRepositoryImpl @Inject constructor(
                 }
             }
             // The single full-body read, reserved for the value the reader actually renders (issue #186).
-            messageDao.getById(id)?.toDomain() ?: error("Message not found")
+            val message = messageDao.getById(id)?.toDomain() ?: error("Message not found")
+            // PII-free: hashed account ref, system-folder label only, plus the branch taken and elapsed ms.
+            AppLog.i(
+                READER_TAG,
+                "openMessage ${accountLogRef(routing.accountId)} folder=${logSafeFolderLabel(routing.folder)} " +
+                    "fetchedBody=$fetchedBody took=${(System.nanoTime() - startNanos) / NANOS_PER_MS}ms",
+            )
+            message
         }
     }
 
@@ -534,6 +548,10 @@ class MailRepositoryImpl @Inject constructor(
 }
 
 private const val SEARCH_LIMIT = 50
+
+/** Perf-breadcrumb tag and ns→ms divisor for the reader-open timing (issue #358). */
+private const val READER_TAG = "MailReader"
+private const val NANOS_PER_MS = 1_000_000L
 
 /** Rows per page for the unified inbox (issue #124) — a page is a few screenfuls of message rows. */
 private const val MAILBOX_PAGE_SIZE = 40

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.reader
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -25,6 +28,8 @@ import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
 import org.libremail.domain.model.ReplyMode
 import org.libremail.domain.repository.MailRepository
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import org.libremail.ui.navigation.Routes
 import java.io.File
 import kotlin.test.assertEquals
@@ -43,10 +48,22 @@ class ReaderViewModelTest {
     )
 
     @Before
-    fun setUp() = Dispatchers.setMain(dispatcher)
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+        // ReaderViewModel breadcrumbs open latency via AppLog on init (issue #358); android.util.Log is a
+        // no-op stub under plain JVM tests, so mock it class-wide so VM construction never crashes.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+    }
 
     @After
-    fun tearDown() = Dispatchers.resetMain()
+    fun tearDown() {
+        Dispatchers.resetMain()
+        unmockkAll()
+    }
 
     private fun attachment(partIndex: Int) =
         Attachment(messageId, partIndex, "file$partIndex.bin", "application/octet-stream", 10L)
@@ -174,5 +191,24 @@ class ReaderViewModelTest {
 
         assertEquals(ReaderEvent.ComposeFailed("boom"), vm.events.first())
         assertEquals(false, vm.state.value.composing)
+    }
+
+    @Test
+    fun `a successful load breadcrumbs the reader-ready latency`() = runTest(dispatcher) {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        val repo = mockk<MailRepository>(relaxed = true)
+        coEvery { repo.openMessage(messageId) } returns Result.success(message)
+        every { repo.observeAttachments(messageId) } returns flowOf(emptyList())
+        coEvery { repo.downloadedAttachmentParts(messageId) } returns emptySet()
+
+        viewModel(repo)
+        advanceUntilIdle()
+
+        val messages = buffer.snapshot().map { it.message }
+        assertTrue(
+            messages.any { it.startsWith("reader ready took=") && it.contains("html=") },
+            "messages=$messages",
+        )
     }
 }

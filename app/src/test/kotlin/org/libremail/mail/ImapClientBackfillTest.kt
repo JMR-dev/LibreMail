@@ -3,6 +3,9 @@ package org.libremail.mail
 
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.ServerSetupTest
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Session
@@ -34,10 +37,21 @@ class ImapClientBackfillTest {
         greenMail = GreenMail(ServerSetupTest.SMTP_IMAP)
         greenMail.start()
         greenMail.setUser("alice@example.org", "secret")
+
+        // Every IMAP op now breadcrumbs through AppLog (per-op connect/work timings, issue #358), and
+        // android.util.Log is a no-op stub under plain JVM tests. Mock it class-wide — fully qualified so
+        // this file still never imports android.util.Log — so no test crashes on the unmocked method.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.d(any(), any()) } returns 0
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
     }
 
     @After
-    fun tearDown() = greenMail.stop()
+    fun tearDown() {
+        greenMail.stop()
+        unmockkAll()
+    }
 
     private fun params() = ImapConnectionParams(
         host = "127.0.0.1",
