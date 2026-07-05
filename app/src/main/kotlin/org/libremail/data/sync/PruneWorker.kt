@@ -9,6 +9,7 @@ import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import org.libremail.data.security.EncryptedCacheGuard
+import org.libremail.reporting.AppLog
 
 /**
  * Enforces device-only retention (issue #13) by running [MailPruner]. Purely local — it never
@@ -28,10 +29,23 @@ class PruneWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         // Can't open the encrypted DB without the user present — retry later rather than parking a
         // WorkManager thread (which also wedges the shared serial executor) on an unsatisfiable await.
-        if (cacheGuard.isCacheLocked()) return Result.retry()
+        if (cacheGuard.isCacheLocked()) {
+            AppLog.i(TAG, "prune deferred: cache locked")
+            return Result.retry()
+        }
         return runCatching { pruner.get().prune() }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
+            onSuccess = {
+                AppLog.i(TAG, "prune worker: success")
+                Result.success()
+            },
+            onFailure = { error ->
+                AppLog.w(TAG, "prune worker: retry", error)
+                Result.retry()
+            },
         )
+    }
+
+    private companion object {
+        const val TAG = "PruneWorker"
     }
 }
