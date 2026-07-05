@@ -5,12 +5,17 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.util.Log
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
@@ -28,11 +33,23 @@ import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.io.IOException
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+/**
+ * Also covers issue #329's net-new [AppLog] breadcrumbs: every test exercises real sync code, so
+ * `android.util.Log` (a no-op stub under plain JVM unit tests) is statically mocked here for the whole
+ * class, mirroring [org.libremail.reporting.AppLogTest]. [logBuffer] is fresh per test (a new
+ * [MailSyncerTest] instance per `@Test`, per JUnit4) and installed before every test so the dedicated
+ * breadcrumb tests below can assert against it directly.
+ */
 class MailSyncerTest {
+
+    private val logBuffer = RingLogBuffer()
 
     private val account = AccountEntity(
         id = "acct",
@@ -42,6 +59,21 @@ class MailSyncerTest {
         imap = ServerConfigEmbedded("imap.example.org", 993, "SSL_TLS"),
         smtp = ServerConfigEmbedded("smtp.example.org", 465, "SSL_TLS"),
     )
+
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
 
     /** The IMAP client of the most recently built [syncer], for verifying the fetch window size. */
     private lateinit var lastImapClient: ImapClient
@@ -381,5 +413,62 @@ class MailSyncerTest {
         return mockk<Context>(relaxed = true).also {
             every { it.getSystemService(ConnectivityManager::class.java) } returns manager
         }
+    }
+
+    // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
+
+    @Test
+    fun `syncFolder records a debug breadcrumb with the account ref, folder, and fetched count`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+        val fetched = listOf(
+            FetchedMessage("1", "Ada", "ada@example.org", "Secret subject", 1_000L, isRead = true, isFlagged = false),
+        )
+
+        syncer(FetchPolicy.ON_DEMAND, repo, fetched = fetched).syncFolder("acct", "INBOX")
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('D', entry.level)
+        assertTrue(entry.message.contains("folder=INBOX"), entry.message)
+        assertTrue(entry.message.contains("fetched=1"), entry.message)
+        assertNoPii(entry.message)
+    }
+
+    @Test
+    fun `syncAll logs a start breadcrumb and a done breadcrumb with the fetched total`() = runTest {
+        val syncer = syncAllSyncer(accounts = listOf(accountEntity("one"), accountEntity("two")))
+
+        syncer.syncAll()
+
+        val snapshot = logBuffer.snapshot()
+        val start = snapshot.first { it.message.startsWith("sync all:") }
+        val done = snapshot.first { it.message.startsWith("sync all done:") }
+        assertEquals('I', start.level)
+        assertEquals("sync all: 2 accounts", start.message)
+        assertEquals('I', done.level)
+        assertEquals("sync all done: fetched=2", done.message)
+        snapshot.forEach { assertNoPii(it.message) }
+    }
+
+    @Test
+    fun `syncAll logs a warning breadcrumb with the scrubbed failure when every account fails`() = runTest {
+        val syncer = syncAllSyncer(
+            accounts = listOf(accountEntity("bad1"), accountEntity("bad2")),
+            failingIds = setOf("bad1", "bad2"),
+        )
+
+        syncer.syncAll()
+
+        val entry = logBuffer.snapshot().first { it.message.startsWith("sync all failed") }
+        assertEquals('W', entry.level)
+        // The throwable's class survives the scrub; its free-text message does not (issue #325).
+        assertTrue(entry.message.contains("IOException"), entry.message)
+        assertFalse(entry.message.contains("no network"), entry.message)
+        logBuffer.snapshot().forEach { assertNoPii(it.message) }
+    }
+
+    /** No test fixture's email address or host may ever reach a log line — the hard PII rule. */
+    private fun assertNoPii(message: String) {
+        assertFalse(message.contains("@example.org"), message)
+        assertFalse(message.contains("example.org"), message)
     }
 }
