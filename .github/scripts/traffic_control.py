@@ -14,6 +14,30 @@ that touches `gh`: it gathers the snapshot, applies the cancellations, and runs 
 bounded hold-back poll loop. Feed the core a snapshot JSON (`--dry-run`) to see its
 decisions with zero network.
 
+TWO MODES
+---------
+* ``--mode orchestrate`` (default; unchanged behaviour): the in-run `traffic-control`
+  job of `ci.yml`. Orders runner ACCESS for the PR whose run is already executing —
+  PASS 1 preemption + PASS 2 hold-back (below). This is `run_live`.
+* ``--mode trigger`` (issue #349): the *scheduler* (companion `ci-trigger.yml`, run
+  after each auto-update and on a cron backstop). It OWNS CI *triggering*: it
+  (re-)triggers CI for the highest-priority PR(s) whose head SHA has absent/stale
+  required checks — a few at a time (an inflight cap), in the SAME priority order —
+  via a `workflow_dispatch`. This is `run_trigger` / the pure `select_triggers`.
+
+WHY --mode trigger EXISTS (issue #349): `autoupdate.yml` now updates PR branches with the
+built-in GITHUB_TOKEN instead of a PAT, so an update push no longer auto-retriggers CI
+(GitHub's anti-recursion rule) — killing the merge-cascade that cancelled every open PR's
+run on every merge. The cost is that a freshly-updated PR's required checks go stale/absent
+on its NEW head SHA, so this scheduler deliberately (re-)triggers them in priority order (a
+poor-man's merge queue). A `workflow_dispatch` is EXEMPT from the anti-recursion rule, so
+even the GITHUB_TOKEN's dispatch DOES start the run — no PAT needed (the workflow grants its
+token `actions: write`). FAIL-OPEN, structurally: `ci.yml` KEEPS its `on: pull_request`
+trigger, so any human push — and a brand-new PR — always gets CI regardless of this
+scheduler; the scheduler only fills the gap left by GITHUB_TOKEN auto-updates and can never
+leave a PR un-triggerable. Fork PRs (no token/secret access) are skipped by the scheduler and
+left to `on: pull_request`, so they are never wedged either.
+
 ORDER OF OPERATIONS (issue #342)
 --------------------------------
 1. Effective priority orders everything: the lowest-numbered `P0`-`P9` label present
@@ -75,6 +99,15 @@ _STATUS_RANK = {RUNNING: 0, QUEUED: 1, NONE: 2}
 # createdAt sentinel so a PR with an unknown timestamp sorts LAST (never wrongly
 # "oldest"/front, so it yields rather than preempts another PR's front slot).
 _FAR_FUTURE = "9999-12-31T23:59:59Z"
+# Run conclusions that count as a FINAL VERDICT on a head SHA (issue #349, --mode trigger).
+# A SHA with one of these is NOT re-triggered: success = green, failure/timeout/etc. = the
+# author's to fix — auto-retriggering a real failure would waste runners and could loop.
+# Everything else a completed run can report (cancelled / skipped / stale / startup_failure /
+# null) is treated as "no verdict", so a SHA whose only runs are those — or that has no run at
+# all (absent checks after a GITHUB_TOKEN auto-update) — is NEEDY and gets (re-)triggered.
+VERDICT_CONCLUSIONS = frozenset(
+    {"success", "failure", "timed_out", "action_required", "neutral"}
+)
 
 
 @dataclass(frozen=True)
@@ -247,6 +280,116 @@ def decide(
         cancel_run_ids=tuple(cancels),
         blockers=tuple(blockers),
         proceed=not blockers,
+    )
+
+
+# ── Pure TRIGGER-decision core (issue #349, --mode trigger) ──────────────────
+def classify_sha_runs(runs: list[dict]) -> tuple[str, tuple[int, ...], bool]:
+    """PURE. Summarise the CI runs on ONE head SHA. Returns (run_status, active_run_ids,
+    needy):
+      * run_status: RUNNING if any run is in progress, else QUEUED if any is queued/pending,
+        else NONE;
+      * active_run_ids: databaseIds of the non-completed (running/queued) runs;
+      * needy: True iff the SHA has NO active run AND NO run with a final VERDICT — i.e. its
+        required checks are absent/stale (a fresh SHA after a GITHUB_TOKEN auto-update) or
+        only cancelled/infra-aborted, so the PR cannot merge until CI is (re-)triggered on
+        that SHA. A success/failure/timeout verdict is NOT needy (green, or the author's to
+        fix — never auto-retried)."""
+    status = NONE
+    active_ids: list[int] = []
+    has_verdict = False
+    for r in runs:
+        raw = (r.get("status") or "").lower()
+        if raw == "completed":
+            if (r.get("conclusion") or "").lower() in VERDICT_CONCLUSIONS:
+                has_verdict = True
+            continue
+        norm = _normalise_status(raw)          # in_progress -> running; else queued
+        if _STATUS_RANK[norm] < _STATUS_RANK[status]:
+            status = norm
+        rid = r.get("databaseId")
+        if rid is not None:
+            active_ids.append(int(rid))
+    needy = not active_ids and not has_verdict
+    return status, tuple(active_ids), needy
+
+
+def _trigger_order_key(pr: PullRequest) -> tuple[int, str, int]:
+    """Trigger ordering: highest priority first (lowest effective-priority number), then
+    OLDEST createdAt first (the longest-waiting PR at a level goes first — the same-level
+    fairness / anti-starvation rule), then PR number as a stable final tiebreak."""
+    return (effective_priority(pr), pr.created_at or _FAR_FUTURE, pr.number)
+
+
+@dataclass(frozen=True)
+class TriggerDecision:
+    """PURE output of `select_triggers`: which PR(s) the scheduler should (re-)trigger CI
+    for right now, in order, plus any strictly-lower runs a P0 emergency preempts to free a
+    runner. Exercised by `--mode trigger --dry-run` and the unit tests."""
+
+    trigger_numbers: tuple[int, ...] = ()
+    cancel_run_ids: tuple[int, ...] = ()
+    inflight_numbers: tuple[int, ...] = ()
+    needy_numbers: tuple[int, ...] = ()
+    skipped_fork_numbers: tuple[int, ...] = ()
+    slots: int = 0
+    max_inflight: int = 0
+
+
+def select_triggers(
+    all_prs: list[PullRequest],
+    needy: "set[int] | frozenset[int]",
+    *,
+    max_inflight: int,
+    forks: "set[int] | frozenset[int]" = frozenset(),
+) -> TriggerDecision:
+    """PURE. Choose the PR(s) to (re-)trigger CI for now — a poor-man's merge queue over the
+    existing priority model. No network / clock / subprocess, so it is exhaustively unit-
+    tested (see TestSelectTriggers / TestTriggerStarvation).
+
+    * inflight = PRs already running/queued on their head SHA — they occupy the cap.
+    * candidates = NEEDY PRs (absent/stale checks on their head SHA) that are not already
+      running and are not forks (forks have no token/secret access — see `run_trigger`).
+    * order = effective priority, then oldest createdAt, then number (`_trigger_order_key`).
+    * P0 = EMERGENCY: always triggered, BYPASSING the cap, and it PREEMPTS its strictly-lower
+      OTHER runs (reusing `runs_to_cancel`) so a runner frees for it immediately.
+    * P1–P10 fill only the remaining ``slots = max_inflight - len(inflight)``; the rest wait
+      for a later pass.
+
+    STARVATION is bounded, not by aging but structurally: triggering a PR gives its head SHA
+    a run, so it LEAVES the needy set; between merges the needy set only shrinks, and the
+    scheduler re-runs on every auto-update plus a cron backstop, so every eligible PR is
+    triggered within a bounded number of passes (proved by TestTriggerStarvation). Ordering
+    is still by priority, so higher-priority PRs are simply served first, never exclusively
+    forever (a served PR stops being needy until its next push/auto-update)."""
+    cap = max(1, max_inflight)
+    inflight = [p for p in all_prs if p.run_status in ACTIVE]
+    candidates = [
+        p for p in all_prs
+        if p.number in needy and p.run_status not in ACTIVE and p.number not in forks
+    ]
+    ordered = sorted(candidates, key=_trigger_order_key)
+    emergencies = [p for p in ordered if effective_priority(p) == TOP_PRIORITY]
+    normal = [p for p in ordered if effective_priority(p) != TOP_PRIORITY]
+    slots = max(0, cap - len(inflight))
+    chosen = emergencies + normal[:slots]      # P0 bypasses the cap; P1–P10 fill free slots
+
+    cancel_ids: list[int] = []
+    seen: set[int] = set()
+    for emergency in emergencies:              # P0 preempts its strictly-lower active runs
+        for rid in runs_to_cancel(emergency, all_prs):
+            if rid not in seen:
+                seen.add(rid)
+                cancel_ids.append(rid)
+
+    return TriggerDecision(
+        trigger_numbers=tuple(p.number for p in chosen),
+        cancel_run_ids=tuple(cancel_ids),
+        inflight_numbers=tuple(sorted(p.number for p in inflight)),
+        needy_numbers=tuple(p.number for p in ordered),
+        skipped_fork_numbers=tuple(sorted(n for n in needy if n in forks)),
+        slots=slots,
+        max_inflight=cap,
     )
 
 
@@ -475,6 +618,155 @@ def run_dry(text: str) -> int:
     return 0
 
 
+# ── --mode trigger: the PAT-free scheduler shell (issue #349) ────────────────
+def _gh_ok(args: list[str]) -> bool:
+    """Run `gh <args>` for its side effect (no JSON parse). Returns True on exit 0; never
+    raises — the scheduler fails open on any I/O error."""
+    try:
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+    except (OSError, ValueError) as exc:
+        _log(f"::warning::gh invocation failed ({' '.join(args[:2])}): {exc}")
+        return False
+    if proc.returncode != 0:
+        _log(f"::warning::gh exited {proc.returncode} ({' '.join(args[:3])}): "
+             f"{proc.stderr.strip()}")
+        return False
+    return True
+
+
+def _ci_workflow_file() -> str:
+    return os.environ.get("CI_WORKFLOW_FILE", "ci.yml")
+
+
+def gather_trigger_snapshot() -> tuple[list[PullRequest], set[int], set[int], dict[int, dict]]:
+    """Build (all_prs, needy, forks, meta) from live gh data for the trigger scheduler.
+      * all_prs: PullRequest snapshots whose run_status / run_ids reflect the runs on each
+        PR's CURRENT head SHA (so 'inflight' means a live run on the mergeable SHA, never a
+        stale one on a superseded SHA);
+      * needy: PR numbers whose head SHA has absent/stale checks (must be (re-)triggered);
+      * forks: cross-repository PR numbers — no token/secret access, so NOT token-triggerable;
+      * meta: number -> {headRefName, headRefOid} for the dispatch I/O.
+    Returns empty structures (never raises) if gh can't be reached — the caller fails open."""
+    prs = _gh_json([
+        "pr", "list", "--state", "open", "--limit", "300",
+        "--json", "number,headRefName,headRefOid,isCrossRepository,labels,isDraft,createdAt",
+    ])
+    if prs is None:
+        return [], set(), set(), {}
+    runs = _gh_json([
+        "run", "list", "--workflow", _ci_workflow_file(), "--limit", "300",
+        "--json", "databaseId,status,conclusion,headSha,headBranch,event",
+    ]) or []
+    by_sha: dict[str, list[dict]] = {}
+    for row in runs:
+        sha = row.get("headSha")
+        if sha:
+            by_sha.setdefault(sha, []).append(row)
+
+    all_prs: list[PullRequest] = []
+    needy: set[int] = set()
+    forks: set[int] = set()
+    meta: dict[int, dict] = {}
+    for obj in prs:
+        number = int(obj["number"])
+        sha = obj.get("headRefOid") or ""
+        status, run_ids, is_needy = classify_sha_runs(by_sha.get(sha, []))
+        all_prs.append(PullRequest.from_json(
+            {**obj, "runStatus": status, "runIds": list(run_ids)}))
+        meta[number] = {
+            "headRefName": obj.get("headRefName") or "",
+            "headRefOid": sha,
+        }
+        if obj.get("isCrossRepository"):
+            forks.add(number)
+        if is_needy:
+            needy.add(number)
+    return all_prs, needy, forks, meta
+
+
+def _dispatch_ci(pr_number: int, head_ref: str, head_sha: str) -> bool:
+    """Trigger `ci.yml` for one PR via a `workflow_dispatch` on the PR's head branch. A
+    workflow_dispatch is exempt from GitHub's anti-recursion rule, so even the built-in
+    GITHUB_TOKEN's dispatch DOES start a run — no PAT required (the workflow grants its token
+    `actions: write`). Running on the head branch puts the run's checks on the PR head SHA, so
+    they satisfy branch protection's required checks."""
+    if not head_ref:
+        _log(f"::warning::PR #{pr_number} has no head branch — cannot dispatch; skipping.")
+        return False
+    ok = _gh_ok([
+        "workflow", "run", _ci_workflow_file(), "--ref", head_ref,
+        "-f", f"pr={pr_number}",
+        "-f", f"head_sha={head_sha}",
+        "-f", "reason=traffic-controller",
+    ])
+    if ok:
+        short = head_sha[:8] if head_sha else "?"
+        _log(f"    triggered CI for #{pr_number} on {head_ref} (head {short}).")
+    return ok
+
+
+def run_trigger() -> int:
+    """The scheduler shell (companion `ci-trigger.yml`): pick the highest-priority needy
+    PR(s) within the inflight cap and (re-)trigger their CI via workflow_dispatch; a P0
+    emergency additionally preempts its strictly-lower runs. ALWAYS returns 0 — the scheduler
+    must never wedge CI, and structurally it cannot: `ci.yml` keeps `on: pull_request`, so any
+    human push (and a brand-new PR) still gets CI independently of this scheduler."""
+    max_inflight = _positive_int("MAX_INFLIGHT_RUNS", 2)
+    all_prs, needy, forks, meta = gather_trigger_snapshot()
+    if not all_prs:
+        _log("No open PRs (or could not list them) — nothing to trigger.")
+        return 0
+
+    dec = select_triggers(all_prs, needy, max_inflight=max_inflight, forks=forks)
+    _log(f"Open PRs: {len(all_prs)} | needy (absent/stale checks): {list(dec.needy_numbers)} "
+         f"| inflight: {list(dec.inflight_numbers)} | cap {dec.max_inflight}, "
+         f"free slots {dec.slots}.")
+    if dec.skipped_fork_numbers:
+        _log(f"Fork PR(s) needing CI left to `on: pull_request` (no token access — not "
+             f"wedged): {list(dec.skipped_fork_numbers)}.")
+
+    for rid in dec.cancel_run_ids:                  # P0 emergency preemption
+        if _cancel_run(rid):
+            _log(f"    P0 preemption: cancelled lower run {rid} (freed its runner).")
+
+    if not dec.trigger_numbers:
+        _log("Nothing to trigger this pass (no needy PR fits a free slot).")
+        return 0
+    triggered = 0
+    for number in dec.trigger_numbers:
+        info = meta.get(number, {})
+        if _dispatch_ci(number, info.get("headRefName", ""), info.get("headRefOid", "")):
+            triggered += 1
+    _log(f"Trigger pass complete — dispatched {triggered}/{len(dec.trigger_numbers)} "
+         "run(s) in priority order.")
+    return 0
+
+
+def _load_trigger_snapshot(
+    text: str,
+) -> tuple[list[PullRequest], set[int], set[int], int]:
+    data = json.loads(text)
+    all_prs = [PullRequest.from_json(o) for o in data.get("prs", [])]
+    needy = {int(n) for n in data.get("needy", [])}
+    forks = {int(n) for n in data.get("forks", [])}
+    max_inflight = int(data.get("max_inflight", 2))
+    return all_prs, needy, forks, max_inflight
+
+
+def run_trigger_dry(text: str) -> int:
+    all_prs, needy, forks, max_inflight = _load_trigger_snapshot(text)
+    dec = select_triggers(all_prs, needy, max_inflight=max_inflight, forks=forks)
+    _log(f"Trigger decision (cap {dec.max_inflight}, free slots {dec.slots}):")
+    _log(f"  inflight (occupying the cap): {list(dec.inflight_numbers)}")
+    _log(f"  needy candidates (priority order): {list(dec.needy_numbers)}")
+    if dec.skipped_fork_numbers:
+        _log(f"  skipped forks (no token access): {list(dec.skipped_fork_numbers)}")
+    if dec.cancel_run_ids:
+        _log(f"  P0 preemption — cancel run ids: {list(dec.cancel_run_ids)}")
+    _log(f"  => TRIGGER (in priority order): {list(dec.trigger_numbers)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Emit UTF-8 regardless of the host console so the log typography is stable on
     # the UTF-8 CI runners (and never raises on a legacy Windows code page).
@@ -483,6 +775,11 @@ def main(argv: list[str] | None = None) -> int:
     except (AttributeError, ValueError):
         pass
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode", choices=("orchestrate", "trigger"), default="orchestrate",
+        help="orchestrate (default): in-run runner-priority for the executing PR "
+             "(unchanged). trigger: the scheduler that (re-)triggers CI by priority "
+             "(issue #349).")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="read a snapshot JSON (from --input or stdin), print decisions, no network.")
@@ -493,8 +790,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         text = (open(args.input, encoding="utf-8").read() if args.input
                 else sys.stdin.read())
-        return run_dry(text)
-    return run_live()
+        return run_trigger_dry(text) if args.mode == "trigger" else run_dry(text)
+    return run_trigger() if args.mode == "trigger" else run_live()
 
 
 if __name__ == "__main__":
