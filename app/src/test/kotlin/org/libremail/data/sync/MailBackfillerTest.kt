@@ -2,12 +2,15 @@
 package org.libremail.data.sync
 
 import android.content.Context
+import android.util.Log
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.ServerSetupTest
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Session
@@ -38,6 +41,8 @@ import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.util.Date
 import java.util.Properties
 import kotlin.test.assertEquals
@@ -74,15 +79,33 @@ class MailBackfillerTest {
     // though `cached` would silently absorb it. Isolates the "no message fetched twice" guarantee.
     private var totalOffered = 0
 
+    // issue #329: AppLog breadcrumbs — a fresh buffer per test (a new instance per @Test, per JUnit4).
+    private val logBuffer = RingLogBuffer()
+
     @Before
     fun setUp() {
         greenMail = GreenMail(ServerSetupTest.SMTP_IMAP)
         greenMail.start()
         greenMail.setUser("alice@example.org", "secret")
+
+        // `android.util.Log` is a no-op stub under plain JVM unit tests, so it is statically mocked here
+        // for the whole class, mirroring org.libremail.reporting.AppLogTest — every test now exercises
+        // real backfill code, which breadcrumbs through AppLog.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
     }
 
     @After
-    fun tearDown() = greenMail.stop()
+    fun tearDown() {
+        greenMail.stop()
+        unmockkAll()
+    }
 
     private fun params() = ImapConnectionParams(
         host = "127.0.0.1",
@@ -351,6 +374,68 @@ class MailBackfillerTest {
         coVerify(atLeast = 1) {
             lastMessageDao!!.updateHeaderContent(any(), any(), any(), any(), any(), any())
         }
+    }
+
+    // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
+
+    @Test
+    fun `runBackfill logs a start breadcrumb, a per-folder breadcrumb, and a done breadcrumb`() = runTest {
+        appendMessages(TOTAL)
+        seedForegroundWindow()
+
+        backfiller(AccountSettings("acct")).runBackfill(maxBatches = 3)
+
+        val snapshot = logBuffer.snapshot()
+        val start = snapshot.first { it.message.startsWith("backfill slice:") }
+        val perFolder = snapshot.first { it.message.startsWith("backfill acct:") }
+        val done = snapshot.first { it.message.startsWith("backfill slice done:") }
+        assertEquals('I', start.level)
+        assertEquals("backfill slice: maxBatches=3", start.message)
+        assertEquals('D', perFolder.level)
+        assertTrue(perFolder.message.contains("folder=INBOX"), perFolder.message)
+        assertTrue(perFolder.message.contains("pages="), perFolder.message)
+        assertTrue(perFolder.message.contains("complete="), perFolder.message)
+        assertEquals('I', done.level)
+        assertTrue(done.message.contains("moreWork="), done.message)
+        snapshot.forEach { assertNoPii(it.message) }
+    }
+
+    @Test
+    fun `an already-complete folder logs no redundant per-folder breadcrumb on the next slice`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+        val backfiller = backfiller(AccountSettings("acct"))
+        var guard = 0
+        while (backfiller.runBackfill() && guard++ < 10) { /* drive to completion */ }
+        logBuffer.clear()
+
+        // The folder is already complete; this slice does no work for it.
+        backfiller.runBackfill()
+
+        assertTrue(
+            logBuffer.snapshot().none { it.message.startsWith("backfill acct:") },
+            "an already-complete folder must not spam a breadcrumb on every subsequent slice",
+        )
+    }
+
+    @Test
+    fun `no slice of a full backfill ever logs the account's email, host, or a message address`() = runTest {
+        appendMessages(TOTAL)
+        seedForegroundWindow()
+        val backfiller = backfiller(AccountSettings("acct"))
+
+        var guard = 0
+        while (backfiller.runBackfill() && guard++ < 10) { /* drive to completion */ }
+
+        val snapshot = logBuffer.snapshot()
+        assertTrue(snapshot.isNotEmpty(), "the run must have logged something to be a meaningful check")
+        snapshot.forEach { assertNoPii(it.message) }
+    }
+
+    /** No test fixture's email address or host may ever reach a log line — the hard PII rule. */
+    private fun assertNoPii(message: String) {
+        assertFalse(message.contains("@example.org"), message) // covers the account and every sender
+        assertFalse(message.contains("127.0.0.1"), message) // the GreenMail host
     }
 
     private fun fetchedMessage(uid: String) = FetchedMessage(

@@ -1,30 +1,58 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.sync
 
+import android.util.Log
 import androidx.work.ListenableWorker
 import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.security.EncryptedCacheGuard
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * [SyncWorker] already gates on [EncryptedCacheGuard]; this locks that invariant in as regression
  * cover for the class of bug fixed in PruneWorker/BackfillWorker — while the cache is locked it must
- * defer without resolving the (`Lazy`) [MailSyncer] (whose construction opens the Room DB).
+ * defer without resolving the (`Lazy`) [MailSyncer] (whose construction opens the Room DB). Also covers
+ * issue #329's AppLog breadcrumbs on the deferred/success/retry outcomes.
  */
 class SyncWorkerTest {
 
     private val mailSyncer = mockk<MailSyncer>()
     private val lazySyncer = mockk<Lazy<MailSyncer>> { every { get() } returns mailSyncer }
     private val cacheGuard = mockk<EncryptedCacheGuard>()
+    private val logBuffer = RingLogBuffer()
 
     private fun worker() = SyncWorker(mockk(relaxed = true), mockk(relaxed = true), lazySyncer, cacheGuard)
+
+    @Before
+    fun setUp() {
+        // `android.util.Log` is a no-op stub under plain JVM unit tests, so it is statically mocked here,
+        // mirroring org.libremail.reporting.AppLogTest — doWork() now breadcrumbs through AppLog.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
 
     @Test
     fun `retries without resolving the syncer when the cache is locked`() = runTest {
@@ -52,5 +80,44 @@ class SyncWorkerTest {
         coEvery { mailSyncer.syncAll() } returns Result.failure(IllegalStateException("boom"))
 
         assertEquals(ListenableWorker.Result.retry(), worker().doWork())
+    }
+
+    // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
+
+    @Test
+    fun `logs a deferred breadcrumb when the cache is locked, without touching the syncer`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns true
+
+        worker().doWork()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("sync deferred: cache locked", entry.message)
+    }
+
+    @Test
+    fun `logs a success breadcrumb when syncing succeeds`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        coEvery { mailSyncer.syncAll() } returns Result.success(3)
+
+        worker().doWork()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("sync worker: success", entry.message)
+    }
+
+    @Test
+    fun `logs a scrubbed retry breadcrumb when syncing fails`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        coEvery { mailSyncer.syncAll() } returns Result.failure(IllegalStateException("auth failed for a@example.org"))
+
+        worker().doWork()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('W', entry.level)
+        assertTrue(entry.message.startsWith("sync worker: retry"), entry.message)
+        assertTrue(entry.message.contains("IllegalStateException"), entry.message)
+        assertFalse(entry.message.contains("a@example.org"), entry.message)
     }
 }
