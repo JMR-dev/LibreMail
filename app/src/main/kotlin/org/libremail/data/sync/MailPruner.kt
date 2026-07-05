@@ -13,6 +13,7 @@ import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.RetentionPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.effectiveRetention
+import org.libremail.reporting.AppLog
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,6 +50,7 @@ class MailPruner @Inject constructor(
             if (policy.isUnlimited) continue
             removed += pruneAccount(account.id, policy, nowMillis)
         }
+        AppLog.i(TAG, "prune done: removed=$removed")
         removed
     }
 
@@ -82,6 +84,8 @@ class MailPruner @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "MailPruner"
+
         /** Ids per DELETE, kept under SQLite's 999-host-parameter limit on older Android. */
         const val DELETE_CHUNK = 500
     }

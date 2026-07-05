@@ -10,6 +10,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
 import org.libremail.data.security.EncryptedCacheGuard
+import org.libremail.reporting.AppLog
 
 /**
  * Runs one bounded slice of the full-history backfill (issue #12). Cancellable (WorkManager stops it
@@ -31,7 +32,10 @@ class BackfillWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         // Can't open the encrypted DB without the user present — retry later rather than parking a
         // WorkManager thread (which also wedges the shared serial executor) on an unsatisfiable await.
-        if (cacheGuard.isCacheLocked()) return Result.retry()
+        if (cacheGuard.isCacheLocked()) {
+            AppLog.i(TAG, "backfill deferred: cache locked")
+            return Result.retry()
+        }
         return runCatching {
             // Chain bounded slices back-to-back while history remains, so a large mailbox isn't limited
             // to one slice per periodic run. runBackfill() returns true while any folder still has pages
@@ -39,8 +43,19 @@ class BackfillWorker @AssistedInject constructor(
             val mailBackfiller = backfiller.get()
             while (mailBackfiller.runBackfill() && !isStopped) { /* page the next slice */ }
         }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { error -> if (error is CancellationException) throw error else Result.retry() },
+            onSuccess = {
+                AppLog.i(TAG, "backfill worker: success")
+                Result.success()
+            },
+            onFailure = { error ->
+                if (error is CancellationException) throw error
+                AppLog.w(TAG, "backfill worker: retry", error)
+                Result.retry()
+            },
         )
+    }
+
+    private companion object {
+        const val TAG = "BackfillWorker"
     }
 }

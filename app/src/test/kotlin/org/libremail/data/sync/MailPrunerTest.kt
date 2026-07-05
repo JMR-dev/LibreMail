@@ -2,15 +2,20 @@
 package org.libremail.data.sync
 
 import android.content.Context
+import android.util.Log
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
@@ -20,8 +25,11 @@ import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.AccountSettings
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -39,6 +47,27 @@ class MailPrunerTest {
         imap = ServerConfigEmbedded("imap.example.org", 993, "SSL_TLS"),
         smtp = ServerConfigEmbedded("smtp.example.org", 465, "SSL_TLS"),
     )
+
+    // issue #329: AppLog breadcrumbs — a fresh buffer per test (a new instance per @Test, per JUnit4).
+    private val logBuffer = RingLogBuffer()
+
+    @Before
+    fun setUp() {
+        // `android.util.Log` is a no-op stub under plain JVM unit tests, so it is statically mocked here
+        // for the whole class, mirroring org.libremail.reporting.AppLogTest — every test now exercises
+        // real prune code, which breadcrumbs through AppLog.
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(logBuffer)
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
 
     private fun pruner(global: AppSettings, accountSettings: AccountSettings, messageDao: MessageDao): MailPruner {
         val accountDao = mockk<AccountDao>()
@@ -135,5 +164,62 @@ class MailPrunerTest {
         coVerify(exactly = 0) { messageDao.deleteByIds(any()) }
         coVerify(exactly = 0) { messageDao.syncedIdsOlderThan(any(), any()) }
         coVerify(exactly = 0) { messageDao.syncedIdsBeyondCountInFolder(any(), any(), any()) }
+    }
+
+    // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
+
+    @Test
+    fun `prune logs a done breadcrumb with the removed count`() = runTest {
+        val messageDao = mockk<MessageDao>(relaxed = true)
+        coEvery { messageDao.syncedFolders("acct") } returns listOf("INBOX", "Archive")
+        coEvery { messageDao.syncedIdsBeyondCountInFolder("acct", "INBOX", 2) } returns
+            listOf("acct:INBOX:1", "acct:INBOX:2")
+        coEvery { messageDao.syncedIdsBeyondCountInFolder("acct", "Archive", 2) } returns listOf("acct:Archive:9")
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+
+        pruner(
+            global = AppSettings(retentionCount = 2, retentionMonths = 0),
+            accountSettings = AccountSettings("acct"),
+            messageDao = messageDao,
+        ).prune()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("prune done: removed=3", entry.message)
+    }
+
+    @Test
+    fun `prune logs a done breadcrumb even when nothing is removed`() = runTest {
+        val messageDao = mockk<MessageDao>(relaxed = true)
+
+        pruner(
+            global = AppSettings(retentionCount = 0, retentionMonths = 0),
+            accountSettings = AccountSettings("acct"),
+            messageDao = messageDao,
+        ).prune()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("prune done: removed=0", entry.message)
+    }
+
+    @Test
+    fun `prune never logs the account email or host, even while removing rows by age and count`() = runTest {
+        val messageDao = mockk<MessageDao>(relaxed = true)
+        coEvery { messageDao.syncedFolders("acct") } returns listOf("INBOX")
+        coEvery { messageDao.syncedIdsOlderThan(any(), any()) } returns listOf("acct:INBOX:1")
+        coEvery { messageDao.syncedIdsBeyondCountInFolder("acct", "INBOX", 2) } returns listOf("acct:INBOX:2")
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+
+        pruner(
+            global = AppSettings(retentionCount = 2, retentionMonths = 6),
+            accountSettings = AccountSettings("acct"),
+            messageDao = messageDao,
+        ).prune()
+
+        logBuffer.snapshot().forEach { entry ->
+            assertFalse(entry.message.contains("a@example.org"), entry.message)
+            assertFalse(entry.message.contains("example.org"), entry.message)
+        }
     }
 }

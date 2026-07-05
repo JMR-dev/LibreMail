@@ -9,6 +9,7 @@ import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import org.libremail.data.security.EncryptedCacheGuard
+import org.libremail.reporting.AppLog
 
 @HiltWorker
 class SyncWorker @AssistedInject constructor(
@@ -23,10 +24,23 @@ class SyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         // Can't open the encrypted DB without the user present — retry later rather than parking a
         // WorkManager thread (which also wedges the shared serial executor) on an unsatisfiable await.
-        if (cacheGuard.isCacheLocked()) return Result.retry()
+        if (cacheGuard.isCacheLocked()) {
+            AppLog.i(TAG, "sync deferred: cache locked")
+            return Result.retry()
+        }
         return mailSyncer.get().syncAll().fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
+            onSuccess = {
+                AppLog.i(TAG, "sync worker: success")
+                Result.success()
+            },
+            onFailure = { error ->
+                AppLog.w(TAG, "sync worker: retry", error)
+                Result.retry()
+            },
         )
+    }
+
+    private companion object {
+        const val TAG = "SyncWorker"
     }
 }
