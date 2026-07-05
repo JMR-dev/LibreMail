@@ -106,12 +106,16 @@ class OutlookAuthManager @Inject constructor(@ApplicationContext private val con
             val authState = AuthState(response, exception).apply { update(tokenResponse, null) }
             val email = emailFromIdToken(tokenResponse.idToken)
                 ?: throw IllegalStateException("Could not read the account email from the token")
-            // Mint an Exchange Online token so the caller can verify the account over IMAP.
-            val outlook = refreshForScope(authState, OUTLOOK_SCOPE)
+            // The code exchange above already named the Exchange Online resource ($OUTLOOK_SCOPE), so
+            // this access token is an outlook.office.com token the caller can verify over IMAP directly.
+            // Don't re-refresh for the same scope: that second round-trip only rotates the just-issued
+            // refresh token and adds a needless onboarding failure point. The Graph token is a different
+            // resource and is minted on demand later (freshGraphToken); the durable AuthState — refresh
+            // token plus this token's expiry — is serialized here for those later refreshes.
             return OAuthResult(
                 email = email,
-                accessToken = outlook.accessToken,
-                authStateJson = outlook.authStateJson,
+                accessToken = tokenResponse.accessToken.orEmpty(),
+                authStateJson = authState.jsonSerializeString(),
             )
         } finally {
             service.dispose()
