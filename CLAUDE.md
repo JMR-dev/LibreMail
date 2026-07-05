@@ -94,6 +94,16 @@ API 37 preview via `api37_e2e.py` (hand-provisioned, mirroring CI's `e2e-preview
 must be green before the change is done. CI then runs the full multi-API matrix plus the API 37
 preview job.
 
+No **app source-code** change is complete without **appropriate logging** added at its key
+points — lifecycle transitions, error/fallback paths, significant state changes — so behaviour is
+diagnosable from a user's debug report. Log through the `AppLog` facade
+(`org.libremail.reporting.AppLog`), which mirrors to Logcat **and** the in-memory
+`RingLogBuffer` that feeds a `DebugReport` — never raw `android.util.Log` (a detekt guard forbids
+it). Logging must be **PII-free**: never log emails, server hosts, message content, or
+credentials — use `accountLogRef(account.id)` for account references; throwables passed to
+`AppLog` are auto-scrubbed. This applies to app source changes; pure test/config/doc changes
+don't need new logging.
+
 ## Repo etiquette
 
 - Branch off `main`; branch names like `feat-…` / `fix-…`. PRs target `main` and must pass
