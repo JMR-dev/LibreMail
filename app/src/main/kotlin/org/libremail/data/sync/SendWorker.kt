@@ -2,7 +2,6 @@
 package org.libremail.data.sync
 
 import android.content.Context
-import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -24,6 +23,8 @@ import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
 import org.libremail.mail.SendableAttachment
 import org.libremail.mail.SmtpSender
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -57,64 +58,87 @@ class SendWorker @AssistedInject constructor(
         val attachmentUriGrants = this.attachmentUriGrants.get()
         val pending = outboxDao.getAll()
         if (pending.isEmpty()) return Result.success()
+        AppLog.i(TAG, "outbox drain: ${pending.size} queued")
 
         var anyFailed = false
         for (entity in pending) {
-            val attachmentDir = File(applicationContext.cacheDir, "outbox/${entity.id}")
-            val account = accountDao.getById(entity.accountId)?.toDomain()
-            if (account == null) {
-                outboxDao.delete(entity.id) // account removed — drop the queued message
-                attachmentDir.deleteRecursively()
-                attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
-                continue
-            }
-            runCatching {
-                val message = OutgoingMessage(
-                    accountId = entity.accountId,
-                    to = entity.toAddresses,
-                    cc = entity.ccAddresses,
-                    bcc = entity.bccAddresses,
-                    subject = entity.subject,
-                    body = entity.body,
-                    bodyHtml = entity.bodyHtml,
-                )
-                val attachments = stagedAttachments(attachmentDir, entity.attachments.toOutgoingAttachments())
-                if (account.authType == AuthType.OAUTH_OUTLOOK) {
-                    sendOutlook(connectionFactory, account, message, attachments)
-                } else {
-                    smtpSender.send(
-                        connectionFactory.smtpParamsFor(account),
-                        from = account.email,
-                        message = message,
-                        attachments = attachments,
-                    )
-                }
-            }.fold(
-                onSuccess = {
-                    outboxDao.delete(entity.id)
-                    attachmentDir.deleteRecursively()
-                    // The picked bytes were staged at enqueue; with the row sent, drop the persistable
-                    // grant unless a live draft/outbox row still references the same URI (security review).
-                    attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
-                },
-                onFailure = { e ->
-                    if (e is GraphSendException && e.mayHaveSent) {
-                        // Graph may already have delivered this; auto-retrying (or any other send)
-                        // would duplicate it, so leave it queued with a clear status and let the
-                        // user decide. Not counted as a failure, so WorkManager won't auto-retry.
-                        outboxDao.setError(
-                            entity.id,
-                            "Send status unknown — check your Sent folder, then retry or cancel",
-                        )
-                    } else {
-                        outboxDao.setError(entity.id, e.message)
-                        anyFailed = true
-                    }
-                },
-            )
+            val failed = sendQueued(entity, outboxDao, accountDao, connectionFactory, attachmentUriGrants)
+            if (failed) anyFailed = true
         }
         // Retry (with WorkManager backoff) so failed sends are reattempted when conditions improve.
         return if (anyFailed) Result.retry() else Result.success()
+    }
+
+    /**
+     * Sends one queued [entity] — or drops it if its account was removed — updating the outbox row
+     * and releasing its staged attachment grant. Returns true if the send genuinely failed (should
+     * count toward a WorkManager retry); the ambiguous "may have sent" Graph case returns false, since
+     * it is deliberately left queued rather than retried (see [sendOutlook]).
+     */
+    private suspend fun sendQueued(
+        entity: OutboxEntity,
+        outboxDao: OutboxDao,
+        accountDao: AccountDao,
+        connectionFactory: MailConnectionFactory,
+        attachmentUriGrants: AttachmentUriGrants,
+    ): Boolean {
+        val attachmentDir = File(applicationContext.cacheDir, "outbox/${entity.id}")
+        val account = accountDao.getById(entity.accountId)?.toDomain()
+        if (account == null) {
+            outboxDao.delete(entity.id) // account removed — drop the queued message
+            attachmentDir.deleteRecursively()
+            attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
+            return false
+        }
+        var failed = false
+        runCatching {
+            val message = OutgoingMessage(
+                accountId = entity.accountId,
+                to = entity.toAddresses,
+                cc = entity.ccAddresses,
+                bcc = entity.bccAddresses,
+                subject = entity.subject,
+                body = entity.body,
+                bodyHtml = entity.bodyHtml,
+            )
+            val attachments = stagedAttachments(attachmentDir, entity.attachments.toOutgoingAttachments())
+            if (account.authType == AuthType.OAUTH_OUTLOOK) {
+                sendOutlook(connectionFactory, account, message, attachments)
+            } else {
+                smtpSender.send(
+                    connectionFactory.smtpParamsFor(account),
+                    from = account.email,
+                    message = message,
+                    attachments = attachments,
+                )
+            }
+        }.fold(
+            onSuccess = {
+                outboxDao.delete(entity.id)
+                attachmentDir.deleteRecursively()
+                // The picked bytes were staged at enqueue; with the row sent, drop the persistable
+                // grant unless a live draft/outbox row still references the same URI (security review).
+                attachmentUriGrants.releaseUnreferenced(entity.attachmentUris())
+                val via = if (account.authType == AuthType.OAUTH_OUTLOOK) "Graph" else "SMTP"
+                AppLog.i(TAG, "sent ${accountLogRef(account.id)} via $via")
+            },
+            onFailure = { e ->
+                if (e is GraphSendException && e.mayHaveSent) {
+                    // Graph may already have delivered this; auto-retrying (or any other send) would
+                    // duplicate it, so leave it queued with a clear status and let the user decide.
+                    // Not counted as a failure, so WorkManager won't auto-retry.
+                    outboxDao.setError(
+                        entity.id,
+                        "Send status unknown — check your Sent folder, then retry or cancel",
+                    )
+                } else {
+                    outboxDao.setError(entity.id, e.message)
+                    failed = true
+                    AppLog.w(TAG, "send failed for ${accountLogRef(account.id)}; will retry")
+                }
+            },
+        )
+        return failed
     }
 
     /**
@@ -143,7 +167,7 @@ class SendWorker @AssistedInject constructor(
             throw e
         } catch (e: Exception) {
             // Graph was never reached (e.g. token refresh failed) — SMTP cannot duplicate it.
-            Log.w(TAG, "Graph send failed for ${account.email}; falling back to SMTP", e)
+            AppLog.w(TAG, "Graph send failed for ${accountLogRef(account.id)}; falling back to SMTP", e)
             smtpSender.send(
                 connectionFactory.smtpParamsFor(account),
                 from = account.email,
