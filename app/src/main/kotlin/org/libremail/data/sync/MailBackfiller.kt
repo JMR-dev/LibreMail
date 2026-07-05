@@ -25,6 +25,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatusProvider
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -65,13 +67,19 @@ class MailBackfiller @Inject constructor(
      * count as more work — it is retried on a future scheduled run instead of spun on back-to-back.
      */
     suspend fun runBackfill(maxBatches: Int = DEFAULT_MAX_BATCHES): Boolean = maintenanceGate.mutex.withLock {
+        AppLog.i(TAG, "backfill slice: maxBatches=$maxBatches")
         var remaining = maxBatches
         var moreWork = false
-        for (account in accountDao.getAll().map { it.toDomain() }) {
+        accounts@ for (account in accountDao.getAll().map { it.toDomain() }) {
             val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: continue
             val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             for (folder in messageDao.syncedFolders(account.id)) {
-                if (remaining <= 0) return@withLock true
+                if (remaining <= 0) {
+                    // The budget ran out before every folder was visited, so there is very likely more
+                    // work left even though nothing here reported it directly.
+                    moreWork = true
+                    break@accounts
+                }
                 // Per-folder failures (e.g. a transient server error) must not abort the whole slice.
                 val result = runCatching { backfillFolder(account, params, folder, policy, remaining) }
                     .getOrElse { FolderResult(batches = 0, moreWork = true) }
@@ -79,6 +87,7 @@ class MailBackfiller @Inject constructor(
                 if (result.moreWork) moreWork = true
             }
         }
+        AppLog.i(TAG, "backfill slice done: moreWork=$moreWork")
         moreWork
     }
 
@@ -153,6 +162,8 @@ class MailBackfiller @Inject constructor(
             delay(BACKFILL_BATCH_DELAY_MS)
         }
         if (complete) markComplete(account.id, folder, beforeUid)
+        val folderLabel = logSafeFolderLabel(folder)
+        AppLog.d(TAG, "backfill ${accountLogRef(account.id)} folder=$folderLabel pages=$batches complete=$complete")
         return FolderResult(batches, moreWork = !complete && !stalled)
     }
 
@@ -226,6 +237,8 @@ class MailBackfiller @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "MailBackfiller"
+
         /** Headers fetched per server page. */
         const val BACKFILL_BATCH_SIZE = 50
 
