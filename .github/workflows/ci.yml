@@ -4,10 +4,33 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # The traffic-controller SCHEDULER (ci-trigger.yml, issue #349) (re-)triggers CI for a
+  # specific PR via this workflow_dispatch after a GITHUB_TOKEN auto-update has left the PR's
+  # head SHA with absent/stale checks. Dispatched on the PR's head BRANCH, so the run's checks
+  # land on the PR head SHA and satisfy branch protection. `on: pull_request` above is KEPT so
+  # brand-new PRs, human pushes, and fork PRs still get CI directly — this is the fail-open
+  # guarantee: CI is always triggerable even if the scheduler is broken or absent.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number this run is for (set by the traffic-controller scheduler)."
+        required: false
+        type: string
+      head_sha:
+        description: "Expected head SHA (informational, for traceability in the run log)."
+        required: false
+        type: string
+      reason:
+        description: "Why this run was dispatched (informational)."
+        required: false
+        type: string
 
-# A new push to a PR cancels any in-flight run for that PR.
+# A new trigger for a PR cancels that PR's own in-flight run (a newer head SHA supersedes).
+# The group is keyed to the PR NUMBER so a `pull_request` run and a scheduler
+# `workflow_dispatch` run for the SAME PR share one concurrency group (either supersedes a
+# stale run of the other); it falls back to the ref when no PR number is in context.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-pr-${{ github.event.pull_request.number || inputs.pr || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -86,7 +109,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      SELF_PR: ${{ github.event.pull_request.number }}
+      # On a `pull_request` run this is the PR number and the script does its full in-run
+      # runner-priority orchestration. On a scheduler `workflow_dispatch` run (issue #349)
+      # the event is not `pull_request`, so the script no-ops here (`--mode orchestrate`
+      # only acts on pull_request events) — priority was ALREADY applied at trigger time by
+      # ci-trigger.yml, so re-doing the in-run hold-back would just waste runner time. The
+      # `|| inputs.pr` keeps the number in the log for a dispatched run.
+      SELF_PR: ${{ github.event.pull_request.number || inputs.pr }}
       # P1–P9 bounded hold-back knobs, read by traffic_control.py. BUDGET must stay
       # comfortably below timeout-minutes so the poll loop always exits 0 before the
       # hard job timeout fires — a timed-out job would skip the heavy jobs and fail

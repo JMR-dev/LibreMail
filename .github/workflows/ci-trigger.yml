@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: CI trigger (traffic-controller)
+
+# The traffic-controller SCHEDULER (issue #349). It OWNS CI *triggering*. After main advances,
+# autoupdate.yml updates every behind PR's branch with the built-in GITHUB_TOKEN which, by
+# GitHub's anti-recursion rule, does NOT start CI — so those PRs sit with absent/stale required
+# checks on their new head SHA and cannot merge. This workflow then (re-)triggers CI for the
+# highest-priority such PR(s), a few at a time (an inflight cap), in the existing P0–P9 /
+# broken-draft priority order — a poor-man's merge queue that replaces the old "every merge
+# re-runs every PR" thundering herd (the cascade; see the ci-merge-cascade note + issue #349).
+#
+# HOW IT TRIGGERS: `traffic_control.py --mode trigger` runs `gh workflow run ci.yml --ref
+# <pr-head-branch>`. A workflow_dispatch is EXEMPT from the anti-recursion rule, so even the
+# built-in GITHUB_TOKEN's dispatch DOES start the run — no PAT is required (this job grants its
+# token `actions: write`). The dispatched run executes on the PR's head branch, so its checks
+# land on the PR head SHA and satisfy branch protection's required checks.
+#
+# WHEN IT RUNS:
+#   • workflow_run, after "Auto-update PR branches" completes — the race-free moment: autoupdate
+#     has finished moving branches to their new (checkless) head SHAs, so this pass sees exactly
+#     the PRs that now need a run. (A bare `push: main` trigger would race autoupdate and often
+#     read the pre-update SHAs, missing them until the next pass.)
+#   • schedule (cron) — a backstop so no PR is ever permanently un-triggered even if a
+#     workflow_run is missed/skipped (part of the fail-open guarantee), and so a brand-new PR
+#     whose first `on: pull_request` run got cancelled is still picked up.
+#   • workflow_dispatch — manual kick.
+#
+# FAIL-OPEN: the script guards every gh call and always exits 0; and structurally, ci.yml keeps
+# its `on: pull_request` trigger, so a human push (and a brand-new PR) always triggers CI
+# regardless of this scheduler — CI can never become permanently un-triggerable. Fork PRs (no
+# token/secret access) are skipped here and left to `on: pull_request`, so they are never wedged.
+
+on:
+  workflow_run:
+    workflows: ["Auto-update PR branches"]
+    types: [completed]
+  schedule:
+    # Backstop cadence (UTC). GitHub may delay scheduled runs under load; that is fine — this
+    # is only a safety net behind the immediate workflow_run trigger above.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Trigger-only; this workflow never gates a merge. `actions: write` lets the built-in
+# GITHUB_TOKEN dispatch ci.yml (workflow_dispatch) and cancel strictly-lower runs when a P0
+# emergency preempts. `pull-requests: read` + `contents: read` cover the PR/label enumeration.
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write
+
+# One trigger pass at a time. Do NOT cancel an in-flight pass (cancel-in-progress: false):
+# a half-finished pass could leave some needy PRs un-triggered until the next pass.
+concurrency:
+  group: ci-trigger
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    name: Trigger CI by priority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # generous backstop; the script only enumerates + dispatches, no waits
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+
+      # gh is auto-configured from GH_TOKEN / GH_REPO. The script guards every gh call and
+      # always exits 0, so a hiccup (API error, missing permission, fork PR) can never wedge CI
+      # — and even a total failure here leaves ci.yml's `on: pull_request` path intact.
+      - name: Trigger CI for the highest-priority PR(s) needing a run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Poor-man's merge-queue width: at most this many PRs run CI concurrently under the
+          # scheduler (a P0 emergency bypasses this cap). Kept conservative because each PR
+          # fans out to the whole E2E matrix (~8 API levels + preview); this is the main knob
+          # to raise for throughput vs runner budget. The coordinator drives runner allocation.
+          MAX_INFLIGHT_RUNS: "2"
+          # The workflow file the scheduler enumerates runs for and dispatches.
+          CI_WORKFLOW_FILE: "ci.yml"
+        run: python3 .github/scripts/traffic_control.py --mode trigger
