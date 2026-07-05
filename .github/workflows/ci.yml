@@ -577,13 +577,50 @@ jobs:
         run: |
           set -euo pipefail
           EMU_LOG="${RUNNER_TEMP:-/tmp}/emulator.log"
+          LOGCAT_LOG="${RUNNER_TEMP:-/tmp}/logcat.txt"
+          DIAG_LOG="${RUNNER_TEMP:-/tmp}/boot-diagnostics.txt"
+          GPU_MODE="swiftshader_indirect"
+
+          # On a boot timeout, capture the full system state (accel/KVM/GPU/mem/disk/AVD config +
+          # emulator.log tail) into $DIAG_LOG for the artifact upload, then print a CONCISE summary
+          # (accel/KVM status + last 50 lines of emulator.log) to the step log so the cause is
+          # visible in the run output without downloading artifacts. Every probe is guarded (|| true)
+          # so a missing tool can't abort the retry under `set -e`.
+          dump_diagnostics() {
+            local attempt="$1" accel kvm
+            accel=$("$ANDROID_SDK_ROOT/emulator/emulator" -accel-check 2>&1) || true
+            kvm=$(ls -l /dev/kvm 2>&1) || true
+            {
+              echo "===== API 37 boot diagnostics (attempt $attempt) ====="
+              echo "--- adb devices ---";             adb devices 2>&1 || true
+              echo "--- emulator -accel-check ---";    echo "$accel"
+              echo "--- /dev/kvm ---";                echo "$kvm"
+              echo "--- GPU mode ---";                echo "$GPU_MODE"
+              echo "--- free memory ---";             free -h 2>&1 || true
+              echo "--- free disk ---";               df -h 2>&1 || true
+              echo "--- AVD config.ini ---";          cat "${ANDROID_AVD_HOME:-$HOME/.android/avd}/api37.avd/config.ini" 2>&1 || true
+              echo "--- emulator.log (tail 200) ---";  tail -200 "$EMU_LOG" 2>&1 || true
+            } >> "$DIAG_LOG" 2>&1 || true
+            echo "----- BOOT FAILURE SUMMARY (attempt $attempt) -----"
+            echo "accel-check: $accel"
+            echo "/dev/kvm:    $kvm"
+            echo "--- emulator.log (tail 50) ---"; tail -50 "$EMU_LOG" 2>&1 || true
+          }
 
           boot_emulator() {
             echo "::group::Start API 37 emulator (attempt $1)"
             # Capture the emulator's own output — without this a boot failure is invisible.
+            # -verbose -debug init,avd_config,kernel turns boot logging on by default so a boot flake
+            # is diagnosable from $EMU_LOG; DIAGNOSTICS ONLY — no boot-affecting flag is changed.
             "$ANDROID_SDK_ROOT/emulator/emulator" -avd api37 \
               -no-window -no-audio -no-boot-anim -no-snapshot -accel on \
-              -gpu swiftshader_indirect -camera-back none -camera-front none > "$EMU_LOG" 2>&1 &
+              -gpu "$GPU_MODE" -camera-back none -camera-front none \
+              -verbose -debug init,avd_config,kernel > "$EMU_LOG" 2>&1 &
+            # Stream logcat from the moment the device registers (wait-for-device blocks until then)
+            # into a file that survives to the artifact upload. Appended (with a header) per attempt.
+            echo "===== logcat (attempt $1) =====" >> "$LOGCAT_LOG"
+            adb wait-for-device logcat -v time >> "$LOGCAT_LOG" 2>&1 &
+            logcat_pid=$!
             # ONE bounded wait covering both device registration and full boot, so a stuck emulator
             # fails fast instead of hanging the whole job until the 35-min cap (the original bug).
             if timeout 300 adb wait-for-device shell \
@@ -592,8 +629,8 @@ jobs:
             fi
             echo "::endgroup::"
             echo "::warning::API 37 emulator did not boot within 300s (attempt $1)"
-            adb devices || true
-            echo "--- emulator.log (tail) ---"; tail -120 "$EMU_LOG" || true
+            dump_diagnostics "$1"
+            kill "$logcat_pid" 2>/dev/null || true
             adb emu kill 2>/dev/null || true
             sleep 5
             return 1
@@ -611,6 +648,19 @@ jobs:
         run: |
           echo "--- emulator.log ---"; tail -200 "${RUNNER_TEMP:-/tmp}/emulator.log" 2>/dev/null || echo "(none)"
           echo "--- logcat ---"; adb logcat -d 2>/dev/null | tail -120 || echo "(device unavailable)"
+
+      # Always upload the emulator log + captured logcat + boot-diagnostics dump so a boot flake
+      # (which can time out or be cancelled) is diagnosable from artifacts without a re-run.
+      - name: Upload emulator boot diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-api37-boot-diagnostics
+          path: |
+            ${{ runner.temp }}/emulator.log
+            ${{ runner.temp }}/logcat.txt
+            ${{ runner.temp }}/boot-diagnostics.txt
+          if-no-files-found: warn
 
       - name: Shut down emulator
         if: always()
