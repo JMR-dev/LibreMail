@@ -103,6 +103,27 @@ jobs:
         continue-on-error: true
         run: python3 .github/scripts/traffic_control.py
 
+  # Fast, pure-stdlib-Python unit tests for the traffic-control decision core
+  # (.github/scripts/traffic_control.py / test_traffic_control.py — see the
+  # `traffic-control` job above). No emulator, no Gradle: this runs in seconds,
+  # independently of the Android jobs below, so a regression in the runner-priority
+  # logic fails fast and blocks merge via `ci-passed`.
+  traffic-control-tests:
+    name: Traffic-control unit tests
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+
+      - name: Run traffic-controller unit tests
+        run: python -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
   debug-build:
     name: Debug build
     needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
@@ -514,13 +535,14 @@ jobs:
     # a (should-never-happen) traffic-control failure would mark them 'skipped';
     # treating 'skipped' as a gate failure below keeps that fail-safe (blocks the
     # merge rather than letting it through untested).
-    needs: [static-analysis, debug-build, unit-tests, e2e, e2e-preview]
+    needs: [traffic-control-tests, static-analysis, debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every required job succeeded
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         run: |
           echo "Required CI jobs did not all succeed:"
+          echo "  traffic-control-tests: ${{ needs.traffic-control-tests.result }}"
           echo "  static-analysis: ${{ needs.static-analysis.result }}"
           echo "  debug-build: ${{ needs.debug-build.result }}"
           echo "  unit-tests:  ${{ needs.unit-tests.result }}"
