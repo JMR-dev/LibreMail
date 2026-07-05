@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -38,6 +37,7 @@ import org.libremail.domain.model.Account
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatusProvider
 import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 
 /**
@@ -91,7 +91,7 @@ class IdleService : Service() {
                 // Can't open the encrypted DB without the user present. Defer (stop) and let the app
                 // restart push after the next unlock, rather than block the service and ANR.
                 if (cacheGuard.isCacheLocked()) {
-                    Log.i(TAG, "encrypted cache locked; deferring IDLE push until the app is unlocked")
+                    AppLog.i(TAG, "encrypted cache locked; deferring IDLE push until the app is unlocked")
                     stopSelf()
                     return@launch
                 }
@@ -200,6 +200,7 @@ class IdleService : Service() {
      * idle()'s on-connect sync, so no mail is missed across renewals.
      */
     private suspend fun watchAccount(account: Account) {
+        AppLog.i(TAG, "IDLE watch start ${accountLogRef(account.id)}")
         var backoffMs = INITIAL_BACKOFF_MS
         while (scope.isActive) {
             try {
@@ -212,7 +213,7 @@ class IdleService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "IDLE for ${account.email} dropped; retrying in ${backoffMs}ms", e)
+                AppLog.w(TAG, "IDLE for ${accountLogRef(account.id)} dropped; retrying in ${backoffMs}ms", e)
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
             }
