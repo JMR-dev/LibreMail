@@ -6,13 +6,17 @@ name: Auto-update PR branches
 # touched (PR_FILTER: all) — this is no longer limited to PRs with GitHub auto-merge
 # enabled.
 #
-# IMPORTANT: for the branch update to RE-TRIGGER the PR's CI (so it can pass and merge),
-# this must run with a PAT, not the default GITHUB_TOKEN — pushes made by GITHUB_TOKEN do
-# not start new workflow runs (GitHub's anti-recursion rule), so the updated PR would sit
-# with stale checks. Create a fine-grained PAT scoped to this repo with
-# contents:read/write + pull-requests:read/write and add it as the AUTOUPDATE_TOKEN secret.
-# Without it this falls back to GITHUB_TOKEN, which updates the branch but will NOT re-run
-# the PR's checks.
+# IMPORTANT (issue #349): the branch update runs with the default GITHUB_TOKEN — ON PURPOSE.
+# A GITHUB_TOKEN push does NOT start new workflow runs (GitHub's anti-recursion rule), so
+# updating every behind PR here NO LONGER re-triggers every PR's CI. That deliberately breaks
+# the old merge-cascade (every merge -> autoupdate rebases all PRs with a PAT -> all re-run ->
+# ci.yml's cancel-in-progress kills each in-flight run -> PRs thrash and can't converge).
+# Branches still go up to date (satisfying "require branches up to date"); they just don't
+# auto-run CI on the new head SHA. Re-triggering that SHA's CI is now OWNED by the traffic-
+# controller scheduler (`.github/workflows/ci-trigger.yml` -> `traffic_control.py --mode
+# trigger`), which triggers the updated PRs deliberately, in priority order, a few at a time.
+# So this workflow must NOT use the PAT for the update push (that would re-introduce the
+# cascade). The AUTOUPDATE_TOKEN secret is no longer needed by this workflow.
 
 on:
   push:
@@ -38,7 +42,9 @@ jobs:
       - name: Update all behind PRs
         uses: chinthakagodawita/autoupdate@0707656cd062a3b0cf8fa9b2cda1d1404d74437e # v1.7.0
         env:
-          GITHUB_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN || secrets.GITHUB_TOKEN }}
+          # Default GITHUB_TOKEN — NOT a PAT — so this update push does not auto-retrigger CI
+          # (anti-recursion). See the header: re-triggering is owned by ci-trigger.yml.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_FILTER: "all"
           PR_READY_STATE: "all"
           MERGE_CONFLICT_ACTION: "ignore"
