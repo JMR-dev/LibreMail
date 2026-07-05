@@ -42,5 +42,9 @@ captures/
 # Kotlin
 .kotlin/
 
+# Python (dev/CI helper scripts under .github/scripts, .claude/…)
+__pycache__/
+*.pyc
+
 # Claude Code — personal settings (the shared settings.json IS committed)
 .claude/settings.local.json
