@@ -2,7 +2,6 @@
 package org.libremail.data.local
 
 import android.content.Context
-import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -15,6 +14,7 @@ import kotlinx.coroutines.withContext
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.reporting.AppLog
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -181,7 +181,7 @@ class AccountDataMigrator @Inject constructor(
                                 "(SELECT COUNT(*) FROM `accounts` AS ranked WHERE ranked.`email` < `accounts`.`email`)",
                         )
                     }
-                    Log.d(TAG, "moved account tables into the account database: $present")
+                    AppLog.d(TAG, "moved account tables into the account database: $present")
                 } finally {
                     db.rawExecSQL("DETACH DATABASE cache;")
                 }
