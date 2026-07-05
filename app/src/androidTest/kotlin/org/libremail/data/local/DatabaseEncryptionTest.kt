@@ -17,6 +17,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.io.File
 
 /**
@@ -148,6 +150,42 @@ class DatabaseEncryptionTest {
             encrypted.close()
         }
         assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 20, version)
+    }
+
+    @Test
+    fun conversionEmitsNonPiiAppLogBreadcrumbs() = runBlocking<Unit> {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+
+        // The seeded row carries an email address so the PII assertions below are meaningful.
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+        val afterEncrypt = buffer.snapshot()
+        val converting = afterEncrypt.single { it.message.startsWith("converting local cache database") }
+        assertEquals("the start breadcrumb is informational", 'I', converting.level)
+        assertEquals("converting local cache database (targetEncrypted=true)", converting.message)
+        val convertedAfterEncrypt = afterEncrypt.single { it.message == "local cache database converted" }
+        assertEquals('D', convertedAfterEncrypt.level)
+
+        // Converting back to plaintext logs the same pair with the flag flipped.
+        buffer.clear()
+        DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
+        val afterDecrypt = buffer.snapshot()
+        assertTrue(
+            afterDecrypt.any { it.message == "converting local cache database (targetEncrypted=false)" },
+        )
+        assertTrue(afterDecrypt.any { it.message == "local cache database converted" })
+
+        // Neither conversion's breadcrumbs may leak the passphrase, the on-disk path, or account PII.
+        (afterEncrypt + afterDecrypt).forEach { entry ->
+            assertFalse("must not leak the passphrase", entry.message.contains(passphrase))
+            assertFalse("must not leak the db file path", entry.message.contains(dbFile.absolutePath))
+            assertFalse("must not leak the seeded email", entry.message.contains("ada@example.org"))
+        }
     }
 
     private fun openPlaintext(): LibreMailDatabase =

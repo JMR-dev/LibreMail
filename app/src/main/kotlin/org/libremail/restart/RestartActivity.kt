@@ -5,7 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.os.Process
-import android.util.Log
+import org.libremail.reporting.AppLog
 
 /**
  * Separate-process trampoline that performs an app relaunch from OUTSIDE the process being killed.
@@ -40,7 +40,10 @@ class RestartActivity : Activity() {
         if (launchIntent != null) {
             startActivity(launchIntent)
         } else {
-            Log.w(TAG, "no launch intent for $packageName; cannot relaunch after restart")
+            // Logcat-only here: this runs in the ":restart" trampoline process, where
+            // LibreMailApplication.onCreate returns early and never calls AppLog.install, so the
+            // buffer is null and this breadcrumb never reaches a DebugReport.
+            AppLog.w(TAG, "no launch intent for $packageName; cannot relaunch after restart")
         }
 
         finish()

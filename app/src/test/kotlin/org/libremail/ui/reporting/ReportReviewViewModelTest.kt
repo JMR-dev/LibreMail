@@ -11,7 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -111,6 +113,31 @@ class ReportReviewViewModelTest {
             }
             verify(exactly = 1) { submitter.submit("rid") }
         }
+
+    @Test
+    fun `a rapid double-tap on Submit enqueues the upload only once`() {
+        // Runs on a StandardTestDispatcher so the submit coroutine is queued: the second tap lands
+        // before it runs. The fix flips SUBMITTING synchronously (before the async save), so the
+        // second tap is dropped instead of enqueueing a second upload (#304).
+        val standardMain = StandardTestDispatcher()
+        Dispatchers.setMain(standardMain)
+        every { submitter.isEnabled } returns true
+        every { submitter.submit("rid") } just Runs
+        every { submitter.status("rid") } returns emptyFlow()
+        every { store.save(any()) } just Runs
+        runTest(standardMain) {
+            val vm = viewModel()
+            vm.updateComment(VALID_COMMENT)
+            vm.updateEmail(VALID_EMAIL)
+
+            vm.submit()
+            vm.submit() // double-tap before the first submit is dispatched
+            advanceUntilIdle()
+
+            verify(exactly = 1) { submitter.submit("rid") }
+            verify(exactly = 1) { store.save(any()) }
+        }
+    }
 
     @Test
     fun `submit with no endpoint configured never transmits but still persists`() = runTest(testDispatcher) {

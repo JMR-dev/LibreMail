@@ -2,14 +2,19 @@
 package org.libremail.data.sync
 
 import android.content.Context
+import android.util.Log
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.BackfillProgressDao
@@ -28,6 +33,8 @@ import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -73,6 +80,25 @@ class MailSyncConcurrencyTest {
         secret = "s",
         useXoauth2 = false,
     )
+
+    // issue #329: MailSyncer/MailBackfiller/MailPruner now breadcrumb through AppLog, whose Logcat
+    // forwarding (`android.util.Log`) is a no-op stub under plain JVM unit tests — mock it statically,
+    // mirroring org.libremail.reporting.AppLogTest. The breadcrumbs themselves are asserted in
+    // MailSyncerTest/MailBackfillerTest/MailPrunerTest; this class only needs to not crash.
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        AppLog.install(RingLogBuffer())
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
 
     // --- sync ↔ backfill -----------------------------------------------------------------------
 
@@ -409,6 +435,11 @@ class MailSyncConcurrencyTest {
         coEvery { dao.markSynced(any()) } answers { store.markSynced(firstArg()) }
         coEvery { dao.updateHeaderContent(any(), any(), any(), any(), any(), any()) } answers {
             store.updateHeaderContent(firstArg(), secondArg(), thirdArg(), arg(3), arg(4), arg(5))
+        }
+        coEvery { dao.updateHeaderContents(any()) } answers {
+            firstArg<List<MessageEntity>>().forEach {
+                store.updateHeaderContent(it.id, it.sender, it.senderEmail, it.subject, it.timestampMillis, it.uid)
+            }
         }
         coEvery { dao.deleteByIds(any()) } answers { store.deleteByIds(firstArg()) }
         coEvery { dao.deleteSyncedByAccountFolder(any(), any()) } answers {

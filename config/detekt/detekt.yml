@@ -29,6 +29,40 @@ naming:
     ignoreAnnotated: ['Composable']
 
 style:
+  ForbiddenImport:
+    # Strangler guard for epic #324: production code must log through
+    # org.libremail.reporting.AppLog, which mirrors every line into the debug-report
+    # RingLogBuffer. A raw android.util.Log import writes to Logcat only and bypasses that
+    # buffer, so it never reaches a user-reviewed DebugReport. Excludes cover the ONE allowed
+    # wrapper (AppLog) plus the unit tests that import Log solely to mockkStatic/verify it —
+    # AppLog forwards to Log, a throwing stub under plain JVM unit tests, so those tests must
+    # mock it. They do not bypass the facade. Do NOT add production files here; migrate them to
+    # AppLog instead.
+    active: true
+    forbiddenImports:
+      - value: 'android.util.Log'
+        reason: >-
+          Log via org.libremail.reporting.AppLog so lines reach the debug-report RingLogBuffer;
+          raw android.util.Log bypasses it (epic #324).
+    excludes:
+      # The facade itself — the single sanctioned wrapper around android.util.Log.
+      - '**/reporting/AppLog.kt'
+      # Facade tests: mockkStatic(Log) to verify AppLog forwards to Logcat.
+      - '**/reporting/AppLogTest.kt'
+      - '**/reporting/AppLogUninstalledTest.kt'
+      - '**/restart/RestartActivityLoggingTest.kt'
+      # Unit tests that mockkStatic(Log::class) because the code under test logs via AppLog,
+      # which forwards to android.util.Log (a no-op throwing stub under plain JVM unit tests).
+      - '**/ui/lock/AppLockViewModelTest.kt'
+      - '**/ui/accountsetup/AccountSetupViewModelTest.kt'
+      - '**/data/sync/SyncWorkerTest.kt'
+      - '**/data/sync/MailSyncerTest.kt'
+      - '**/data/sync/MailBackfillerTest.kt'
+      - '**/data/sync/MailPrunerTest.kt'
+      - '**/data/sync/MailMaintenanceGateTest.kt'
+      - '**/data/sync/MailSyncConcurrencyTest.kt'
+      - '**/data/sync/PruneWorkerTest.kt'
+      - '**/data/sync/BackfillWorkerTest.kt'
   MagicNumber:
     # dp / sp / duration literals are idiomatic inline in Compose.
     ignoreAnnotated: ['Composable']

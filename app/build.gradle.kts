@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.util.Properties
 
@@ -199,10 +200,146 @@ jacoco {
     toolVersion = libs.versions.jacoco.get()
 }
 
-// Unit-test coverage report (issue #192). Reads the exec data the base `jacoco` plugin records for
-// the JVM `testDebugUnitTest` task, mapped against the debug variant's compiled Kotlin classes and
-// the hand-written main sources. Produces machine-readable XML + human-readable HTML under
-// build/reports/jacoco/jacocoTestReport/. Instrumented/E2E coverage is out of scope (issue #192).
+// Unit-test coverage (issue #192). Two tasks share ONE scoping so they can never measure different
+// surfaces: `jacocoTestReport` (XML+HTML under build/reports/jacoco/jacocoTestReport/) and
+// `jacocoTestCoverageVerification` (the no-regression gate, further down). Both read the exec data
+// the base `jacoco` plugin records for the JVM `testDebugUnitTest` task, mapped against the debug
+// variant's compiled Kotlin classes and the hand-written main sources. Instrumented/E2E coverage is
+// out of scope (issue #192).
+
+// Strip generated code from the denominator so the % reflects hand-written Kotlin. Verified
+// against an actual compileDebugKotlin output tree: Room's KSP-generated `_Impl` DAOs/database
+// and the Compose compiler's per-file ComposableSingletons holders are the only generated code
+// that actually lands in classDirectories below (Room's KSP output is added as an extra Kotlin
+// source root on the *same* compile task, so it comes out the same door as hand-written code).
+// Hilt/Dagger's generated Java (Hilt_*, Dagger*_HiltComponents*, *_GeneratedInjector, *_Factory,
+// *_MembersInjector, hilt_aggregated_deps) and AGP's BuildConfig/R/Manifest are compiled by a
+// separate javac task (hiltJavaCompileDebug / compileDebugJavaWithJavac) into a directory this
+// report never reads, so those patterns are conventional belt-and-suspenders in case that ever
+// changes. DataBinding isn't enabled in this module (no buildFeatures.dataBinding/viewBinding),
+// so there's nothing generated for it to exclude; if it's turned on later, add "**/BR.class",
+// "**/DataBinderMapperImpl*.class" and "**/*Binding.class".
+//
+// Deliberately NOT excluded: Kotlin's own `$$inlined$` synthetic classes (e.g. for
+// `Flow.map { ... }` in the repositories) — those hold real hand-written transform logic, not
+// generated boilerplate, so stripping them would silently shrink the measured surface.
+val jacocoGeneratedExcludes = listOf(
+    "**/R.class",
+    "**/R\$*.class",
+    "**/BuildConfig.*",
+    "**/Manifest*.*",
+    "**/Hilt_*.class",
+    "**/Dagger*.class",
+    "**/*_Hilt*",
+    "**/*_GeneratedInjector.class",
+    "**/hilt_aggregated_deps/**",
+    "**/dagger/**",
+    "**/*_Factory*",
+    "**/*_MembersInjector*",
+    "**/*_Provide*",
+    "**/*_Impl*",
+    "**/ComposableSingletons*",
+)
+
+// Scope the denominator to the JVM-testable surface (issues #290/#292, following the Phase-2 coverage
+// audit): unlike `jacocoGeneratedExcludes` above, none of this is generated code — it is hand-written
+// but structurally unreachable from a JVM unit test, so counting it against the metric just measures
+// how much Compose/framework glue exists rather than how well the logic is tested. Four buckets:
+//  1. Compose screen/component render code — only exercisable via a Compose UI test or an emulator.
+//  2. Android framework entry points the OS instantiates directly (Activity/Service/Application/
+//     BackupAgent) rather than the app's own code constructing them.
+//  3. Hilt DI modules — `@Provides`/`@Binds` one-liners with no branching logic.
+//  4. The `src/debug` cold-open probe (issue #221), a `ContentProvider` that only runs in a forked
+//     instrumented process (see its kdoc) and is never packaged in a release build anyway.
+//
+// KEPT IN SCOPE — this corrects #292, which excluded `**/*Worker*`: the six WorkManager workers
+// (SyncWorker, BackfillWorker, PruneWorker, SendWorker, ReportPurgeWorker, ReportUploadWorker) are
+// all directly unit-tested today (construct-the-worker-and-call-doWork(), e.g. SyncWorkerTest,
+// SendWorkerTest), so they carry real tested logic and belong in BOTH the numerator and denominator.
+// Only their Hilt wiring (WorkManagerModule) is excluded, and that falls under `**/di/**` below — so
+// there is intentionally no `**/*Worker*` glob in the list.
+//
+// Also deliberately NOT excluded, even though each sits in a package/pattern above and renders UI:
+// files that carry plain, unit-tested logic alongside their `@Composable` functions. JaCoCo has no
+// finer granularity than a class file, and Kotlin compiles every top-level function in a .kt file —
+// `@Composable` or not — into the SAME facade class (`<File>Kt.class`); excluding that class would
+// silently zero out the tested function's coverage too, not just the render code's. Confirmed
+// against these files' own dedicated tests before leaving them out of the list below:
+//   - ui/compose/RichTextEditor.kt (RichTextEditorTest) — the AnnotatedString<->RichTextContent
+//     editor-op functions (applyStyle/applyBlock/applyLink/toRichContent/toAnnotatedString/...).
+//   - ui/settings/AccountReorderList.kt (AccountReorderListTest) — commitDrag's reorder maths.
+//   - ui/reader/HtmlBody.kt (HtmlBodyTest, InlineImageResolverTest) — cidKey/resolveInlineImage/
+//     wrapHtml/toCssHex.
+//   - ui/reporting/ReportReviewScreen.kt (ReportReviewClipboardTest) — copyReportPayloadToClipboard.
+// (ui/compose/format/FontRegistry.kt and ui/mailbox/FolderLabels.kt are plain logic files with no
+// `@Composable` at all — never at risk — but sit right next to excluded files below.) For the same
+// reason this list names each Screen/component file individually rather than a package-wide
+// "**/ui/**": a blanket pattern can't carve the four files above back out, and would also reach
+// every `*ViewModel*`.
+val jacocoNonJvmTestableSurface = listOf(
+    // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
+    "**/LibreMailApp*",
+    "**/AccountPickerScreen*",
+    "**/AppPasswordSetupScreen*",
+    "**/ManualSetupScreen*",
+    "**/ComposeScreen*",
+    "**/ColorSwatch*",
+    "**/FontPicker*",
+    "**/FontSizePicker*",
+    "**/ParagraphAlignmentControl*",
+    "**/DraftsScreen*",
+    "**/LockScreen*",
+    "**/AppLockGateHost*",
+    "**/FolderDrawer*",
+    "**/MailboxScreen*",
+    "**/AddAnotherAccountScreen*",
+    "**/BatteryOptimizationScreen*",
+    "**/ContactsAccessScreen*",
+    "**/LicenseScreen*",
+    "**/OnboardingWelcomeScreen*",
+    "**/OutboxScreen*",
+    "**/ReaderScreen*",
+    "**/ProblemReportsScreen*",
+    "**/AccountSettingsScreen*",
+    "**/SettingsScreen*",
+    "**/SettingsComponents*",
+    "**/SignatureEditScreen*",
+    "**/SignaturesScreen*",
+    // --- Android framework entry points (OS-instantiated). NB: Workers are intentionally NOT here
+    // --- (they are unit-tested — see the KEPT IN SCOPE note above).
+    "**/*Activity*",
+    "**/*Service*",
+    "**/LibreMailApplication*",
+    "**/*BackupAgent*",
+    // --- Hilt DI wiring (includes WorkManagerModule) ---
+    "**/di/**",
+    // --- src/debug cold-open probe (issue #221) ---
+    "**/data/local/coldopen/**",
+)
+
+// Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output), with the generated
+// code and the non-JVM-testable surface above stripped out. All hand-written code here is Kotlin, so
+// the javac output (purely Hilt/Dagger/BuildConfig generated) is omitted. Hoisted to a shared val so
+// the report and the verification gate always run against the identical denominator.
+val jacocoDebugKotlinClasses = layout.buildDirectory.dir(
+    "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
+)
+val jacocoClassDirectories = fileTree(jacocoDebugKotlinClasses) {
+    exclude(jacocoGeneratedExcludes + jacocoNonJvmTestableSurface)
+}
+
+// Sources = hand-written main Kotlin.
+val jacocoSourceDirectories = files("src/main/kotlin")
+
+// Exec data written by the instrumented testDebugUnitTest task. Accept the base `jacoco` plugin's
+// default location and AGP's enableUnitTestCoverage location so the wiring is robust either way.
+val jacocoExecutionData = fileTree(layout.buildDirectory) {
+    include(
+        "jacoco/testDebugUnitTest.exec",
+        "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
+    )
+}
+
 tasks.register<JacocoReport>("jacocoTestReport") {
     // Ensure the unit tests (and thus their coverage exec data) have run first.
     dependsOn("testDebugUnitTest")
@@ -214,62 +351,46 @@ tasks.register<JacocoReport>("jacocoTestReport") {
         html.required.set(true)
     }
 
-    // Strip generated code from the denominator so the % reflects hand-written Kotlin. Verified
-    // against an actual compileDebugKotlin output tree: Room's KSP-generated `_Impl` DAOs/database
-    // and the Compose compiler's per-file ComposableSingletons holders are the only generated code
-    // that actually lands in classDirectories below (Room's KSP output is added as an extra Kotlin
-    // source root on the *same* compile task, so it comes out the same door as hand-written code).
-    // Hilt/Dagger's generated Java (Hilt_*, Dagger*_HiltComponents*, *_GeneratedInjector, *_Factory,
-    // *_MembersInjector, hilt_aggregated_deps) and AGP's BuildConfig/R/Manifest are compiled by a
-    // separate javac task (hiltJavaCompileDebug / compileDebugJavaWithJavac) into a directory this
-    // report never reads, so those patterns are conventional belt-and-suspenders in case that ever
-    // changes. DataBinding isn't enabled in this module (no buildFeatures.dataBinding/viewBinding),
-    // so there's nothing generated for it to exclude; if it's turned on later, add "**/BR.class",
-    // "**/DataBinderMapperImpl*.class" and "**/*Binding.class".
-    //
-    // Deliberately NOT excluded: Kotlin's own `$$inlined$` synthetic classes (e.g. for
-    // `Flow.map { ... }` in the repositories) — those hold real hand-written transform logic, not
-    // generated boilerplate, so stripping them would silently shrink the measured surface.
-    val generated = listOf(
-        "**/R.class",
-        "**/R\$*.class",
-        "**/BuildConfig.*",
-        "**/Manifest*.*",
-        "**/Hilt_*.class",
-        "**/Dagger*.class",
-        "**/*_Hilt*",
-        "**/*_GeneratedInjector.class",
-        "**/hilt_aggregated_deps/**",
-        "**/dagger/**",
-        "**/*_Factory*",
-        "**/*_MembersInjector*",
-        "**/*_Provide*",
-        "**/*_Impl*",
-        "**/ComposableSingletons*",
-    )
+    classDirectories.setFrom(jacocoClassDirectories)
+    sourceDirectories.setFrom(jacocoSourceDirectories)
+    executionData.setFrom(jacocoExecutionData)
+}
 
-    // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output). All hand-written
-    // code here is Kotlin, so the javac output (purely Hilt/Dagger/BuildConfig generated) is omitted.
-    val debugKotlinClasses = layout.buildDirectory.dir(
-        "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
-    )
-    classDirectories.setFrom(
-        fileTree(debugKotlinClasses) { exclude(generated) },
-    )
+// No-regression coverage gate (closes #251; scoping from #290/#292). Fails `check` / CI when the
+// overall LINE coverage of the scoped surface above drops below `jacocoLineCoverageFloor`. This is a
+// FLOOR, not an absolute 95% target — the maintainer chose a ratchet over a fixed goal. The floor is
+// set a hair (~0.5–1%) below the measured baseline so ordinary run-to-run noise doesn't red-flag it,
+// while a real regression still fails the build. Manual ratchet FOR NOW: when coverage rises
+// materially, bump this number up in the SAME PR so the floor tracks reality (there is no auto-ratchet
+// yet). Baseline measured when this floor was set: 80.21% line (4838/6032), floor 0.79 (~1.2% headroom).
+val jacocoLineCoverageFloor = "0.79"
+tasks.register<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    // Same inputs as jacocoTestReport (shared vals above) so the gate enforces exactly what the
+    // report shows. Depend on the unit tests so the exec data exists before verifying.
+    dependsOn("testDebugUnitTest")
+    group = "verification"
+    description = "Fails the build if scoped JVM unit-test LINE coverage regresses below the floor."
 
-    // Sources = hand-written main Kotlin.
-    sourceDirectories.setFrom(files("src/main/kotlin"))
+    classDirectories.setFrom(jacocoClassDirectories)
+    sourceDirectories.setFrom(jacocoSourceDirectories)
+    executionData.setFrom(jacocoExecutionData)
 
-    // Exec data written by the instrumented testDebugUnitTest task. Accept the base `jacoco` plugin's
-    // default location and AGP's enableUnitTestCoverage location so the wiring is robust either way.
-    executionData.setFrom(
-        fileTree(layout.buildDirectory) {
-            include(
-                "jacoco/testDebugUnitTest.exec",
-                "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
-            )
-        },
-    )
+    violationRules {
+        rule {
+            element = "BUNDLE"
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = jacocoLineCoverageFloor.toBigDecimal()
+            }
+        }
+    }
+}
+
+// Make the aggregate `check` lifecycle task enforce the no-regression floor locally too, so a
+// coverage regression is caught by `./gradlew check` and not only in CI.
+tasks.named("check") {
+    dependsOn("jacocoTestCoverageVerification")
 }
 
 dependencies {

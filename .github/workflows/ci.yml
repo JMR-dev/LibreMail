@@ -4,10 +4,33 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # The traffic-controller SCHEDULER (ci-trigger.yml, issue #349) (re-)triggers CI for a
+  # specific PR via this workflow_dispatch after a GITHUB_TOKEN auto-update has left the PR's
+  # head SHA with absent/stale checks. Dispatched on the PR's head BRANCH, so the run's checks
+  # land on the PR head SHA and satisfy branch protection. `on: pull_request` above is KEPT so
+  # brand-new PRs, human pushes, and fork PRs still get CI directly — this is the fail-open
+  # guarantee: CI is always triggerable even if the scheduler is broken or absent.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number this run is for (set by the traffic-controller scheduler)."
+        required: false
+        type: string
+      head_sha:
+        description: "Expected head SHA (informational, for traceability in the run log)."
+        required: false
+        type: string
+      reason:
+        description: "Why this run was dispatched (informational)."
+        required: false
+        type: string
 
-# A new push to a PR cancels any in-flight run for that PR.
+# A new trigger for a PR cancels that PR's own in-flight run (a newer head SHA supersedes).
+# The group is keyed to the PR NUMBER so a `pull_request` run and a scheduler
+# `workflow_dispatch` run for the SAME PR share one concurrency group (either supersedes a
+# stale run of the other); it falls back to the ref when no PR number is in context.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-pr-${{ github.event.pull_request.number || inputs.pr || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -20,46 +43,48 @@ env:
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
 
 jobs:
-  # ── Priority-based runner orchestration ──────────────────────────────────────
+  # ── Priority-based runner orchestration ─────────────────────────────
   # Runs FIRST (the heavy jobs below all `needs: traffic-control`). It reads THIS
-  # PR's P0–P9 label (and the special `broken` label) to order runner access.
-  # Effective priority: `broken` => 10 (BOTTOM, below P9), overriding any P0–P9;
-  # else the lowest-numbered P0–P9 label present (P0 = highest); else default P5.
+  # PR's P0–P9 label, `broken` label, and draft state to order runner access. The
+  # decision logic lives in .github/scripts/traffic_control.py — a pure, unit-tested
+  # core (see .github/scripts/test_traffic_control.py) plus a thin gh-I/O shell; this
+  # step just checks out the repo and runs it.
+  #
+  # Effective priority: a `broken` OR `draft` PR => 10 (BOTTOM, below P9), overriding
+  # any P0–P9; else the lowest-numbered P0–P9 label present (P0 = highest); else P5.
   #
   #   • P0 = EMERGENCY ONLY (app broken in production / emergency security update).
   #     P0 PREEMPTS: it cancels the in-progress / queued CI runs of ALL strictly-
   #     LOWER-priority OTHER open PRs to grab their runners immediately. A preempted
-  #     PR simply re-runs on its next push / autoupdate rebase.
+  #     PR simply re-runs on its next push / autoupdate rebase. P0 is the ONLY
+  #     priority that preempts a *normal* lower run — P1–P9 never bump those (a
+  #     higher PR may still reclaim a broken/draft lower run — see below).
   #
-  #   • `broken` = STUCK/FAILING PR — a MANUALLY-applied signal (maintainer / repo
-  #     owner only) meaning "deprioritise to the bottom so others aren't blocked
-  #     behind it while it's being fixed." Its effective priority is 10, so it NEVER
-  #     preempts (even if it's also labelled P0 — `broken` wins; a stuck PR can't be
-  #     an emergency merge) and ALWAYS yields: every other PR, even lower P-levels,
-  #     advances ahead of it. And because a broken PR's run is wasted (it can't
-  #     merge), ANY higher-priority PR — not just P0 — MAY cancel its in-progress run
-  #     to reclaim the runner. Removing the label restores its normal P-priority.
-  #     (Example: a P3 PR with failing CI was making lower-priority PRs wait behind
-  #     it; marking it `broken` lets them proceed — and reclaim its runner.)
+  #   • P1–P9 = YIELD WITHOUT BUMPING a *normal* lower run. They do NOT cancel a
+  #     normal lower-priority run already going — a higher-priority PR does not evict
+  #     it, it just takes the next free slot (it MAY still reclaim a broken/draft
+  #     lower run — see below). Mechanism: a bounded hold-back. This job defers (up to
+  #     HOLD_BACK_BUDGET_SECONDS, kept well under timeout-minutes) while any strictly-
+  #     higher-priority OTHER open PR still has an active/queued CI run, and — within
+  #     its OWN priority level — while any peer is ordered ahead of it (an in-flight
+  #     run keeps its place; then oldest createdAt first). It proceeds the moment it
+  #     is at the front, or when the budget elapses (a PR never blocks itself).
   #
-  #   • P1–P9 = YIELD WITHOUT BUMPING. They NEVER cancel a NON-broken lower-priority
-  #     run that is already going — a higher-priority PR does not evict it, it just
-  #     takes the next free slot. Mechanism: a bounded hold-back. This job polls and
-  #     defers (up to HOLD_BACK_BUDGET_SECONDS, kept well under timeout-minutes) while
-  #     any strictly-higher-priority OTHER open PR still has an active/queued CI run,
-  #     so that PR's heavy jobs reach the runner queue ahead of this PR's. When the
-  #     budget elapses it proceeds anyway (a PR never blocks itself).
+  #   • `broken` / `draft` = BOTTOM (effective P10). Always yields, never preempts —
+  #     and because its run is wasted (a broken PR can't merge; a draft isn't merge-
+  #     ready), ANY higher-priority PR (not just P0) MAY cancel that run to reclaim
+  #     its runner (still the strictly-lower rule: broken/draft is the bottom, so any
+  #     ready PR outranks it). A maintainer marks a stuck/failing PR `broken` to drop
+  #     it below everything so others aren't blocked behind it AND may reclaim its
+  #     runner; a draft behaves the same until it is marked ready for review.
   #
-  # Net preemption rule — a strictly-lower-priority OTHER PR's active run is cancelled
-  # iff (THIS PR is P0) OR (that PR is `broken`); otherwise it is left to run and we
-  # yield. So: P0 preempts ALL lower runs; ANY PR preempts lower `broken` runs; P1–P9
-  # never preempt a non-broken run.
-  #
-  # Hard safety rules, all enforced in the script below:
-  #   • never cancels a run on main / a push event (filters --event pull_request);
+  # Hard safety invariants, enforced in the script:
+  #   • never cancels a run on main / a push event (the gh query filters
+  #     --event pull_request and drops headBranch == main);
   #   • never cancels THIS PR's own run (skips self by PR number + run id);
   #   • never cancels an equal-or-higher-priority PR (only strictly-lower, prio > self);
-  #   • P1–P9 cancel NO non-broken run — they only wait (bounded), then proceed.
+  #   • P1–P9 never bump a *normal* lower run (they only reclaim broken/draft) —
+  #     otherwise they just wait (bounded), then proceed.
   #
   # Honest limitation: GitHub Actions has no native priority queue and assigns
   # runners roughly FIFO, so the hold-back is a BEST-EFFORT head-start, not a hard
@@ -69,215 +94,68 @@ jobs:
   #
   # It is deliberately NOT a merge-gate check: it is absent from `ci-passed`'s
   # needs, every API call is guarded, the script always exits 0, and the step is
-  # `continue-on-error` — so a hiccup (API error, missing permission, fork PR)
-  # can never fail or block CI. The heavy jobs only *order* after it via `needs`;
-  # if it were ever skipped/failed they'd be skipped, which `ci-passed` now treats
-  # as a gate failure (fail-safe: blocks merge, never spuriously passes).
+  # `continue-on-error` — so a hiccup (API error, missing permission, fork PR) can
+  # never fail or block CI. The heavy jobs only *order* after it via `needs`; if it
+  # were ever skipped/failed they'd be skipped, which `ci-passed` treats as a gate
+  # failure (fail-safe: blocks merge, never spuriously passes).
   traffic-control:
     name: Traffic control (runner priority)
     runs-on: ubuntu-latest
-    timeout-minutes: 6 # hard backstop; the P1–P9 hold-back budget below stays well under this
+    timeout-minutes: 6 # hard backstop; the P1–P9 hold-back budget stays well under this
     permissions:
-      actions: write # cancel lower-priority runs (P0 emergencies + broken targets)
-      pull-requests: read # read PR P0–P9 labels
+      contents: read # check out .github/scripts/traffic_control.py
+      actions: write # cancel lower-priority runs (P0 emergencies + broken/draft reclaim)
+      pull-requests: read # read PR P0–P9 labels + draft state
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      SELF_PR: ${{ github.event.pull_request.number }}
-      # P1–P9 bounded hold-back knobs. BUDGET must stay comfortably below
-      # timeout-minutes so the poll loop always exits 0 before the hard job timeout
-      # fires — a timed-out job would skip the heavy jobs and fail `ci-passed`.
+      # On a `pull_request` run this is the PR number and the script does its full in-run
+      # runner-priority orchestration. On a scheduler `workflow_dispatch` run (issue #349)
+      # the event is not `pull_request`, so the script no-ops here (`--mode orchestrate`
+      # only acts on pull_request events) — priority was ALREADY applied at trigger time by
+      # ci-trigger.yml, so re-doing the in-run hold-back would just waste runner time. The
+      # `|| inputs.pr` keeps the number in the log for a dispatched run.
+      SELF_PR: ${{ github.event.pull_request.number || inputs.pr }}
+      # P1–P9 bounded hold-back knobs, read by traffic_control.py. BUDGET must stay
+      # comfortably below timeout-minutes so the poll loop always exits 0 before the
+      # hard job timeout fires — a timed-out job would skip the heavy jobs and fail
+      # `ci-passed`.
       HOLD_BACK_BUDGET_SECONDS: "180"
       HOLD_BACK_POLL_SECONDS: "15"
     steps:
-      # No checkout: this job only calls the gh CLI (auto-configured from GH_TOKEN /
-      # GH_REPO), so it needs neither the repo contents nor the default contents:read.
-      - name: Apply runner priority (P0/broken preempt; P1–P9 hold back)
-        continue-on-error: true # belt-and-suspenders: never let this fail the run
-        run: |
-          # GitHub invokes run steps with `bash -eo pipefail`. Disable errexit so a
-          # single failed API call can't abort the step; we guard every call and
-          # always exit 0. Attacker-influenced values (branch names, labels) are only
-          # ever read via env / gh JSON into shell vars — never interpolated as code.
-          set +e
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # gh is auto-configured from GH_TOKEN / GH_REPO; python3 is preinstalled on the
+      # runner. The script guards every API call and always exits 0 (belt-and-braces
+      # with continue-on-error), so it can never fail or block CI.
+      - name: Apply runner priority (P0/broken/draft preempt; P1–P9 hold back)
+        continue-on-error: true
+        run: python3 .github/scripts/traffic_control.py
 
-          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ] || [ -z "${SELF_PR:-}" ]; then
-            echo "Not a pull_request event (or no PR number) — nothing to do."
-            exit 0
-          fi
+  # Fast, pure-stdlib-Python unit tests for the traffic-control decision core
+  # (.github/scripts/traffic_control.py / test_traffic_control.py — see the
+  # `traffic-control` job above). No emulator, no Gradle: this runs in seconds,
+  # independently of the Android jobs below, so a regression in the runner-priority
+  # logic fails fast and blocks merge via `ci-passed`.
+  traffic-control-tests:
+    name: Traffic-control unit tests
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-          # Effective priority of a labels JSON array read on stdin: a `broken` label
-          # => 10 (bottom, below P9), overriding any P0–P9; else the highest-priority
-          # (lowest-numbered) P0–P9 label present; else 5.
-          prio_of() {
-            jq -r 'if any(.[]; .name == "broken") then 10
-                   else ([ .[] | .name | select(test("^P[0-9]$")) | ltrimstr("P") | tonumber ]
-                         | if length == 0 then 5 else min end) end' 2>/dev/null
-          }
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
 
-          # Snapshot of every open PR (number, head branch, labels) to stdout.
-          list_open_prs() {
-            gh pr list --state open --limit 300 --json number,headRefName,labels
-          }
-
-          # Active (non-completed) CI run ids on head branch $1 — PR events only, never
-          # main. Shared by the preemption pass (ids to cancel) and the hold-back
-          # (presence => keep waiting).
-          active_run_ids_for_head() {
-            gh run list --workflow ci.yml --branch "$1" --event pull_request \
-                --limit 100 --json databaseId,status,headBranch,event 2>/dev/null \
-              | jq -r '.[]
-                  | select(.event == "pull_request")
-                  | select(.headBranch != "main")
-                  | select(.status != "completed")
-                  | .databaseId' 2>/dev/null
-          }
-
-          # One initial snapshot, used to read THIS PR's own priority.
-          if ! list_open_prs > open_prs.json 2>err.txt; then
-            echo "::warning::Could not list open PRs — skipping. $(cat err.txt 2>/dev/null)"
-            exit 0
-          fi
-
-          self_labels=$(jq -c --argjson pr "$SELF_PR" \
-            '([ .[] | select(.number == $pr) | .labels ] | .[0]) // []' open_prs.json 2>/dev/null)
-          self_prio=$(printf '%s' "${self_labels:-[]}" | prio_of)
-          case "$self_prio" in ''|*[!0-9]*) self_prio=5 ;; esac
-          if [ "$self_prio" -ge 10 ]; then prio_label="broken (below P9, bottom)"; else prio_label="P$self_prio"; fi
-          echo "This PR #$SELF_PR effective priority: $prio_label (P0 = highest/emergency, P9 = lowest, 'broken' = bottom)."
-
-          # ── PASS 1: PREEMPTION — cancel a strictly-lower OTHER PR's active runs ──
-          # A strictly-lower-priority (prio > self) OTHER PR's active CI run is
-          # cancelled iff keeping it running is wasteful, i.e. EITHER:
-          #   • THIS PR is P0 (emergency — reclaim every lower runner now), OR
-          #   • that OTHER PR is `broken` (its run can't merge, so ANY higher-priority
-          #     PR — not just P0 — may reclaim its runner).
-          # Otherwise (we're P1–P9 and the target isn't broken) we DON'T cancel; we
-          # only yield to genuinely-higher-priority PRs in PASS 2.
-          # Emit "number<TAB>head<TAB>prio<TAB>broken(0|1)" for every OTHER open PR
-          # (broken => effective prio 10, the bottom, overriding any P0–P9 label).
-          jq -r --argjson self "$SELF_PR" '
-            .[] | select(.number != $self)
-            | (any(.labels[]; .name == "broken")) as $b
-            | [ .number, .headRefName,
-                (if $b then 10
-                 else ([ .labels[] | .name | select(test("^P[0-9]$")) | ltrimstr("P") | tonumber ]
-                       | if length == 0 then 5 else min end) end),
-                (if $b then 1 else 0 end) ]
-            | @tsv' open_prs.json 2>/dev/null > others.tsv
-
-          cancelled_total=0
-          while IFS=$'\t' read -r num head prio isbroken; do
-            [ -n "${num:-}" ] || continue
-            case "$prio" in ''|*[!0-9]*) prio=5 ;; esac
-            [ "$isbroken" = "1" ] || isbroken=0
-
-            # Never touch an equal-or-higher-priority PR — only strictly lower.
-            if [ "$prio" -le "$self_prio" ]; then
-              echo "· PR #$num (P$prio): equal-or-higher priority — left untouched."
-              continue
-            fi
-
-            # Strictly lower, but only a P0 self OR a broken target is preemptible.
-            if [ "$self_prio" -ne 0 ] && [ "$isbroken" != "1" ]; then
-              echo "· PR #$num (P$prio): strictly lower, not broken, and we're not P0 — left to run (we don't cancel it)."
-              continue
-            fi
-
-            if [ "$self_prio" -eq 0 ]; then reason="P0 emergency"; else reason="target is 'broken'"; fi
-            tag="P$prio"; [ "$isbroken" = "1" ] && tag="broken"
-            echo "· PR #$num ($tag, head '$head'): preemptible ($reason) — checking for active CI runs."
-            run_ids=$(active_run_ids_for_head "$head")
-
-            if [ -z "$run_ids" ]; then
-              echo "    no active CI runs."
-              continue
-            fi
-
-            while IFS= read -r run_id; do
-              [ -n "$run_id" ] || continue
-              [ "$run_id" = "${GITHUB_RUN_ID:-}" ] && continue # never cancel our own run
-              if gh run cancel "$run_id" 2>err.txt; then
-                echo "    cancelled run $run_id (freed its runner)."
-                cancelled_total=$((cancelled_total + 1))
-              else
-                echo "::warning::could not cancel run $run_id — likely already finished. $(cat err.txt 2>/dev/null)"
-              fi
-            done <<< "$run_ids"
-          done < others.tsv
-          echo "Preemption pass complete — cancelled $cancelled_total run(s)."
-
-          # ── PASS 2: BOUNDED HOLD-BACK — yield to strictly-higher, cancel NOTHING ──
-          # P0 is top priority: nothing outranks an emergency, so it never yields.
-          if [ "$self_prio" -eq 0 ]; then
-            echo "P0 emergency — not yielding; proceeding immediately."
-            exit 0
-          fi
-
-          # Defer this PR's heavy jobs (which `needs: traffic-control`) while any
-          # strictly-higher-priority OTHER open PR still has an active/queued CI run,
-          # so those heavy jobs reach the runner queue first. Cancel NOTHING here.
-          # Bounded by budget; on expiry proceed regardless (never block ourselves,
-          # never hit the hard job timeout). Fail-open: any API hiccup => stop waiting.
-          case "$HOLD_BACK_BUDGET_SECONDS" in ''|*[!0-9]*) HOLD_BACK_BUDGET_SECONDS=180 ;; esac
-          case "$HOLD_BACK_POLL_SECONDS" in ''|*[!0-9]*) HOLD_BACK_POLL_SECONDS=15 ;; esac
-          deadline=$(( $(date +%s) + HOLD_BACK_BUDGET_SECONDS ))
-          echo "$prio_label — holding back up to ${HOLD_BACK_BUDGET_SECONDS}s for strictly-higher-priority PRs (no cancellation)."
-
-          while :; do
-            remaining=$(( deadline - $(date +%s) ))
-            if [ "$remaining" -le 0 ]; then
-              echo "Hold-back budget elapsed — proceeding; higher-priority PRs got their head start."
-              break
-            fi
-
-            # Refresh so newly opened higher-priority PRs are seen mid-wait.
-            if ! list_open_prs > open_prs.json 2>err.txt; then
-              echo "::warning::Could not refresh open PRs — proceeding. $(cat err.txt 2>/dev/null)"
-              break
-            fi
-
-            # Strictly-higher-priority OTHER PRs (broken => 10, so a broken PR is never
-            # higher than a non-broken one): "number<TAB>head<TAB>prio".
-            jq -r --argjson self "$SELF_PR" --argjson me "$self_prio" '
-              .[] | select(.number != $self)
-              | { n: .number, h: .headRefName,
-                  p: (if any(.labels[]; .name == "broken") then 10
-                      else ([ .labels[] | .name | select(test("^P[0-9]$")) | ltrimstr("P") | tonumber ]
-                            | if length == 0 then 5 else min end) end) }
-              | select(.p < $me)
-              | [ .n, .h, .p ] | @tsv' open_prs.json 2>/dev/null > higher.tsv
-
-            if [ ! -s higher.tsv ]; then
-              echo "No strictly-higher-priority open PRs — proceeding."
-              break
-            fi
-
-            blockers=""
-            while IFS=$'\t' read -r num head prio; do
-              [ -n "${num:-}" ] || continue
-              if [ -n "$(active_run_ids_for_head "$head")" ]; then
-                blockers="$blockers #$num(P$prio)"
-              fi
-            done < higher.tsv
-
-            if [ -z "$blockers" ]; then
-              echo "No strictly-higher-priority PR has active CI runs — proceeding."
-              break
-            fi
-
-            sleep_s="$HOLD_BACK_POLL_SECONDS"
-            [ "$remaining" -lt "$sleep_s" ] && sleep_s="$remaining"
-            echo "Yielding to strictly-higher-priority PR(s) with active CI:${blockers} — re-checking in ${sleep_s}s (${remaining}s budget left)."
-            [ "$sleep_s" -gt 0 ] && sleep "$sleep_s"
-          done
-
-          echo "Hold-back complete — this PR's heavy jobs may now start."
-          exit 0
+      - name: Run traffic-controller unit tests
+        run: python -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
   debug-build:
     name: Debug build
-    needs: traffic-control # order after runner-priority orchestration (P0/broken preempt; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     # x86_64: Linux-arm64 runners can't set up this SDK — android-actions/setup-android's sdkmanager
     # fails (exit 1) on the android-37.0 preview platform, and the emulator package has no arm64-Linux
     # build. Build/unit-test results are host-arch-independent anyway (R8/AGP/JVM); real arm64
@@ -314,7 +192,7 @@ jobs:
 
   unit-tests:
     name: Unit tests
-    needs: traffic-control # order after runner-priority orchestration (P0/broken preempt; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -346,9 +224,10 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: warn
 
-      # JaCoCo XML + HTML coverage for the JVM unit tests (issue #192). Reporting only — no
-      # threshold gate yet, so a coverage regression does not fail CI (a jacocoTestCoverageVerification
-      # gate is a natural follow-up once there's a baseline to enforce).
+      # JaCoCo XML + HTML coverage for the JVM unit tests (issue #192), scoped to the JVM-testable
+      # surface (issues #290/#292). The report is generated and uploaded first, then a no-regression
+      # gate (issue #251) fails the job if overall LINE coverage drops below the floor pinned in
+      # app/build.gradle.kts. Kept in this unit-test job so it is part of the `CI passed` gate.
       - name: Generate JaCoCo coverage report
         if: ${{ !cancelled() }}
         run: ./gradlew :app:jacocoTestReport --stacktrace
@@ -361,9 +240,16 @@ jobs:
           path: app/build/reports/jacoco/jacocoTestReport/
           if-no-files-found: warn
 
+      # No-regression coverage gate (issue #251): fails CI if scoped LINE coverage regresses below the
+      # floor pinned in app/build.gradle.kts. Runs after the upload so the HTML/XML report is always
+      # archived for triage even when this step goes red.
+      - name: Verify JaCoCo coverage (no-regression floor)
+        if: ${{ !cancelled() }}
+        run: ./gradlew :app:jacocoTestCoverageVerification --stacktrace
+
   static-analysis:
     name: Static analysis
-    needs: traffic-control # order after runner-priority orchestration (P0/broken preempt; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -401,7 +287,7 @@ jobs:
 
   e2e:
     name: E2E
-    needs: traffic-control # order after runner-priority orchestration (P0/broken preempt; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -512,7 +398,7 @@ jobs:
   # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
     name: E2E (API 37 preview)
-    needs: traffic-control # order after runner-priority orchestration (P0/broken preempt; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -569,13 +455,50 @@ jobs:
         run: |
           set -euo pipefail
           EMU_LOG="${RUNNER_TEMP:-/tmp}/emulator.log"
+          LOGCAT_LOG="${RUNNER_TEMP:-/tmp}/logcat.txt"
+          DIAG_LOG="${RUNNER_TEMP:-/tmp}/boot-diagnostics.txt"
+          GPU_MODE="swiftshader_indirect"
+
+          # On a boot timeout, capture the full system state (accel/KVM/GPU/mem/disk/AVD config +
+          # emulator.log tail) into $DIAG_LOG for the artifact upload, then print a CONCISE summary
+          # (accel/KVM status + last 50 lines of emulator.log) to the step log so the cause is
+          # visible in the run output without downloading artifacts. Every probe is guarded (|| true)
+          # so a missing tool can't abort the retry under `set -e`.
+          dump_diagnostics() {
+            local attempt="$1" accel kvm
+            accel=$("$ANDROID_SDK_ROOT/emulator/emulator" -accel-check 2>&1) || true
+            kvm=$(ls -l /dev/kvm 2>&1) || true
+            {
+              echo "===== API 37 boot diagnostics (attempt $attempt) ====="
+              echo "--- adb devices ---";             adb devices 2>&1 || true
+              echo "--- emulator -accel-check ---";    echo "$accel"
+              echo "--- /dev/kvm ---";                echo "$kvm"
+              echo "--- GPU mode ---";                echo "$GPU_MODE"
+              echo "--- free memory ---";             free -h 2>&1 || true
+              echo "--- free disk ---";               df -h 2>&1 || true
+              echo "--- AVD config.ini ---";          cat "${ANDROID_AVD_HOME:-$HOME/.android/avd}/api37.avd/config.ini" 2>&1 || true
+              echo "--- emulator.log (tail 200) ---";  tail -200 "$EMU_LOG" 2>&1 || true
+            } >> "$DIAG_LOG" 2>&1 || true
+            echo "----- BOOT FAILURE SUMMARY (attempt $attempt) -----"
+            echo "accel-check: $accel"
+            echo "/dev/kvm:    $kvm"
+            echo "--- emulator.log (tail 50) ---"; tail -50 "$EMU_LOG" 2>&1 || true
+          }
 
           boot_emulator() {
             echo "::group::Start API 37 emulator (attempt $1)"
             # Capture the emulator's own output — without this a boot failure is invisible.
+            # -verbose -debug init,avd_config,kernel turns boot logging on by default so a boot flake
+            # is diagnosable from $EMU_LOG; DIAGNOSTICS ONLY — no boot-affecting flag is changed.
             "$ANDROID_SDK_ROOT/emulator/emulator" -avd api37 \
               -no-window -no-audio -no-boot-anim -no-snapshot -accel on \
-              -gpu swiftshader_indirect -camera-back none -camera-front none > "$EMU_LOG" 2>&1 &
+              -gpu "$GPU_MODE" -camera-back none -camera-front none \
+              -verbose -debug init,avd_config,kernel > "$EMU_LOG" 2>&1 &
+            # Stream logcat from the moment the device registers (wait-for-device blocks until then)
+            # into a file that survives to the artifact upload. Appended (with a header) per attempt.
+            echo "===== logcat (attempt $1) =====" >> "$LOGCAT_LOG"
+            adb wait-for-device logcat -v time >> "$LOGCAT_LOG" 2>&1 &
+            logcat_pid=$!
             # ONE bounded wait covering both device registration and full boot, so a stuck emulator
             # fails fast instead of hanging the whole job until the 35-min cap (the original bug).
             if timeout 300 adb wait-for-device shell \
@@ -584,8 +507,8 @@ jobs:
             fi
             echo "::endgroup::"
             echo "::warning::API 37 emulator did not boot within 300s (attempt $1)"
-            adb devices || true
-            echo "--- emulator.log (tail) ---"; tail -120 "$EMU_LOG" || true
+            dump_diagnostics "$1"
+            kill "$logcat_pid" 2>/dev/null || true
             adb emu kill 2>/dev/null || true
             sleep 5
             return 1
@@ -603,6 +526,19 @@ jobs:
         run: |
           echo "--- emulator.log ---"; tail -200 "${RUNNER_TEMP:-/tmp}/emulator.log" 2>/dev/null || echo "(none)"
           echo "--- logcat ---"; adb logcat -d 2>/dev/null | tail -120 || echo "(device unavailable)"
+
+      # Always upload the emulator log + captured logcat + boot-diagnostics dump so a boot flake
+      # (which can time out or be cancelled) is diagnosable from artifacts without a re-run.
+      - name: Upload emulator boot diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-api37-boot-diagnostics
+          path: |
+            ${{ runner.temp }}/emulator.log
+            ${{ runner.temp }}/logcat.txt
+            ${{ runner.temp }}/boot-diagnostics.txt
+          if-no-files-found: warn
 
       - name: Shut down emulator
         if: always()
@@ -628,13 +564,14 @@ jobs:
     # a (should-never-happen) traffic-control failure would mark them 'skipped';
     # treating 'skipped' as a gate failure below keeps that fail-safe (blocks the
     # merge rather than letting it through untested).
-    needs: [static-analysis, debug-build, unit-tests, e2e, e2e-preview]
+    needs: [traffic-control-tests, static-analysis, debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every required job succeeded
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         run: |
           echo "Required CI jobs did not all succeed:"
+          echo "  traffic-control-tests: ${{ needs.traffic-control-tests.result }}"
           echo "  static-analysis: ${{ needs.static-analysis.result }}"
           echo "  debug-build: ${{ needs.debug-build.result }}"
           echo "  unit-tests:  ${{ needs.unit-tests.result }}"

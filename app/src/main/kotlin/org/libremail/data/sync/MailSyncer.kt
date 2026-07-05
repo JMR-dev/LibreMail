@@ -21,6 +21,8 @@ import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import org.libremail.power.BatteryStatusProvider
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -47,6 +49,7 @@ class MailSyncer @Inject constructor(
     /** Syncs every account's inbox. Succeeds if at least one account synced (or there are none). */
     override suspend fun syncAll(): Result<Int> {
         val accounts = accountDao.getAll().map { it.toDomain() }
+        AppLog.i(TAG, "sync all: ${accounts.size} accounts")
         if (accounts.isEmpty()) return Result.success(0)
 
         val result = syncMutex.withLock {
@@ -64,6 +67,8 @@ class MailSyncer @Inject constructor(
             }
             if (anySuccess || firstError == null) Result.success(total) else Result.failure(firstError)
         }
+        result.onSuccess { total -> AppLog.i(TAG, "sync all done: fetched=$total") }
+            .onFailure { error -> AppLog.w(TAG, "sync all failed", error) }
         if (result.isSuccess) accounts.forEach { prefetchIfEnabled(it, INBOX) }
         return result
     }
@@ -122,18 +127,11 @@ class MailSyncer @Inject constructor(
                     val ids = entities.map { it.id }
                     messageDao.insertNew(entities)
                     // Mark every fetched message as synced (upgrades any former search-only row) and refresh
-                    // its display fields — without touching cached bodies or optimistic read/star flags.
+                    // its display fields — without touching cached bodies or optimistic read/star flags. The
+                    // per-row refreshes run in a single transaction (issue #310) so a whole recent window
+                    // costs one commit instead of one fsync per message (amplified on the encrypted cache).
                     messageDao.markSynced(ids)
-                    entities.forEach {
-                        messageDao.updateHeaderContent(
-                            id = it.id,
-                            sender = it.sender,
-                            senderEmail = it.senderEmail,
-                            subject = it.subject,
-                            timestampMillis = it.timestampMillis,
-                            uid = it.uid,
-                        )
-                    }
+                    messageDao.updateHeaderContents(entities)
                     // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older
                     // history paged in by the background backfill (issue #12) survives each foreground sync
                     // instead of being wiped by a whole-folder "not in the recent 50" delete. Bound the
@@ -154,6 +152,8 @@ class MailSyncer @Inject constructor(
                     notifier.notifyNewMail(account, newMessages.sortedByDescending { it.timestampMillis })
                 }
             }
+            val folderLabel = logSafeFolderLabel(folder)
+            AppLog.d(TAG, "sync ${accountLogRef(account.id)} folder=$folderLabel fetched=${fetched.size}")
             fetched.size
         }
 
@@ -179,6 +179,7 @@ class MailSyncer @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "MailSyncer"
         const val INBOX = "INBOX"
 
         /**

@@ -21,6 +21,8 @@ data class SignatureEditUiState(
     val body: String = "",
     val bodyHtml: String? = null,
     val loaded: Boolean = false,
+    /** True once a save is in flight; gates the Save button so a double-tap can't create two signatures. */
+    val saving: Boolean = false,
 )
 
 @HiltViewModel
@@ -59,12 +61,18 @@ class SignatureEditViewModel @Inject constructor(
 
     fun onBodyChange(plain: String, html: String?) = _state.update { it.copy(body = plain, bodyHtml = html) }
 
-    /** Persists the signature (create or update), then invokes [onSaved]. */
+    /**
+     * Persists the signature (create or update), then invokes [onSaved]. Re-entrant taps are dropped:
+     * [SignatureEditUiState.saving] is flipped synchronously before the launch, so a rapid double-tap on
+     * a new signature can't create two rows (and fire [onSaved] twice) (#304).
+     */
     fun save(onSaved: () -> Unit) {
+        if (_state.value.saving) return
         val s = _state.value
         val name = s.name.trim().ifBlank { DEFAULT_NAME }
         // Store real HTML so the signature round-trips; derive it from the plaintext when unformatted.
         val html = s.bodyHtml ?: RichTextHtml.toHtml(RichTextContent(s.body))
+        _state.update { it.copy(saving = true) }
         viewModelScope.launch {
             if (signatureId == null) {
                 signatureRepository.create(accountId, name, html)

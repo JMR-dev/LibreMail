@@ -28,8 +28,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,13 +69,14 @@ import org.libremail.R
 import org.libremail.domain.model.Attachment
 import org.libremail.domain.model.InlineImage
 import org.libremail.domain.model.Message
+import org.libremail.domain.model.ReplyMode
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
     onBack: () -> Unit,
-    onReply: (to: String, subject: String, from: String) -> Unit,
+    onOpenCompose: (draftId: String) -> Unit,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -80,6 +84,7 @@ fun ReaderScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val noAppMessage = stringResource(R.string.attachment_no_app)
     val downloadFailedTemplate = stringResource(R.string.attachment_download_failed)
+    val replyFailedMessage = stringResource(R.string.reader_reply_failed)
 
     LaunchedEffect(state.deleted) {
         if (state.deleted) onBack()
@@ -95,6 +100,11 @@ fun ReaderScreen(
 
                 is ReaderEvent.DownloadFailed ->
                     snackbarHostState.showSnackbar(downloadFailedTemplate.format(event.name))
+
+                is ReaderEvent.OpenCompose -> onOpenCompose(event.draftId)
+
+                is ReaderEvent.ComposeFailed ->
+                    snackbarHostState.showSnackbar(event.message ?: replyFailedMessage)
             }
         }
     }
@@ -115,11 +125,17 @@ fun ReaderScreen(
                 actions = {
                     val message = state.message
                     if (message != null) {
-                        TextButton(onClick = {
-                            onReply(message.senderEmail, "Re: ${message.subject}", message.accountId)
-                        }) {
+                        TextButton(
+                            onClick = { viewModel.reply(ReplyMode.REPLY) },
+                            enabled = !state.composing,
+                        ) {
                             Text(stringResource(R.string.reader_reply))
                         }
+                        ReplyOverflow(
+                            enabled = !state.composing,
+                            onReplyAll = { viewModel.reply(ReplyMode.REPLY_ALL) },
+                            onForward = { viewModel.reply(ReplyMode.FORWARD) },
+                        )
                         IconButton(onClick = viewModel::toggleStar) {
                             Icon(
                                 Icons.Filled.Star,
@@ -161,6 +177,35 @@ fun ReaderScreen(
                 Text(state.error ?: stringResource(R.string.reader_empty))
             }
         }
+    }
+}
+
+/**
+ * Overflow menu holding the reader's secondary reply actions — Reply All and Forward — so the app bar
+ * keeps Reply as its one prominent action (#303). Disabled while a draft is being built so a rapid tap
+ * can't kick off a second one before the first navigates to compose.
+ */
+@Composable
+private fun ReplyOverflow(enabled: Boolean, onReplyAll: () -> Unit, onForward: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    IconButton(onClick = { expanded = true }, enabled = enabled) {
+        Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_reply_all)) },
+            onClick = {
+                expanded = false
+                onReplyAll()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_forward)) },
+            onClick = {
+                expanded = false
+                onForward()
+            },
+        )
     }
 }
 

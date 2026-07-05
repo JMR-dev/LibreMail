@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -21,6 +22,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.data.local.entity.CredentialEntity
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 
 /**
  * The one-time move performed by [AccountDataMigrator] (issue #111): copying accounts / credentials /
@@ -140,6 +143,26 @@ class AccountDataMigratorTest {
             assertEquals("sealed-secret", credentialDao().getById("acct")?.encryptedSecret)
             close()
         }
+    }
+
+    @Test
+    fun copyEmitsANonPiiAppLogBreadcrumbNamingOnlyTheMovedTables() = runBlocking<Unit> {
+        seedVersion14Cache()
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+
+        AccountDataMigrator.copyAccountTables(cacheFile, cachePassphrase = "", accountsFile = accountsFile)
+
+        val entry = buffer.snapshot()
+            .single { it.message.startsWith("moved account tables into the account database") }
+        assertEquals("the migration breadcrumb is a debug line", 'D', entry.level)
+        listOf("accounts", "credentials", "account_settings", "signatures").forEach { table ->
+            assertTrue("breadcrumb must name the moved table $table", entry.message.contains(table))
+        }
+        // The breadcrumb carries only table names — never the seeded email, secret, or passphrase.
+        assertFalse(entry.message.contains("ada@example.org"))
+        assertFalse(entry.message.contains("sealed-secret"))
+        assertFalse(entry.message.contains(passphrase))
     }
 
     @Test

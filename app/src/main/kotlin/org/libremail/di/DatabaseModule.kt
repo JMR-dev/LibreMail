@@ -3,6 +3,7 @@ package org.libremail.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import dagger.Module
 import dagger.Provides
@@ -47,31 +48,40 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
 
+    /**
+     * Every migration the Room builder registers, in one named list so [provideDatabase] and the
+     * "registered == declared" safety-net test (issue #312) read the same source. There is deliberately
+     * no destructive fallback (see below), so a migration authored + schema-committed but forgotten here
+     * passes every replay test yet crash-loops ALL upgrading users at first DB open; `MigrationTest`
+     * asserts this list equals the reflectively-discovered set of every `Migration` val in Migrations.kt.
+     */
+    val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+        MIGRATION_7_8,
+        MIGRATION_8_9,
+        MIGRATION_9_10,
+        MIGRATION_10_11,
+        MIGRATION_11_12,
+        MIGRATION_12_13,
+        MIGRATION_13_14,
+        MIGRATION_14_15,
+        MIGRATION_15_16,
+        MIGRATION_16_17,
+        MIGRATION_17_18,
+        MIGRATION_18_19,
+        MIGRATION_19_20,
+    )
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context, provisioner: DatabaseProvisioner): LibreMailDatabase =
         Room.databaseBuilder(context, LibreMailDatabase::class.java, DB_NAME)
-            .addMigrations(
-                MIGRATION_1_2,
-                MIGRATION_2_3,
-                MIGRATION_3_4,
-                MIGRATION_4_5,
-                MIGRATION_5_6,
-                MIGRATION_6_7,
-                MIGRATION_7_8,
-                MIGRATION_8_9,
-                MIGRATION_9_10,
-                MIGRATION_10_11,
-                MIGRATION_11_12,
-                MIGRATION_12_13,
-                MIGRATION_13_14,
-                MIGRATION_14_15,
-                MIGRATION_15_16,
-                MIGRATION_16_17,
-                MIGRATION_17_18,
-                MIGRATION_18_19,
-                MIGRATION_19_20,
-            )
+            .addMigrations(*ALL_MIGRATIONS)
             // No destructive fallback: the migration chain is complete, and silently dropping the
             // mail/message tables would lose cached data. A missing migration should fail loudly in
             // testing instead.
