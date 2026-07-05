@@ -23,8 +23,10 @@ class AppLogUninstalledTest {
     fun setUp() {
         mockkStatic(Log::class)
         every { Log.d(any(), any()) } returns 0
+        every { Log.d(any(), any(), any()) } returns 0
         every { Log.i(any(), any()) } returns 0
         every { Log.w(any<String>(), any<String>()) } returns 0
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
         AppLog::class.java.getDeclaredField("buffer").apply { isAccessible = true }.set(AppLog, null)
     }
@@ -34,16 +36,21 @@ class AppLogUninstalledTest {
 
     @Test
     fun `logging before a buffer is installed only forwards to Logcat`() {
+        val cause = IllegalStateException("boom")
         AppLog.d("Tag", "debug")
+        AppLog.d("Tag", "debug with cause", cause)
         AppLog.i("Tag", "info")
         AppLog.w("Tag", "warn")
+        AppLog.w("Tag", "warn with cause", cause)
         AppLog.e("Tag", "error")
-        AppLog.e("Tag", "error with cause", IllegalStateException("boom"))
+        AppLog.e("Tag", "error with cause", cause)
 
         verify { Log.d("Tag", "debug") }
+        verify { Log.d("Tag", "debug with cause", cause) }
         verify { Log.i("Tag", "info") }
         verify { Log.w("Tag", "warn") }
+        verify { Log.w("Tag", "warn with cause", cause) }
         verify { Log.e("Tag", "error", null) }
-        verify { Log.e("Tag", "error with cause", any<IllegalStateException>()) }
+        verify { Log.e("Tag", "error with cause", cause) }
     }
 }
