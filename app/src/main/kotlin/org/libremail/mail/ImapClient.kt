@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
-import android.util.Log
 import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
@@ -33,6 +32,7 @@ import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
+import org.libremail.reporting.AppLog
 import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -474,12 +474,12 @@ class ImapClient(private val reuseConnections: Boolean) {
             runCatching { store.close() }
             throw e
         }
-        Log.d(TAG, "IDLE connected")
+        AppLog.d(TAG, "IDLE connected")
 
         val pushes = Channel<Unit>(Channel.CONFLATED)
         inbox.addMessageCountListener(object : MessageCountAdapter() {
             override fun messagesAdded(event: MessageCountEvent) {
-                Log.d(TAG, "IDLE push: ${event.messages.size} new message(s)")
+                AppLog.d(TAG, "IDLE push: ${event.messages.size} new message(s)")
                 pushes.trySend(Unit)
             }
         })
