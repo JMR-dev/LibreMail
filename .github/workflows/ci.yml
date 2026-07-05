@@ -34,29 +34,34 @@ jobs:
   #     P0 PREEMPTS: it cancels the in-progress / queued CI runs of ALL strictly-
   #     LOWER-priority OTHER open PRs to grab their runners immediately. A preempted
   #     PR simply re-runs on its next push / autoupdate rebase. P0 is the ONLY
-  #     priority that preempts — P1–P9 never cancel a lower run mid-flight.
+  #     priority that preempts a *normal* lower run — P1–P9 never bump those (a
+  #     higher PR may still reclaim a broken/draft lower run — see below).
   #
-  #   • P1–P9 = YIELD WITHOUT BUMPING. They NEVER cancel a lower-priority run that is
-  #     already going — a higher-priority PR does not evict it, it just takes the next
-  #     free slot. Mechanism: a bounded hold-back. This job defers (up to
+  #   • P1–P9 = YIELD WITHOUT BUMPING a *normal* lower run. They do NOT cancel a
+  #     normal lower-priority run already going — a higher-priority PR does not evict
+  #     it, it just takes the next free slot (it MAY still reclaim a broken/draft
+  #     lower run — see below). Mechanism: a bounded hold-back. This job defers (up to
   #     HOLD_BACK_BUDGET_SECONDS, kept well under timeout-minutes) while any strictly-
   #     higher-priority OTHER open PR still has an active/queued CI run, and — within
   #     its OWN priority level — while any peer is ordered ahead of it (an in-flight
   #     run keeps its place; then oldest createdAt first). It proceeds the moment it
   #     is at the front, or when the budget elapses (a PR never blocks itself).
   #
-  #   • `broken` / `draft` = BOTTOM (effective P10). Always yields, never preempts.
-  #     A maintainer applies `broken` to a stuck/failing PR to deprioritise it below
-  #     everything so others aren't blocked behind it; a draft isn't merge-ready, so
-  #     it likewise waits behind every ready PR. Only a P0 may cancel a bottom PR's
-  #     run (the same strictly-lower rule as any other target).
+  #   • `broken` / `draft` = BOTTOM (effective P10). Always yields, never preempts —
+  #     and because its run is wasted (a broken PR can't merge; a draft isn't merge-
+  #     ready), ANY higher-priority PR (not just P0) MAY cancel that run to reclaim
+  #     its runner (still the strictly-lower rule: broken/draft is the bottom, so any
+  #     ready PR outranks it). A maintainer marks a stuck/failing PR `broken` to drop
+  #     it below everything so others aren't blocked behind it AND may reclaim its
+  #     runner; a draft behaves the same until it is marked ready for review.
   #
   # Hard safety invariants, enforced in the script:
   #   • never cancels a run on main / a push event (the gh query filters
   #     --event pull_request and drops headBranch == main);
   #   • never cancels THIS PR's own run (skips self by PR number + run id);
   #   • never cancels an equal-or-higher-priority PR (only strictly-lower, prio > self);
-  #   • P1–P9 cancel NOTHING — they only wait (bounded), then proceed.
+  #   • P1–P9 never bump a *normal* lower run (they only reclaim broken/draft) —
+  #     otherwise they just wait (bounded), then proceed.
   #
   # Honest limitation: GitHub Actions has no native priority queue and assigns
   # runners roughly FIFO, so the hold-back is a BEST-EFFORT head-start, not a hard
@@ -76,7 +81,7 @@ jobs:
     timeout-minutes: 6 # hard backstop; the P1–P9 hold-back budget stays well under this
     permissions:
       contents: read # check out .github/scripts/traffic_control.py
-      actions: write # cancel lower-priority runs (P0 emergencies)
+      actions: write # cancel lower-priority runs (P0 emergencies + broken/draft reclaim)
       pull-requests: read # read PR P0–P9 labels + draft state
     env:
       GH_TOKEN: ${{ github.token }}
@@ -94,13 +99,13 @@ jobs:
       # gh is auto-configured from GH_TOKEN / GH_REPO; python3 is preinstalled on the
       # runner. The script guards every API call and always exits 0 (belt-and-braces
       # with continue-on-error), so it can never fail or block CI.
-      - name: Apply runner priority (P0 preempts; P1–P9 hold back)
+      - name: Apply runner priority (P0/broken/draft preempt; P1–P9 hold back)
         continue-on-error: true
         run: python3 .github/scripts/traffic_control.py
 
   debug-build:
     name: Debug build
-    needs: traffic-control # order after runner-priority orchestration (P0 preempts; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     # x86_64: Linux-arm64 runners can't set up this SDK — android-actions/setup-android's sdkmanager
     # fails (exit 1) on the android-37.0 preview platform, and the emulator package has no arm64-Linux
     # build. Build/unit-test results are host-arch-independent anyway (R8/AGP/JVM); real arm64
@@ -137,7 +142,7 @@ jobs:
 
   unit-tests:
     name: Unit tests
-    needs: traffic-control # order after runner-priority orchestration (P0 preempts; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -194,7 +199,7 @@ jobs:
 
   static-analysis:
     name: Static analysis
-    needs: traffic-control # order after runner-priority orchestration (P0 preempts; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -232,7 +237,7 @@ jobs:
 
   e2e:
     name: E2E
-    needs: traffic-control # order after runner-priority orchestration (P0 preempts; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -343,7 +348,7 @@ jobs:
   # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
     name: E2E (API 37 preview)
-    needs: traffic-control # order after runner-priority orchestration (P0 preempts; P1–P9 hold-back)
+    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

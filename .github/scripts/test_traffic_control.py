@@ -3,10 +3,11 @@
 """Unit tests for the pure decision core of traffic_control.py (no network).
 
 Covers: priority resolution (P-label / broken / draft / default P5), PASS 1
-preemption (only P0 cancels strictly-lower; P1-P9 never bump; self / main /
-equal-or-higher never cancelled), PASS 2 hold-back (yield to strictly-higher with
-an active run; same-level running-first then oldest-first), and a few end-to-end
-decision scenarios."""
+preemption (P0 reclaims all strictly-lower; ANY higher PR reclaims a broken/draft
+lower run; P1-P9 never bump a *normal* lower run; self / main / equal-or-higher
+never cancelled), PASS 2 hold-back (yield to strictly-higher with an active run;
+same-level running-first then oldest-first), and a few end-to-end decision
+scenarios."""
 
 from __future__ import annotations
 
@@ -63,17 +64,40 @@ class EffectivePriorityTests(unittest.TestCase):
 
 
 class RunsToCancelTests(unittest.TestCase):
-    def test_non_p0_self_cancels_nothing(self):
+    def test_non_p0_self_does_not_bump_normal_lower_run(self):
+        # P1-P9 never preempt a *normal* strictly-lower run — they yield instead.
         me = pr(1, ["P1"])
         others = [pr(2, ["P5"], status=tc.RUNNING, run_ids=[200])]
         self.assertEqual(tc.runs_to_cancel(me, [me, *others]), [])
 
-    def test_non_p0_self_never_cancels_even_broken(self):
-        # Behaviour change vs the old bash (see module/PR notes): P1-P9 no longer
-        # reclaim a broken target's runner — only P0 preempts.
+    def test_non_p0_self_reclaims_broken_lower_run(self):
+        # Any higher-priority PR (not just P0) may reclaim a broken target's runner.
         me = pr(1, ["P3"])
         broken = pr(2, ["broken"], status=tc.RUNNING, run_ids=[200])
-        self.assertEqual(tc.runs_to_cancel(me, [me, broken]), [])
+        self.assertEqual(tc.runs_to_cancel(me, [me, broken]), [200])
+
+    def test_non_p0_self_reclaims_draft_lower_run(self):
+        # A draft is not merge-ready — its run is likewise reclaimable by any higher PR.
+        me = pr(1, ["P3"])
+        draft = pr(2, [], draft=True, status=tc.QUEUED, run_ids=[200])
+        self.assertEqual(tc.runs_to_cancel(me, [me, draft]), [200])
+
+    def test_broken_self_does_not_cancel_equal_broken(self):
+        # Both effective P10 — the equal-or-higher invariant still forbids cancelling.
+        me = pr(1, ["broken"])
+        peer = pr(2, ["broken"], status=tc.RUNNING, run_ids=[200])
+        self.assertEqual(tc.runs_to_cancel(me, [me, peer]), [])
+
+    def test_bottom_self_preempts_nothing(self):
+        # A broken/draft PR (P10) is the bottom: nothing is strictly-lower, so it
+        # cancels neither a higher (P5) nor an equal (P10) run.
+        me = pr(1, [], draft=True)                              # P10
+        prs = [
+            me,
+            pr(2, ["P5"], status=tc.RUNNING, run_ids=[200]),   # higher
+            pr(3, ["broken"], status=tc.RUNNING, run_ids=[300]),  # equal P10
+        ]
+        self.assertEqual(tc.runs_to_cancel(me, prs), [])
 
     def test_p0_cancels_strictly_lower_active_runs(self):
         me = pr(1, ["P0"])
@@ -202,6 +226,20 @@ class EndToEndDecisionTests(unittest.TestCase):
         dec = tc.decide(me, [me])
         self.assertEqual(dec.cancel_run_ids, ())
         self.assertTrue(dec.proceed)
+
+    def test_p5_reclaims_draft_then_waits_behind_higher(self):
+        # A non-P0 PR can BOTH reclaim a broken/draft lower run (PASS 1) AND still
+        # yield to a strictly-higher PR (PASS 2) in the same evaluation.
+        me = pr(40, ["P5"], status=tc.RUNNING, run_ids=[4000])
+        prs = [
+            me,
+            pr(41, ["P2"], status=tc.RUNNING, run_ids=[4100]),        # higher — blocks
+            pr(42, [], draft=True, status=tc.RUNNING, run_ids=[4200]),  # draft — reclaimed
+        ]
+        dec = tc.decide(me, prs)
+        self.assertEqual(list(dec.cancel_run_ids), [4200])
+        self.assertFalse(dec.proceed)
+        self.assertEqual([b.number for b in dec.blockers], [41])
 
 
 class SnapshotParsingTests(unittest.TestCase):

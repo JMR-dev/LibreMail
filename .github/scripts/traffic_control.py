@@ -19,9 +19,10 @@ ORDER OF OPERATIONS (issue #342)
 1. Effective priority orders everything: the lowest-numbered `P0`-`P9` label present
    (P0 = highest), default `P5` if none. A `broken` OR `draft` PR is effectively P10
    (bottom, below P9), overriding any P0-P9 label.
-2. PASS 1 - preemption: **only a P0 (emergency) preempts.** A P0 cancels the
-   in-progress / queued CI runs of ALL strictly-lower OTHER open PRs to reclaim their
-   runners. P1-P9 never bump a lower run mid-flight.
+2. PASS 1 - preemption: a strictly-lower OTHER PR's in-progress / queued run is
+   cancelled iff THIS PR is P0 (an emergency reclaims ALL lower runners) OR the target
+   is broken/draft (a wasted run any higher-priority PR may reclaim). P1-P9 never bump
+   a *normal* lower run mid-flight — only a P0 does that.
 3. PASS 2 - bounded hold-back: a non-P0 PR yields (cancels nothing) to any strictly-
    higher-priority OTHER PR that has an active/queued run, and — among its OWN
    priority level — to any PR ordered ahead of it (running-first, then oldest by
@@ -169,20 +170,29 @@ def runs_to_cancel(
     *,
     self_run_id: int | None = None,
 ) -> list[int]:
-    """PASS 1. Run ids to cancel — **empty unless THIS PR is P0**. A P0 preempts the
-    active (running/queued) runs of every strictly-lower OTHER PR. Invariants: never
-    cancel self (by number or run id), never cancel an equal-or-higher-priority PR."""
-    if effective_priority(this_pr) != TOP_PRIORITY:
-        return []                                   # only P0 preempts; P1-P9 never bump
+    """PASS 1. Run ids to cancel. A strictly-lower OTHER PR's active (running/queued)
+    run is cancelled iff keeping it running is wasteful, i.e. EITHER:
+      * THIS PR is P0 — an emergency reclaims every strictly-lower runner now; OR
+      * the target is broken/draft (effective priority 10) — its run can't merge /
+        isn't merge-ready, so ANY higher-priority PR may reclaim its runner.
+    P1-P9 never cancel a *normal* strictly-lower run — they yield in PASS 2 instead.
+    Invariants: never cancel self (by number or run id), never cancel an
+    equal-or-higher-priority PR (only strictly-lower, prio > self)."""
+    self_prio = effective_priority(this_pr)
     to_cancel: list[int] = []
     seen: set[int] = set()
     for pr in all_prs:
         if pr.number == this_pr.number:
             continue                                # never cancel self
-        if effective_priority(pr) <= TOP_PRIORITY:
-            continue                                # only strictly-lower (skip other P0s)
+        target_prio = effective_priority(pr)
+        if target_prio <= self_prio:
+            continue                                # only strictly-lower (skip equal-or-higher)
         if pr.run_status not in ACTIVE:
             continue                                # nothing running/queued to cancel
+        # Strictly lower: preemptible iff we're P0 OR the target is broken/draft
+        # (a bottom, priority-10, wasted run that any higher PR may reclaim).
+        if self_prio != TOP_PRIORITY and target_prio < BOTTOM_PRIORITY:
+            continue                                # P1-P9 don't bump a *normal* lower run
         for rid in pr.run_ids:
             if self_run_id is not None and rid == self_run_id:
                 continue                            # never cancel our own run
@@ -377,13 +387,14 @@ def run_live() -> int:
     _log(f"This PR #{self_number} effective priority: {priority_label(self_prio)} "
          "(P0 = highest/emergency, P9 = lowest, broken/draft = bottom).")
 
-    # ── PASS 1: PREEMPTION (only a P0 self) ──────────────────────────────────
+    # ── PASS 1: PREEMPTION (P0 reclaims all lower; anyone reclaims broken/draft) ──
     to_cancel = runs_to_cancel(this_pr, all_prs, self_run_id=self_run_id)
     if not to_cancel:
         if self_prio == TOP_PRIORITY:
             _log("P0 emergency — no strictly-lower active runs to cancel.")
         else:
-            _log("Not P0 — no preemption (P1-P9 never cancel a lower run mid-flight).")
+            _log("No preemptible runs (P1-P9 only reclaim broken/draft lower runs; "
+                 "none active).")
     else:
         cancelled = 0
         for rid in to_cancel:
@@ -448,11 +459,14 @@ def run_dry(text: str) -> int:
     dec = decide(this_pr, all_prs, self_run_id=self_run_id)
     _log(f"This PR #{dec.self_number} effective priority: "
          f"{priority_label(dec.self_priority)}")
-    if dec.self_priority == TOP_PRIORITY:
-        _log(f"PASS 1 (preemption): P0 — cancel run ids: "
-             f"{list(dec.cancel_run_ids) or '(none active)'}")
+    if dec.cancel_run_ids:
+        why = ("P0 emergency (reclaims all strictly-lower)"
+               if dec.self_priority == TOP_PRIORITY
+               else "reclaiming broken/draft lower runs")
+        _log(f"PASS 1 (preemption): {why} — cancel run ids: "
+             f"{list(dec.cancel_run_ids)}")
     else:
-        _log("PASS 1 (preemption): not P0 — no cancellations.")
+        _log("PASS 1 (preemption): nothing to cancel.")
     if dec.proceed:
         _log("PASS 2 (hold-back): PROCEED — no blockers.")
     else:
