@@ -16,7 +16,10 @@ name: Auto-update PR branches
 # controller scheduler (`.github/workflows/ci-trigger.yml` -> `traffic_control.py --mode
 # trigger`), which triggers the updated PRs deliberately, in priority order, a few at a time.
 # So this workflow must NOT use the PAT for the update push (that would re-introduce the
-# cascade). The AUTOUPDATE_TOKEN secret is no longer needed by this workflow.
+# cascade). This workflow itself doesn't need AUTOUPDATE_TOKEN — but the secret is still REQUIRED
+# by the repo: the ci-trigger.yml scheduler dispatches CI with it (a GITHUB_TOKEN dispatch would
+# be held for manual approval and never run un-attended). Don't delete the secret. See
+# ci-trigger.yml + issue #351.
 
 on:
   push:
