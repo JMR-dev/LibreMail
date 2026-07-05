@@ -11,7 +11,19 @@ import androidx.room.PrimaryKey
     // The (accountId, folder, uid) index serves the folder-scoped UID probes the backfill/reconcile
     // hot paths run on every page/sync: MIN(uid) (lowestSyncedUid) and the uid >= window bound
     // (deleteSyncedInWindowNotIn / syncedIdsBeyondCountInFolder).
-    indices = [Index("accountId"), Index("timestampMillis"), Index("accountId", "folder", "uid")],
+    //
+    // The (folder, inInbox, timestampMillis) index serves the unified-inbox summary scan (issue #187):
+    // MessageDao.pagingUnifiedFolderSummaries filters `folder = ? AND inInbox = 1 ORDER BY
+    // timestampMillis DESC` with no folder-leading index, so it SCANned the whole table via
+    // index_messages_timestampMillis and filtered per row. This index makes the two equalities an
+    // index seek and supplies the timestampMillis ordering, turning the SCAN into a bounded SEARCH
+    // with no temp B-tree sort (verified via EXPLAIN QUERY PLAN).
+    indices = [
+        Index("accountId"),
+        Index("timestampMillis"),
+        Index("accountId", "folder", "uid"),
+        Index("folder", "inInbox", "timestampMillis"),
+    ],
 )
 data class MessageEntity(
     @PrimaryKey val id: String,

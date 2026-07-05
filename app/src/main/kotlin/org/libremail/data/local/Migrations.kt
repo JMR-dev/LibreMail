@@ -380,3 +380,25 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         )
     }
 }
+
+/**
+ * v19 -> v20: covering index for the unified-inbox summary scan (issue #187; preserves existing data
+ * — a pure additive index, no column/table change or data transformation). The paged "All inboxes"
+ * query [org.libremail.data.local.dao.MessageDao.pagingUnifiedFolderSummaries] filters
+ * `folder = ? AND inInbox = 1 ORDER BY timestampMillis DESC`, but no index led with `folder`, so the
+ * planner walked the whole table via `index_messages_timestampMillis` in timestamp order and filtered
+ * `folder`/`inInbox` per row (a full `SCAN`, verified via `EXPLAIN QUERY PLAN`). The
+ * `(folder, inInbox, timestampMillis)` index turns the two equality predicates into an index seek and
+ * supplies the `timestampMillis` ordering, so the scan becomes a bounded `SEARCH … USING INDEX
+ * index_messages_folder_inInbox_timestampMillis (folder=? AND inInbox=?)` with no temp B-tree sort.
+ * `CREATE INDEX IF NOT EXISTS` is idempotent, and the name/columns match the Room `@Index` on
+ * [org.libremail.data.local.entity.MessageEntity] so the migrated schema validates against 20.json.
+ */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_messages_folder_inInbox_timestampMillis` " +
+                "ON `messages` (`folder`, `inInbox`, `timestampMillis`)",
+        )
+    }
+}

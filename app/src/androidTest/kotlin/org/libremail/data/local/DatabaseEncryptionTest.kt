@@ -149,7 +149,7 @@ class DatabaseEncryptionTest {
         } finally {
             encrypted.close()
         }
-        assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 19, version)
+        assertEquals("Room's schema version must survive the plaintext -> encrypted conversion", 20, version)
     }
 
     @Test

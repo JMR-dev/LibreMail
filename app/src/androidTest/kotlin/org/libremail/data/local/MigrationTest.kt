@@ -64,6 +64,56 @@ class MigrationTest {
         }
     }
 
+    /**
+     * v19 -> v20 (issue #187): the unified-inbox covering index appears over exactly
+     * `(folder, inInbox, timestampMillis)`, cached rows survive, and the paged "All inboxes" query now
+     * plans as a bounded `SEARCH` on that index with no temp B-tree sort (instead of a whole-table
+     * `SCAN`). Asserting the query plan on the real Android SQLite proves the index is genuinely
+     * covering the filter+order, not merely present.
+     */
+    @Test
+    fun migrate19To20_addsUnifiedInboxCoveringIndexUsedByTheSummaryScan() {
+        helper.createDatabase(TEST_DB, 19).apply {
+            // A representative spread: two synced INBOX rows, plus a transient search hit (inInbox = 0)
+            // — all must survive the pure additive index migration. Fold columns default to ''.
+            execSQL(
+                "INSERT INTO messages (id, accountId, sender, senderEmail, subject, snippet, body, isHtml, " +
+                    "timestampMillis, isRead, isStarred, folder, inInbox, bodyFetched, uid) VALUES " +
+                    "('a:INBOX:2', 'a', 'Ada', 'ada@example.org', 'Hi', '', '', 0, 2000, 0, 0, 'INBOX', 1, 1, 2), " +
+                    "('b:INBOX:1', 'b', 'Bob', 'bob@example.org', 'Yo', '', '', 0, 1000, 0, 0, 'INBOX', 1, 1, 1), " +
+                    "('a:INBOX:9', 'a', 'Cy', 'cy@example.org', 'Q', '', '', 0, 3000, 0, 0, 'INBOX', 0, 0, 9)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 20, true, MIGRATION_19_20)
+
+        // The index exists over exactly (folder, inInbox, timestampMillis), in that order.
+        assertEquals(
+            "19->20 must create the (folder, inInbox, timestampMillis) unified-inbox covering index",
+            listOf("folder", "inInbox", "timestampMillis"),
+            db.indexColumns("index_messages_folder_inInbox_timestampMillis"),
+        )
+        // The cached rows are untouched by the additive migration.
+        assertEquals("19->20 must not touch the mail cache", 3, db.count("messages"))
+        // The production pagingUnifiedFolderSummaries query now SEARCHes the new index and drops the
+        // temp B-tree sort (before this index it SCANned index_messages_timestampMillis whole-table).
+        val plan = db.queryPlan(
+            "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, isRead, " +
+                "isStarred, folder, inInbox, bodyFetched FROM messages " +
+                "WHERE folder = 'INBOX' AND inInbox = 1 ORDER BY timestampMillis DESC",
+        )
+        assertTrue(
+            "the unified-inbox summary query must SEARCH the covering index, not SCAN; plan was $plan",
+            plan.any { it.contains("SEARCH") && it.contains("index_messages_folder_inInbox_timestampMillis") },
+        )
+        assertTrue(
+            "the covering index must supply the ordering (no temp B-tree sort); plan was $plan",
+            plan.none { it.contains("TEMP B-TREE") },
+        )
+        db.close()
+    }
+
     /** v11 -> v12 (PR #54): `folders.specialUse` appears defaulting to 0 and existing data survives. */
     @Test
     fun migrate11To12_defaultsExistingFoldersToNotSpecialUse() {
@@ -574,6 +624,22 @@ class MigrationTest {
     private fun SupportSQLiteDatabase.count(table: String): Int = query("SELECT COUNT(*) FROM $table").use { c ->
         c.moveToFirst()
         c.getInt(0)
+    }
+
+    /** Column names of [index], in index (seqno) order — empty if the index does not exist. */
+    private fun SupportSQLiteDatabase.indexColumns(index: String): List<String> =
+        query("PRAGMA index_info(`$index`)").use { c ->
+            buildList {
+                // PRAGMA index_info rows are (seqno, cid, name); the cursor yields them in seqno order.
+                while (c.moveToNext()) add(c.getString(2))
+            }
+        }
+
+    /** The human-readable `detail` step of each `EXPLAIN QUERY PLAN [sql]` row (the last column). */
+    private fun SupportSQLiteDatabase.queryPlan(sql: String): List<String> = query("EXPLAIN QUERY PLAN $sql").use { c ->
+        buildList {
+            while (c.moveToNext()) add(c.getString(c.columnCount - 1))
+        }
     }
 
     private companion object {
