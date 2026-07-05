@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,11 @@ BUILD_TOOLS = "build-tools;37.0.0"
 AVD_NAME = "api37"
 DEVICE_PROFILE = "pixel_2"
 BOOT_TIMEOUT = 300
+# GPU mode: the ONE deliberate divergence from CI's e2e-preview (which uses `swiftshader_indirect`
+# for headless determinism). Locally we render on the host GPU -- faster, and the mode that boots
+# cleanly on a dev machine. See start_emulator. Kept as a constant so start_emulator and the
+# boot-failure diagnostics dump report the same value.
+GPU_MODE = "auto-no-window"
 
 IS_WINDOWS = os.name == "nt"
 BAT = ".bat" if IS_WINDOWS else ""
@@ -120,15 +126,17 @@ def create_avd(avdmanager: str, emulator: str) -> None:
 def start_emulator(emulator: str, emu_log: Path, attempt: int) -> subprocess.Popen:
     print(f"Starting API 37 emulator (attempt {attempt})...")
     # Flags mirror .github/workflows/ci.yml e2e-preview (cold headless boot, hardware accel
-    # required, no cameras), with ONE deliberate LOCAL exception -- the GPU mode. CI uses
-    # `-gpu swiftshader_indirect` (software rendering, deterministic on a headless CI runner);
-    # locally we use `-gpu auto-no-window`, which renders on the host GPU: faster, and the mode
-    # that boots cleanly on a dev machine. Keep everything except the GPU mode in lockstep with
-    # that job.
+    # required, no cameras), with ONE deliberate LOCAL exception -- the GPU mode (GPU_MODE above:
+    # CI uses `-gpu swiftshader_indirect`, deterministic on a headless CI runner; locally we render
+    # on the host GPU -- faster, and the mode that boots cleanly on a dev machine). `-verbose -debug
+    # init,avd_config,kernel` turns emulator boot logging on by default (mirrors CI) so a boot flake
+    # is diagnosable from $EMU_LOG; it is DIAGNOSTICS ONLY and does not change any boot-affecting
+    # flag. Keep everything except the GPU mode in lockstep with that job.
     flags = [
         "-avd", AVD_NAME,
         "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-accel", "on",
-        "-gpu", "auto-no-window", "-camera-back", "none", "-camera-front", "none",
+        "-gpu", GPU_MODE, "-camera-back", "none", "-camera-front", "none",
+        "-verbose", "-debug", "init,avd_config,kernel",
     ]
     log = open(emu_log, "wb")  # noqa: SIM115 - handed to the child; closed in the parent below
     try:
@@ -189,6 +197,102 @@ def tail(path: Path, lines: int = 80) -> None:
         pass
 
 
+def _accel_check(emulator: str) -> str:
+    """`emulator -accel-check` output -- the accelerator status (WHPX / KVM / HVF availability)."""
+    try:
+        out = subprocess.run(cmd(emulator, "-accel-check"), capture_output=True, text=True,
+                             check=False)
+        return (out.stdout + out.stderr).strip() or f"(no output; exit {out.returncode})"
+    except OSError as exc:
+        return f"(accel-check failed: {exc})"
+
+
+def _kvm_status() -> str:
+    """/dev/kvm presence (Linux). Off-Linux the accelerator is WHPX/HVF -- see -accel-check."""
+    if os.path.exists("/dev/kvm"):
+        return "/dev/kvm present"
+    return f"/dev/kvm absent (expected off-Linux; platform={platform.system()})"
+
+
+def _mem_info() -> str:
+    """Free/total memory. Reads /proc/meminfo on Linux (where CI runs); best-effort elsewhere."""
+    try:
+        meminfo = Path("/proc/meminfo")
+        if meminfo.exists():
+            wanted = {"MemTotal", "MemFree", "MemAvailable"}
+            lines = [line.strip() for line in meminfo.read_text().splitlines()
+                     if line.split(":", 1)[0] in wanted]
+            if lines:
+                return "; ".join(lines)
+    except OSError:
+        pass
+    return f"(memory stats unavailable on {platform.system()})"
+
+
+def _disk_info(path: Path) -> str:
+    """Free/total disk for the filesystem holding `path` (cross-platform via shutil.disk_usage)."""
+    try:
+        usage = shutil.disk_usage(path)
+        gib = 1024 ** 3
+        return f"total={usage.total / gib:.1f}GiB free={usage.free / gib:.1f}GiB ({path})"
+    except OSError as exc:
+        return f"(disk stats unavailable: {exc})"
+
+
+def start_logcat(adb: str, logcat_log: Path, attempt: int) -> subprocess.Popen | None:
+    """Background `adb wait-for-device logcat -v time` to a file. wait-for-device blocks until the
+    device registers, so streaming starts the moment the emulator appears and captures the whole
+    boot. Mirrors CI's e2e-preview logcat capture; appended (with a header) per boot attempt."""
+    try:
+        with open(logcat_log, "a") as marker:
+            marker.write(f"===== logcat (attempt {attempt}) =====\n")
+        log = open(logcat_log, "ab")  # noqa: SIM115 - child inherits fd; parent copy closed below
+        try:
+            return subprocess.Popen(cmd(adb, "wait-for-device", "logcat", "-v", "time"),
+                                    stdout=log, stderr=subprocess.STDOUT)
+        finally:
+            log.close()  # the child has inherited its own fd; the parent's copy is no longer needed
+    except OSError as exc:
+        print(f"WARNING: could not start logcat capture: {exc}", file=sys.stderr)
+        return None
+
+
+def stop_logcat(proc: subprocess.Popen | None) -> None:
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def dump_diagnostics(adb: str, emulator: str, emu_log: Path, avd_home: Path, attempt: int) -> None:
+    """Print boot diagnostics + a concise failure summary to the console -- the local mirror of CI's
+    e2e-preview boot-timeout dump (accel/KVM/GPU/mem/disk/AVD config + emulator.log tail). Local
+    runs PRINT these; CI uploads the same set as an artifact and prints only the concise summary."""
+    accel = _accel_check(emulator)
+    kvm = _kvm_status()
+    config_ini = avd_home / f"{AVD_NAME}.avd" / "config.ini"
+    print(f"===== API 37 boot diagnostics (attempt {attempt}) =====")
+    print("--- adb devices ---")
+    subprocess.run(cmd(adb, "devices"), check=False)
+    print(f"--- emulator -accel-check ---\n{accel}")
+    print(f"--- KVM/hypervisor ---\n{kvm}")
+    print(f"--- GPU mode ---\n{GPU_MODE}")
+    print(f"--- free memory ---\n{_mem_info()}")
+    print(f"--- free disk ---\n{_disk_info(Path(tempfile.gettempdir()))}")
+    print("--- AVD config.ini ---")
+    try:
+        print(config_ini.read_text(errors="replace"))
+    except OSError as exc:
+        print(f"(could not read {config_ini}: {exc})")
+    # Concise failure summary (mirrors CI): accel/KVM status + the last 50 lines of emulator.log.
+    print(f"----- BOOT FAILURE SUMMARY (attempt {attempt}) -----")
+    print(f"accel-check: {accel}")
+    print(f"kvm: {kvm}")
+    tail(emu_log, 50)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Hand-provision + run the API 37 preview E2E suite.")
@@ -216,8 +320,14 @@ def main() -> int:
     os.environ["ANDROID_AVD_HOME"] = str(avd_home)
 
     emu_log = Path(tempfile.gettempdir()) / "libremail-api37-emulator.log"
+    logcat_log = Path(tempfile.gettempdir()) / "libremail-api37-logcat.txt"
+    try:
+        logcat_log.unlink()  # start fresh; start_logcat appends (with a header) per attempt
+    except OSError:
+        pass
     adb: str | None = None
     proc: subprocess.Popen | None = None
+    logcat_proc: subprocess.Popen | None = None
     test_exit = 1
 
     try:
@@ -234,16 +344,21 @@ def main() -> int:
         # 2. Create the AVD, mirroring CI.
         create_avd(avdmanager, emulator)
 
-        # 3. Cold-boot headless, retrying once (mirrors CI's two-attempt boot loop).
+        # 3. Cold-boot headless, retrying once (mirrors CI's two-attempt boot loop). Diagnostics
+        # (logcat capture + a boot-timeout dump) are ADDITIVE -- the retry/boot-wait is unchanged.
         booted = False
         for attempt in (1, 2):
             proc = start_emulator(emulator, emu_log, attempt)
+            # Capture logcat from device registration onward (mirrors CI); killed on failure.
+            logcat_proc = start_logcat(adb, logcat_log, attempt)
             if wait_for_boot(adb, proc, args.boot_timeout):
                 booted = True
                 break
             print(f"API 37 emulator did not boot within {args.boot_timeout}s (attempt {attempt}).",
                   file=sys.stderr)
-            tail(emu_log)
+            dump_diagnostics(adb, emulator, emu_log, avd_home, attempt)
+            stop_logcat(logcat_proc)
+            logcat_proc = None
             stop_emulator(adb, proc)
             proc = None
             time.sleep(5)
@@ -266,9 +381,12 @@ def main() -> int:
     finally:
         # 5. Always tear the emulator down and delete the AVD, even on failure.
         print("Tearing down API 37 emulator and AVD...")
+        stop_logcat(logcat_proc)
         stop_emulator(adb, proc)
         subprocess.run(cmd(avdmanager, "delete", "avd", "-n", AVD_NAME), check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"(emulator boot log: {emu_log})")
+        print(f"(logcat: {logcat_log})")
 
     if test_exit != 0:
         print(f"api37 connectedDebugAndroidTest failed (exit {test_exit}).", file=sys.stderr)
