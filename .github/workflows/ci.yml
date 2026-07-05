@@ -43,103 +43,21 @@ env:
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
 
 jobs:
-  # ── Priority-based runner orchestration ─────────────────────────────
-  # Runs FIRST (the heavy jobs below all `needs: traffic-control`). It reads THIS
-  # PR's P0–P9 label, `broken` label, and draft state to order runner access. The
-  # decision logic lives in .github/scripts/traffic_control.py — a pure, unit-tested
-  # core (see .github/scripts/test_traffic_control.py) plus a thin gh-I/O shell; this
-  # step just checks out the repo and runs it.
-  #
-  # Effective priority: a `broken` OR `draft` PR => 10 (BOTTOM, below P9), overriding
-  # any P0–P9; else the lowest-numbered P0–P9 label present (P0 = highest); else P5.
-  #
-  #   • P0 = EMERGENCY ONLY (app broken in production / emergency security update).
-  #     P0 PREEMPTS: it cancels the in-progress / queued CI runs of ALL strictly-
-  #     LOWER-priority OTHER open PRs to grab their runners immediately. A preempted
-  #     PR simply re-runs on its next push / autoupdate rebase. P0 is the ONLY
-  #     priority that preempts a *normal* lower run — P1–P9 never bump those (a
-  #     higher PR may still reclaim a broken/draft lower run — see below).
-  #
-  #   • P1–P9 = YIELD WITHOUT BUMPING a *normal* lower run. They do NOT cancel a
-  #     normal lower-priority run already going — a higher-priority PR does not evict
-  #     it, it just takes the next free slot (it MAY still reclaim a broken/draft
-  #     lower run — see below). Mechanism: a bounded hold-back. This job defers (up to
-  #     HOLD_BACK_BUDGET_SECONDS, kept well under timeout-minutes) while any strictly-
-  #     higher-priority OTHER open PR still has an active/queued CI run, and — within
-  #     its OWN priority level — while any peer is ordered ahead of it (an in-flight
-  #     run keeps its place; then oldest createdAt first). It proceeds the moment it
-  #     is at the front, or when the budget elapses (a PR never blocks itself).
-  #
-  #   • `broken` / `draft` = BOTTOM (effective P10). Always yields, never preempts —
-  #     and because its run is wasted (a broken PR can't merge; a draft isn't merge-
-  #     ready), ANY higher-priority PR (not just P0) MAY cancel that run to reclaim
-  #     its runner (still the strictly-lower rule: broken/draft is the bottom, so any
-  #     ready PR outranks it). A maintainer marks a stuck/failing PR `broken` to drop
-  #     it below everything so others aren't blocked behind it AND may reclaim its
-  #     runner; a draft behaves the same until it is marked ready for review.
-  #
-  # Hard safety invariants, enforced in the script:
-  #   • never cancels a run on main / a push event (the gh query filters
-  #     --event pull_request and drops headBranch == main);
-  #   • never cancels THIS PR's own run (skips self by PR number + run id);
-  #   • never cancels an equal-or-higher-priority PR (only strictly-lower, prio > self);
-  #   • P1–P9 never bump a *normal* lower run (they only reclaim broken/draft) —
-  #     otherwise they just wait (bounded), then proceed.
-  #
-  # Honest limitation: GitHub Actions has no native priority queue and assigns
-  # runners roughly FIFO, so the hold-back is a BEST-EFFORT head-start, not a hard
-  # guarantee — under sustained contention the bounded wait can expire before a
-  # higher-priority PR drains. The waiting job also occupies a (cheap, short-lived)
-  # runner meanwhile, which is exactly why the wait is kept bounded.
-  #
-  # It is deliberately NOT a merge-gate check: it is absent from `ci-passed`'s
-  # needs, every API call is guarded, the script always exits 0, and the step is
-  # `continue-on-error` — so a hiccup (API error, missing permission, fork PR) can
-  # never fail or block CI. The heavy jobs only *order* after it via `needs`; if it
-  # were ever skipped/failed they'd be skipped, which `ci-passed` treats as a gate
-  # failure (fail-safe: blocks merge, never spuriously passes).
-  traffic-control:
-    name: Traffic control (runner priority)
-    runs-on: ubuntu-latest
-    timeout-minutes: 6 # hard backstop; the P1–P9 hold-back budget stays well under this
-    permissions:
-      contents: read # check out .github/scripts/traffic_control.py
-      actions: write # cancel lower-priority runs (P0 emergencies + broken/draft reclaim)
-      pull-requests: read # read PR P0–P9 labels + draft state
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      # On a `pull_request` run this is the PR number and the script does its full in-run
-      # runner-priority orchestration. On a scheduler `workflow_dispatch` run (issue #349)
-      # the event is not `pull_request`, so the script no-ops here (`--mode orchestrate`
-      # only acts on pull_request events) — priority was ALREADY applied at trigger time by
-      # ci-trigger.yml, so re-doing the in-run hold-back would just waste runner time. The
-      # `|| inputs.pr` keeps the number in the log for a dispatched run.
-      SELF_PR: ${{ github.event.pull_request.number || inputs.pr }}
-      # P1–P9 bounded hold-back knobs, read by traffic_control.py. BUDGET must stay
-      # comfortably below timeout-minutes so the poll loop always exits 0 before the
-      # hard job timeout fires — a timed-out job would skip the heavy jobs and fail
-      # `ci-passed`.
-      HOLD_BACK_BUDGET_SECONDS: "180"
-      HOLD_BACK_POLL_SECONDS: "15"
-    steps:
-      - name: Check out source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # gh is auto-configured from GH_TOKEN / GH_REPO; python3 is preinstalled on the
-      # runner. The script guards every API call and always exits 0 (belt-and-braces
-      # with continue-on-error), so it can never fail or block CI.
-      - name: Apply runner priority (P0/broken/draft preempt; P1–P9 hold back)
-        continue-on-error: true
-        run: python3 .github/scripts/traffic_control.py
+  # Runner-priority orchestration (traffic-control) has been EXTRACTED from this file.
+  # The `traffic-control` job that used to run here first (ordering the heavy jobs below, which
+  # each declared it as a `needs:` dependency) now lives VERBATIM in its own workflow at
+  # .github/workflows/traffic-control.yml, and is being mothballed: it will be disabled pending
+  # a rebuild as a published GitHub Action, so the heavy jobs below no longer depend on it. Its
+  # pure-Python decision core (.github/scripts/traffic_control.py) is unchanged and is still
+  # unit-tested by the `traffic-control-tests` job below.
 
   # Fast, pure-stdlib-Python unit tests for the traffic-control decision core
   # (.github/scripts/traffic_control.py / test_traffic_control.py — see the
-  # `traffic-control` job above). No emulator, no Gradle: this runs in seconds,
+  # extracted `traffic-control` workflow). No emulator, no Gradle: this runs in seconds,
   # independently of the Android jobs below, so a regression in the runner-priority
   # logic fails fast and blocks merge via `ci-passed`.
   traffic-control-tests:
     name: Traffic-control unit tests
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -155,7 +73,6 @@ jobs:
 
   debug-build:
     name: Debug build
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     # x86_64: Linux-arm64 runners can't set up this SDK — android-actions/setup-android's sdkmanager
     # fails (exit 1) on the android-37.0 preview platform, and the emulator package has no arm64-Linux
     # build. Build/unit-test results are host-arch-independent anyway (R8/AGP/JVM); real arm64
@@ -192,7 +109,6 @@ jobs:
 
   unit-tests:
     name: Unit tests
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -249,7 +165,6 @@ jobs:
 
   static-analysis:
     name: Static analysis
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -287,7 +202,6 @@ jobs:
 
   e2e:
     name: E2E
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -398,7 +312,6 @@ jobs:
   # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
     name: E2E (API 37 preview)
-    needs: traffic-control # order after runner-priority orchestration (P0/broken/draft preempt; P1–P9 hold-back)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -559,11 +472,12 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    # `traffic-control` is intentionally NOT listed here — it is a best-effort
-    # optimizer, not a merge requirement. But because the heavy jobs `needs:` it,
-    # a (should-never-happen) traffic-control failure would mark them 'skipped';
-    # treating 'skipped' as a gate failure below keeps that fail-safe (blocks the
-    # merge rather than letting it through untested).
+    # `traffic-control` is intentionally NOT listed here — it has been extracted to its own
+    # (mothballed/disabled) workflow, .github/workflows/traffic-control.yml, and the heavy jobs
+    # below no longer depend on it, so it plays no part in this gate. The `traffic-control-tests`
+    # job (its pure-Python decision-core unit tests) IS a required input below. Treating a
+    # 'skipped'/'cancelled' required job as a gate failure keeps this fail-safe (blocks the
+    # merge rather than letting an untested change through).
     needs: [traffic-control-tests, static-analysis, debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
