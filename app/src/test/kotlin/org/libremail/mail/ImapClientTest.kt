@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
-import android.util.Log
 import com.icegreen.greenmail.util.GreenMail
 import com.icegreen.greenmail.util.GreenMailUtil
 import com.icegreen.greenmail.util.ServerSetupTest
@@ -31,6 +30,8 @@ import org.junit.Before
 import org.junit.Test
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import java.util.Properties
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -359,8 +360,14 @@ class ImapClientTest {
 
     @Test
     fun `idle syncs once on connect, again on newly delivered mail, and stops on cancel`() = runBlocking {
-        mockkStatic(Log::class) // idle() logs connect/push at debug level
-        every { Log.d(any(), any()) } returns 0
+        // idle() logs connect/push breadcrumbs via AppLog, which forwards to Logcat; stub the Android
+        // stub (by fully-qualified name, so this file never imports android.util.Log — only AppLog.kt
+        // may) so the JVM test doesn't crash on the unmocked method, and install a real buffer so the
+        // breadcrumbs can be asserted directly instead of via a Log verification.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.d(any(), any()) } returns 0
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
         val activity = Channel<Unit>(Channel.UNLIMITED)
         val job = launch(Dispatchers.IO) { client.idle(params()) { activity.send(Unit) } }
         try {
@@ -373,6 +380,17 @@ class ImapClientTest {
             job.cancelAndJoin() // cancelling closes the connection and unblocks idle()
         }
         assertTrue(job.isCompleted, "the idle loop must terminate on cancellation")
+
+        val messages = buffer.snapshot().map { it.message }
+        assertTrue(messages.contains("IDLE connected"), "messages=$messages")
+        assertTrue(messages.any { it == "IDLE push: 1 new message(s)" }, "messages=$messages")
+        // idle() only holds host/username via ImapConnectionParams and must stay account-agnostic —
+        // attribution belongs to the IdleService caller (accountLogRef) — regression guard for #297.
+        val connectionParams = params()
+        messages.forEach { message ->
+            assertFalse(message.contains(connectionParams.host), message)
+            assertFalse(message.contains(connectionParams.username), message)
+        }
     }
 
     /** Creates [folderName] (holding messages) if it does not already exist. */
