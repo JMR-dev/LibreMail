@@ -5,7 +5,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
-import android.util.Log
+import org.libremail.reporting.AppLog
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -43,7 +43,7 @@ class DatabaseKeyCipher @Inject constructor() :
     override fun encrypt(plaintext: String): String = try {
         super.encrypt(plaintext)
     } catch (e: KeyPermanentlyInvalidatedException) {
-        Log.d(TAG, "replacing invalidated auth-bound key before sealing", e)
+        AppLog.d(TAG, "replacing invalidated auth-bound key before sealing", e)
         deleteKey()
         super.encrypt(plaintext)
     }
@@ -60,16 +60,16 @@ class DatabaseKeyCipher @Inject constructor() :
             initEncryptCipher(key)
             false
         } catch (e: KeyPermanentlyInvalidatedException) {
-            Log.d(TAG, "auth-bound database key invalidated", e)
+            AppLog.d(TAG, "auth-bound database key invalidated", e)
             true
         } catch (e: UserNotAuthenticatedException) {
             // Valid key, just outside its time-bound auth window — not invalidated.
-            Log.d(TAG, "auth-bound key outside its auth window; not invalidated", e)
+            AppLog.d(TAG, "auth-bound key outside its auth window; not invalidated", e)
             false
         } catch (e: Exception) {
             // Never let a validity probe crash the foreground pass; a real decrypt later surfaces any
             // genuine problem. Treat an unknown probe failure as "not invalidated" (don't wipe).
-            Log.d(TAG, "auth-bound key validity probe failed; treating as valid", e)
+            AppLog.d(TAG, "auth-bound key validity probe failed; treating as valid", e)
             false
         }
     }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.local
 
-import android.util.Log
 import net.zetetic.database.sqlcipher.SQLiteDatabase
+import org.libremail.reporting.AppLog
 import java.io.File
 
 /**
@@ -40,6 +40,7 @@ object DatabaseEncryption {
      * tables but not that pragma, and a reset version would make Room attempt a bogus migration.
      */
     private fun migrate(dbFile: File, sourcePassphrase: String, targetPassphrase: String) {
+        AppLog.i(TAG, "converting local cache database (targetEncrypted=${targetPassphrase.isNotEmpty()})")
         ensureNativeLibraryLoaded()
         val dir = dbFile.parentFile ?: error("database file has no parent directory")
         val tmp = File(dir, dbFile.name + ".migrate").apply { delete() }
@@ -88,7 +89,7 @@ object DatabaseEncryption {
             tmp.copyTo(dbFile, overwrite = true)
             tmp.delete()
         }
-        Log.d(TAG, "local cache database converted")
+        AppLog.d(TAG, "local cache database converted")
     }
 
     private fun startsWithSqliteHeader(dbFile: File): Boolean {
