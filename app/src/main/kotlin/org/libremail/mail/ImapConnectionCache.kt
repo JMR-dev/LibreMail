@@ -207,10 +207,14 @@ internal class ImapConnectionCache(
      * while idle, detected on the next op's first command before any mutation is issued — is safe. A
      * copy-then-expunge move interrupted between its two halves is the rare exception left to that review.
      */
-    private fun isConnectionDrop(error: Throwable): Boolean = when (error) {
-        is FolderClosedException, is StoreClosedException, is IOException, is ConnectionException -> true
-        is MessagingException -> error.cause is IOException || error.cause is ConnectionException
-        else -> false
+    private fun isConnectionDrop(error: Throwable): Boolean {
+        // FolderClosedException/StoreClosedException are themselves MessagingException subtypes, so these
+        // definite-drop checks must run before the MessagingException guard below — otherwise they'd fall
+        // into it and get gated on a `.cause` they don't carry, instead of the unconditional `true` below.
+        if (error is FolderClosedException || error is StoreClosedException) return true
+        if (error is IOException || error is ConnectionException) return true
+        if (error !is MessagingException) return false
+        return error.cause is IOException || error.cause is ConnectionException
     }
 
     private companion object {
