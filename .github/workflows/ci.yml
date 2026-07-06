@@ -439,6 +439,10 @@ jobs:
             return 1
           }
 
+          # SPIKE: start the adb daemon up-front (mirror api37_e2e.py wait_for_boot) so attempt 1
+          # can't lose the adb-server "Address already in use" bind race that flaked #370's boot.
+          adb start-server || true
+
           booted=0
           for attempt in 1 2; do boot_emulator "$attempt" && { booted=1; break; }; done
           [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
@@ -448,9 +452,18 @@ jobs:
           # one of numShards buckets and runs only shardIndex's bucket. The args flow through AGP's
           # -Pandroid.testInstrumentationRunnerArguments.* channel (same one local_instrumented.py
           # uses for .class=…) — no GMD, no orchestrator, no Gradle-side change.
-          ./gradlew connectedDebugAndroidTest --stacktrace \
-            "-Pandroid.testInstrumentationRunnerArguments.numShards=${API37_NUM_SHARDS}" \
-            "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}"
+          run_shard() {
+            ./gradlew connectedDebugAndroidTest --stacktrace \
+              "-Pandroid.testInstrumentationRunnerArguments.numShards=${API37_NUM_SHARDS}" \
+              "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}"
+          }
+          # SPIKE: retry this shard's test run ONCE on failure — retry parity with the stable `e2e`
+          # matrix (which retries once, so a flaky test self-heals on API 29–36 but wedges the
+          # required gate on API 37 today, e.g. #370). Per-shard, so the retry re-runs only this
+          # shard's ~T/N tests, not the whole suite. MITIGATION, NOT A FIX: a blanket retry also
+          # masks genuine regressions, so the retried-but-passed case is flagged as a ::warning::
+          # and the real fix stays test-level. See docs/perf/api37-e2e-sharding-spike.md.
+          run_shard || { echo "::warning::API 37 shard ${{ matrix.shard }} test run failed — retrying once"; run_shard; }
 
       - name: Dump emulator log on failure
         if: failure()

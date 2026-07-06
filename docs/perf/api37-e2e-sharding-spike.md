@@ -203,6 +203,21 @@ min (API 30 ≈ 12.0 is its ceiling)**. So the API 37 leg only helps the pipelin
 8. **`concurrency: cancel-in-progress` churn.** Unchanged semantics (all shards share the PR concurrency
    group, cancelled together on a new push), but there are now more in-flight jobs to cancel and re-trigger
    on each push — a small addition to the known CI merge-cascade thrash. No new failure mode.
+9. **Retry-parity gap — a *pre-existing* reliability asymmetry sharding must preserve (surfaced by #370).**
+   The stable `e2e` matrix retries its test run **once** on failure (`ci.yml`, the two paired
+   `reactivecircus/android-emulator-runner` "Run E2E tests" + "…(retry…)" steps), so a genuinely flaky test
+   self-heals on API 29–36. **`e2e-preview` runs `connectedDebugAndroidTest` exactly once — no retry**, so
+   the *same* flaky test **wedges the required gate on API 37**. This is exactly what flaked #370 (a real
+   `SignaturesScreenTest` Room/`viewModelScope` teardown race, being fixed at the test level separately) —
+   not a boot/timing issue. **Interaction with sharding (why it belongs here):** unlike **boot** flake,
+   which sharding *multiplies* by N (risk #1), per-**test** flake is **not** amplified — every test still
+   runs exactly once across the whole matrix, so a single flaky test lives in exactly one shard. But it
+   still fails a *required* leg, so the gate needs a retry regardless of shard count. The right design is a
+   **per-shard** retry: each shard retries only its own bucket, costing **`B + T/N`** (one shard's leg),
+   strictly cheaper than the unsharded whole-suite retry (`B + T`). So sharding makes flake-recovery both
+   still-necessary and *cheaper*. **Framing: mitigation, not a fix** — a blanket retry also masks genuine
+   regressions, so surface the retried-but-passed case as a `::warning::` and keep the real fix test-level
+   (as #370 does). See §6 for the recommendation and the PoC.
 
 ## 6. Recommendation
 
@@ -217,9 +232,24 @@ min (API 30 ≈ 12.0 is its ceiling)**. So the API 37 leg only helps the pipelin
 - **`N = 3` optional** only if the last ~0.7 min matters and runner headroom is comfortable — it moves the
   critical path onto the API 30 matrix leg (~12.0 min). **Never `N ≥ 4`** without also sharding the API 29–36
   matrix.
-- **Local preflight stays single-emulator** — `api37_e2e.py` and `local_instrumented.py` are unchanged. One
-  free hypervisor per dev box; parallel local emulators risk freezing the machine (project memory). The
-  divergence is intentional and should be documented in the job comment.
+- **Local preflight stays single-emulator** — `api37_e2e.py` and `local_instrumented.py` keep their single
+  hand-provisioned boot (do **not** shard locally). One free hypervisor per dev box; parallel local emulators
+  risk freezing the machine (project memory). The sharding divergence is intentional and should be documented
+  in the job comment.
+
+Two **reliability** fixes to pair with sharding (from the #370 root-cause; §5 item 9) — together they make
+the API 37 leg *faster **and** more reliable*:
+
+- **Add retry parity.** Give `e2e-preview` the **same single test-run retry** the `e2e` matrix has, as a
+  **per-shard** retry (re-runs only that shard's `B + T/N`, not the whole suite), and **mirror it into the
+  local `api37_e2e.py`** test-run step (its `connectedDebugAndroidTest` invocation) so preflight and CI stay
+  in lockstep. **This is a mitigation, not a fix:** a blanket retry masks genuine regressions, so flag the
+  retried-but-passed case as a warning and keep real flakes fixed at the test level (as #370 did). Do **not**
+  raise the retry count above one. *Sharding interaction:* a per-shard retry is the natural fit and is
+  cheaper than an unsharded retry — see §5 item 9.
+- **Minor: `adb start-server` before the boot loop** in `e2e-preview` (mirror `api37_e2e.py`'s
+  `wait_for_boot`, which already does this), to avoid the attempt-1 adb-daemon "Address already in use" bind
+  race seen in #370 (self-recovered there; low priority, but free to harden).
 
 ### Relationship to #258 (unit-test sharding)
 
@@ -233,8 +263,13 @@ constraint** (instrumented coverage is out of scope), which makes this strictly 
 ## PoC
 
 This branch carries a **draft, non-auto-merged** PoC that converts `e2e-preview` to an `N = 2` shard matrix
-(clearly marked as a spike). Because a PR runs the workflow *from its own branch*, **the draft PR's own CI
-run is the validation** — the maintainer can confirm both shards go green and read the real per-shard
-wall-clock straight off that run (this is a CI-infra change, so a green pipeline is the "test", per #258's
-DoD note). It is **not** to be merged as-is: adopt after reviewing the live shard timings and confirming
-runner headroom.
+(clearly marked as a spike). It also folds in the two §6 reliability fixes on the CI side so the PoC shows
+the full *faster + more reliable* picture: a **per-shard single test retry** (retry parity with the `e2e`
+matrix, flagged `::warning::` on the retried-but-passed case) and an **`adb start-server` before the boot
+loop**. The matching `api37_e2e.py` retry mirror is left as a documented recommendation (a focused local
+change, since the local path is validated by a real emulator, which this spike deliberately did not boot).
+
+Because a PR runs the workflow *from its own branch*, **the draft PR's own CI run is the validation** — the
+maintainer can confirm both shards go green and read the real per-shard wall-clock straight off that run
+(this is a CI-infra change, so a green pipeline is the "test", per #258's DoD note). It is **not** to be
+merged as-is: adopt after reviewing the live shard timings and confirming runner headroom.
