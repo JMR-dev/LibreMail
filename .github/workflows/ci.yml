@@ -228,8 +228,25 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
 
+      # sdkmanager can exit 1 on a transient package-mirror/network hiccup with no useful trail —
+      # an `E2E (31)` leg died exactly this way (#387). Retry up to 3x with backoff so a transient
+      # failure self-heals, and on a hard failure print the installed-package list so the cause is
+      # visible in the step log instead of a bare exit 1.
       - name: Install SDK platform and build-tools
-        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::sdkmanager install (attempt $attempt)"
+            if sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::sdkmanager attempt $attempt failed to install $ANDROID_PLATFORM / $ANDROID_BUILD_TOOLS"
+            if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 15))"; fi
+          done
+          echo "::error::sdkmanager failed to install the SDK packages after 3 attempts"
+          echo "--- sdkmanager --list_installed ---"; sdkmanager --list_installed 2>&1 || true
+          exit 1
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -281,7 +298,13 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest --stacktrace
+          # Stream logcat to a per-api-level file (the emulator is booted here) before the tests,
+          # so a test failure or emulator flake is diagnosable from the uploaded artifact.
+          # Backgrounded; gradle stays the last foreground command so the step's exit status is
+          # still the test result (a real failure still trips continue-on-error -> the retry).
+          script: |
+            adb logcat -v time > "$RUNNER_TEMP/logcat-api${{ matrix.api-level }}.txt" 2>&1 &
+            ./gradlew connectedDebugAndroidTest --stacktrace
 
       - name: Run E2E tests (retry after emulator boot race)
         if: steps.e2e.outcome == 'failure'
@@ -293,7 +316,31 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest --stacktrace
+          # Retry runs a fresh emulator boot; stream its logcat the same way. `>` overwrites
+          # attempt 1's file so the artifact holds the FINAL attempt's logs, matching the
+          # failure-time dump below (which reflects this last attempt's state).
+          script: |
+            adb logcat -v time > "$RUNNER_TEMP/logcat-api${{ matrix.api-level }}.txt" 2>&1 &
+            ./gradlew connectedDebugAndroidTest --stacktrace
+
+      # On any E2E failure (both boot attempts failed, a hung emulator, or an earlier setup/SDK
+      # step), snapshot device + runner state to the step log AND a file for the artifact upload —
+      # the `E2E (31)` sdkmanager death (#387) left no trail. Each probe is guarded (|| true) so a
+      # missing tool / offline device can't abort the step; accel-check, /dev/kvm, free -h and
+      # df -h characterise the runner even when the emulator never booted.
+      - name: Dump emulator + system diagnostics on failure
+        if: failure()
+        run: |
+          DIAG="${RUNNER_TEMP:-/tmp}/diagnostics-api${{ matrix.api-level }}.txt"
+          {
+            echo "===== E2E API ${{ matrix.api-level }} failure diagnostics ====="
+            echo "--- adb devices ---";              adb devices 2>&1 || true
+            echo "--- adb logcat -d (tail 200) ---"; adb logcat -d 2>&1 | tail -200 || true
+            echo "--- emulator -accel-check ---";    "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check 2>&1 || true
+            echo "--- /dev/kvm ---";                 ls -l /dev/kvm 2>&1 || true
+            echo "--- free memory ---";              free -h 2>&1 || true
+            echo "--- free disk ---";                df -h 2>&1 || true
+          } 2>&1 | tee "$DIAG"
 
       - name: Upload E2E test report
         if: ${{ !cancelled() }}
@@ -301,6 +348,20 @@ jobs:
         with:
           name: e2e-test-report-api${{ matrix.api-level }}
           path: app/build/reports/androidTests/connected/
+          if-no-files-found: warn
+
+      # Always upload the streamed logcat + (on failure) the system-state dump so an emulator flake
+      # or a red matrix leg is diagnosable from artifacts without a re-run — parity with the
+      # e2e-preview boot-diagnostics artifact. Per-api-level name (upload-artifact@v7 rejects
+      # duplicate artifact names).
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-diagnostics-api${{ matrix.api-level }}
+          path: |
+            ${{ runner.temp }}/logcat-api${{ matrix.api-level }}.txt
+            ${{ runner.temp }}/diagnostics-api${{ matrix.api-level }}.txt
           if-no-files-found: warn
 
   # API 37 (Android 17, preview) E2E. Its only system image is the nonstandard
