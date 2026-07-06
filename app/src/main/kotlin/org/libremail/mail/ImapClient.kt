@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
+import org.libremail.BuildConfig
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.reporting.AppLog
@@ -99,23 +100,29 @@ data class ReplyContext(
 
 /** Thin IMAP client over Jakarta/Angus Mail. Supports password and XOAUTH2 auth. */
 @Singleton
-class ImapClient(private val reuseConnections: Boolean) {
+class ImapClient internal constructor(
+    private val reuseConnections: Boolean,
+    private val reuseIdleTimeoutMillis: Long = DEFAULT_REUSE_IDLE_TIMEOUT_MS,
+) {
 
     /**
-     * Production entry point. Connection reuse is a SPIKE flag (issue #125), **OFF by default** so it
-     * cannot destabilize the connect-per-operation behaviour on `main`: with it off, [withStore] is
-     * byte-for-byte today's connect + LOGOUT-per-call. Once real-device validation (see
-     * `docs/perf/issue-125-connection-reuse-spike.md`) confirms the win, wire this to a setting or
-     * `BuildConfig`; today only the reuse harness flips it on via the primary constructor.
+     * Production entry point. Connection reuse (issue #357 Part 2, wiring the #125 spike) is **ON by
+     * default**, driven by [BuildConfig.IMAP_CONNECTION_REUSE]: instead of a cold `CONNECT + TLS +
+     * LOGIN` per operation, each account keeps one authenticated connection warm (see
+     * [ImapConnectionCache]), which is the fix for Gmail throttling LibreMail's connect-per-operation
+     * traffic (`docs/perf/issue-125-*`). The `BuildConfig` field is the safety switch: flipping it to
+     * `false` (a build-config change, no code edit) restores connect-per-operation if a server
+     * misbehaves with a kept-alive socket. The internal constructor is the test/harness seam.
      */
-    @Inject constructor() : this(reuseConnections = false)
+    @Inject constructor() : this(reuseConnections = BuildConfig.IMAP_CONNECTION_REUSE)
 
     /**
-     * Per-account keep-alive cache; allocated only when the spike flag is on, so the default build
-     * carries neither the state nor the reuse code path.
+     * Per-account keep-alive cache; allocated only when reuse is enabled, so a reuse-disabled build
+     * carries neither the state nor the reuse code path (and [withStore] stays byte-for-byte the old
+     * connect + LOGOUT-per-call).
      */
     private val connectionCache: ImapConnectionCache? =
-        if (reuseConnections) ImapConnectionCache(::openConnectedStore) else null
+        if (reuseConnections) ImapConnectionCache(::openConnectedStore, reuseIdleTimeoutMillis) else null
 
     /** Connects and returns the account's folders with their SPECIAL-USE attributes. Throws on failure. */
     suspend fun listFolders(params: ImapConnectionParams): List<FetchedFolder> = withContext(Dispatchers.IO) {
@@ -632,7 +639,7 @@ class ImapClient(private val reuseConnections: Boolean) {
     private suspend fun <T> withStore(params: ImapConnectionParams, op: String = "imap", block: (Store) -> T): T {
         val cache = connectionCache
         return if (cache != null) {
-            cache.withStore(params, block)
+            cache.withStore(params, op, block)
         } else {
             // Time CONNECT + TLS + LOGIN separately from the op's own work, and record how many
             // connect-per-op sockets are live at once, so a slow op can be attributed and the provider
@@ -662,12 +669,22 @@ class ImapClient(private val reuseConnections: Boolean) {
     }
 
     /**
-     * SPIKE hook (issue #125): closes any kept-alive reused connections (`LOGOUT` + teardown), a no-op
-     * when the reuse flag is OFF. The reuse harness calls this to force settlement; a shipped feature
-     * would also drive it from an idle-eviction timer and the low-battery push teardown (#88/#89/#90).
+     * Tears down every kept-alive reused connection (`LOGOUT` + teardown); a no-op when reuse is
+     * disabled. `IdleService` drives this on the low-battery push-teardown path (#88/#89/#90), mirroring
+     * the IDLE connection teardown, and the reuse tests call it to force settlement.
      */
     suspend fun closeReusedConnections() {
         connectionCache?.closeAll()
+    }
+
+    /**
+     * Closes any reused connection that has sat unused past the reuse idle timeout (issue #357 Part 2);
+     * a no-op when reuse is disabled or nothing is idle. `IdleService` calls this on a periodic sweep so
+     * a socket kept warm for latency doesn't linger and drain battery; a connection currently in use is
+     * skipped.
+     */
+    suspend fun evictIdleReusedConnections() {
+        connectionCache?.evictIdle()
     }
 
     private fun buildProps(protocol: String, params: ImapConnectionParams, reuse: Boolean = false): Properties =
@@ -703,6 +720,11 @@ class ImapClient(private val reuseConnections: Boolean) {
         const val TAG = "LibreMailIdle"
         const val PERF_TAG = "ImapPerf"
         const val NANOS_PER_MS = 1_000_000L
+
+        // A reused connection unused for this long is idle-evicted (issue #357 Part 2): long enough to
+        // stay warm across an active reading session, well under typical server idle timeouts (Gmail
+        // ~30 min) so eviction, not a server drop, is what usually closes it.
+        const val DEFAULT_REUSE_IDLE_TIMEOUT_MS = 5 * 60_000L
     }
 }
 
