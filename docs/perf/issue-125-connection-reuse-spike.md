@@ -1,6 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # IMAP connection-reuse spike (issue #125)
 
+> **Update — shipped (issue #357 Part 2).** The real-device validation this spike deferred has since
+> run: an on-device drilldown proved Gmail server-side throttles LibreMail's connect-per-operation IMAP
+> (full-history backfill generated ~601 connections in ~22 min, tripping and sustaining a per-account
+> rate/bandwidth clamp; `live` peaked at only 5, so it is connection *volume*, not count). Connection
+> reuse is therefore now **ON by default**, gated by `BuildConfig.IMAP_CONNECTION_REUSE` as a safety
+> switch, with the cache hardened for production: transparent stale-connection recovery, idle eviction
+> (`ImapConnectionCache.evictIdle`, swept by `IdleService`), low-battery teardown, and per-account
+> mutex concurrency. The single-connection-vs-pool and per-provider-cap knobs below remain a separate
+> effort (#356/#360-#364); this change is connection reuse only. The sections below are the original
+> spike design, kept for context.
+
 A time-boxed spike that **prototypes** the connection reuse the investigation
 (`issue-125-imap-folder-open.md`) recommended and defers. It exists to reduce uncertainty — *is
 per-account keep-alive feasible in this codebase, and does it actually collapse the per-open setup

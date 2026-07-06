@@ -36,6 +36,9 @@ class CountingImapProxy(private val backendHost: String, private val backendPort
     /** Client → server pump threads, tracked so tests can wait for the parsed command stream to settle. */
     private val clientPumps = Collections.synchronizedList(mutableListOf<Thread>())
 
+    /** Accepted client-side sockets, so a test can force-drop them to simulate a server/NAT disconnect. */
+    private val acceptedSockets = Collections.synchronizedList(mutableListOf<Socket>())
+
     @Volatile private var running = true
 
     /** The local port to point [ImapClient] at; it forwards to the backend. */
@@ -69,6 +72,17 @@ class CountingImapProxy(private val backendHost: String, private val backendPort
         }
     }
 
+    /**
+     * Force-closes every currently-accepted client socket, simulating a server idle-timeout / NAT
+     * rebind / network drop of the kept-alive reused connection. The client's next use of that socket
+     * then fails with an I/O error, which the connection-reuse cache should transparently reconnect
+     * from. [connectionCount] keeps counting, so a subsequent reconnect makes it rise.
+     */
+    fun dropAcceptedConnections() {
+        val snapshot = synchronized(acceptedSockets) { acceptedSockets.toList().also { acceptedSockets.clear() } }
+        snapshot.forEach { runCatching { it.close() } }
+    }
+
     override fun close() {
         running = false
         runCatching { server.close() }
@@ -88,6 +102,7 @@ class CountingImapProxy(private val backendHost: String, private val backendPort
                 runCatching { client.close() }
                 continue
             }
+            acceptedSockets.add(client)
             val upstream = Thread({ pumpCountingCommands(client, backend) }, "imap-proxy-up").apply { isDaemon = true }
             val downstream = Thread({ pump(backend, client) }, "imap-proxy-down").apply { isDaemon = true }
             clientPumps.add(upstream)

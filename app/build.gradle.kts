@@ -65,6 +65,12 @@ android {
         buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
         buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"$outlookRedirectScheme://oauth2redirect\"")
         buildConfigField("String", "DEBUG_REPORT_ENDPOINT", "\"$debugReportEndpoint\"")
+        // IMAP connection reuse (issue #357 Part 2, wiring the #125 spike): keep one authenticated
+        // IMAP connection warm per account instead of paying a cold CONNECT+TLS+LOGIN on every
+        // operation — the fix for Gmail throttling LibreMail's connect-per-operation traffic. ON by
+        // default; this is the safety switch: flip to "false" here (a build-config change, no Kotlin
+        // edit) to fall back to connect-per-operation if a server misbehaves with a kept-alive socket.
+        buildConfigField("Boolean", "IMAP_CONNECTION_REUSE", "true")
         // AppAuth's bundled manifest requires this placeholder; it registers the redirect scheme on
         // RedirectUriReceiverActivity so the Outlook sign-in redirect returns to the app.
         manifestPlaceholders["appAuthRedirectScheme"] = outlookRedirectScheme

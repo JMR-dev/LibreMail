@@ -60,7 +60,9 @@ import kotlin.test.assertTrue
 class MailBackfillerTest {
 
     private lateinit var greenMail: GreenMail
-    private val client = ImapClient()
+
+    // Reuse off: this suite pins the connect-per-operation backfill behaviour it was written against.
+    private val client = ImapClient(reuseConnections = false)
 
     private val accountEntity = AccountEntity(
         id = "acct",
