@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -50,6 +51,10 @@ class SignaturesScreenTest {
     private lateinit var db: AccountDatabase
     private lateinit var repository: SignatureRepository
 
+    // Holds the real SignaturesViewModel built by hand in setContent() below, so tearDown() can
+    // clear() it (triggering ViewModel.onCleared()) before closing the DB.
+    private val viewModelStore = ViewModelStore()
+
     @Before
     fun setUp() {
         db = Room.inMemoryDatabaseBuilder(context, AccountDatabase::class.java).build()
@@ -70,7 +75,15 @@ class SignaturesScreenTest {
     }
 
     @After
-    fun tearDown() = db.close()
+    fun tearDown() {
+        // Clear the store (→ ViewModel.onCleared() → cancels viewModelScope) BEFORE closing the DB.
+        // SignaturesViewModel.signatures is a Room InvalidationTracker Flow kept alive by
+        // stateIn(WhileSubscribed(5_000)): without this, the collector can still be live up to 5s
+        // after the UI detaches, so a re-query lands on the just-closed in-memory DB and throws
+        // SQLITE_MISUSE ("connection is closed") — an intermittent teardown race, not a real bug.
+        viewModelStore.clear()
+        db.close()
+    }
 
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
@@ -81,6 +94,7 @@ class SignaturesScreenTest {
             SavedStateHandle(mapOf(Routes.SIGNATURES_ARG_ACCOUNT to accountId)),
             repository,
         )
+        viewModelStore.put("signatures", viewModel)
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
                 SignaturesScreen(onBack = {}, onEdit = {}, onAdd = {}, viewModel = viewModel)

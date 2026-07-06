@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -60,10 +61,20 @@ class ComposeScreenTest {
 
     private var db: AccountDatabase? = null
 
+    // Holds the real ComposeViewModel built by hand in setContent() below, so closeDb() can clear()
+    // it (triggering ViewModel.onCleared()) before closing the DB.
+    private val viewModelStore = ViewModelStore()
+
     private fun string(resId: Int) = composeTestRule.activity.getString(resId)
 
     @After
     fun closeDb() {
+        // Clear the store (→ ViewModel.onCleared() → cancels viewModelScope) BEFORE closing the DB.
+        // ComposeViewModel's init block launches a viewModelScope coroutine that reads the real
+        // accountSettings/signature Room repositories (applySignature()); without this, that read can
+        // still be in flight when the DB closes, racing a SQLITE_MISUSE ("connection is closed") —
+        // the same class of teardown race fixed in SignaturesScreenTest/AccountSettingsScreenTest.
+        viewModelStore.clear()
         db?.close()
     }
 
@@ -92,6 +103,7 @@ class ComposeScreenTest {
             signatureRepository = SignatureRepository(database.signatureDao()),
             settingsRepository = SettingsRepository(context),
         )
+        viewModelStore.put("compose", viewModel)
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
                 ComposeScreen(onBack = onBack, viewModel = viewModel)
