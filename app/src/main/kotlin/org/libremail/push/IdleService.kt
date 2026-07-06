@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -83,22 +84,54 @@ class IdleService : Service() {
     /** Active IDLE watcher per account id, so we can start/stop them as accounts change. */
     private val watchers = mutableMapOf<String, Job>()
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startAsForeground(shownMode)
-        if (!watching) {
-            watching = true
-            scope.launch {
-                // Can't open the encrypted DB without the user present. Defer (stop) and let the app
-                // restart push after the next unlock, rather than block the service and ANR.
-                if (cacheGuard.isCacheLocked()) {
-                    AppLog.i(TAG, "encrypted cache locked; deferring IDLE push until the app is unlocked")
-                    stopSelf()
-                    return@launch
-                }
-                reconcileWatchers()
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        // Always START_NOT_STICKY (never START_STICKY): push is app-managed — LibreMailApplication's
+        // settings/account collector and ensurePushStarted() deterministically (re)start the service
+        // whenever it should run — so the platform's sticky null-intent auto-restart is redundant AND,
+        // after the dataSync FGS runtime cap (#302), re-enters here exactly when a dataSync foreground
+        // start is illegal, which was the #354 crash loop. The start/degrade decision lives in the
+        // JVM-testable IdleForegroundStarter seam.
+        IdleForegroundStarter.startForegroundOrDegrade(
+            capActive = capWindowActive(),
+            enterForeground = { startAsForeground(shownMode) },
+            onStarted = ::startWatchingIfNeeded,
+            onDegraded = ::degradeAfterBlockedForegroundStart,
+        )
+
+    /** After a successful foreground start, begin watching accounts for IDLE (once per service life). */
+    private fun startWatchingIfNeeded() {
+        if (watching) return
+        watching = true
+        scope.launch {
+            // Can't open the encrypted DB without the user present. Defer (stop) and let the app
+            // restart push after the next unlock, rather than block the service and ANR.
+            if (cacheGuard.isCacheLocked()) {
+                AppLog.i(TAG, "encrypted cache locked; deferring IDLE push until the app is unlocked")
+                stopSelf()
+                return@launch
             }
+            reconcileWatchers()
         }
-        return START_STICKY
+    }
+
+    /**
+     * A dataSync foreground start was skipped (still inside the runtime-cap window, [cause] null) or
+     * rejected by the platform ([cause] is the `ForegroundServiceStartNotAllowedException`). Either way
+     * degrade like the cap handler instead of crashing (#354): log PII-free and fall back to periodic
+     * sync. On an actual rejection, also (re)arm the cap window so the next restart skips the attempt.
+     */
+    private fun degradeAfterBlockedForegroundStart(cause: Throwable?) {
+        if (cause == null) {
+            AppLog.i(TAG, "dataSync FGS cap still active; skipping foreground start, periodic sync covers mail")
+        } else {
+            AppLog.w(
+                TAG,
+                "dataSync FGS start rejected (runtime cap or background); staying on 15-minute periodic sync",
+                cause,
+            )
+            markCapReached()
+        }
+        degradeToPeriodicSync()
     }
 
     /**
@@ -158,18 +191,33 @@ class IdleService : Service() {
     }
 
     /**
-     * Clean shutdown for the dataSync FGS runtime-cap timeout (issue #302): re-assert the periodic
-     * sync fallback, swap the persistent notification to the degraded text and DETACH it so it stays
-     * posted after we leave foreground state, then stop the service. Stopping foreground state is not
-     * optional here — a `dataSync` service that is still foreground when its timeout elapses is the
-     * exact condition the platform force-stops (and throws) on, so we must not keep running as an FGS.
-     * [stopSelf] then tears down [scope] in [onDestroy], closing the IDLE connections; mail arrives via
-     * the 15-minute periodic sync until push is started again (next app foreground / cap reset).
+     * The dataSync FGS runtime-cap timeout (issue #302): record the cap event so the next (re)start
+     * skips its now-illegal foreground start (#354), then degrade to the periodic-sync fallback. Kept
+     * fast/synchronous so a `dataSync` service that is still foreground when its timeout elapses — the
+     * exact condition the platform force-stops (and throws `ForegroundServiceDidNotStopInTimeException`)
+     * on — leaves foreground state within the grace window.
+     */
+    private fun fallBackToPeriodicSync() {
+        AppLog.i(TAG, "dataSync FGS runtime cap reached: pausing IMAP IDLE; mail arrives via 15-minute periodic sync")
+        markCapReached()
+        degradeToPeriodicSync()
+    }
+
+    /**
+     * Shared degrade to the 15-minute periodic-sync fallback, used by the runtime-cap timeout
+     * ([fallBackToPeriodicSync]) and by [onStartCommand] when a dataSync foreground start is skipped or
+     * rejected (#354): re-assert the periodic sync, swap the persistent notification to the degraded
+     * text and DETACH it so it stays posted after we leave foreground state, then stop the service.
+     * Leaving foreground state is safe on the [onStartCommand] paths too (never-foregrounded there, so
+     * `stopForeground` is a no-op), and [stopSelf] must run promptly because that start arrived via
+     * `startForegroundService` — otherwise the platform raises the "did not call startForeground in
+     * time" ANR. [stopSelf] then tears down [scope] in [onDestroy], closing the IDLE connections; mail
+     * arrives via the 15-minute periodic sync until push is started again (next app foreground / cap
+     * reset).
      */
     // Permission is checked via hasNotificationPermission() below; lint can't trace the indirect guard.
     @SuppressLint("MissingPermission")
-    private fun fallBackToPeriodicSync() {
-        AppLog.i(TAG, "dataSync FGS runtime cap reached: pausing IMAP IDLE; mail arrives via 15-minute periodic sync")
+    private fun degradeToPeriodicSync() {
         // Already scheduled at every app start (UPDATE, so a no-op here) — re-asserted so the fallback
         // provably exists now that push is paused, mirroring the low-battery path in onPushModeChanged.
         syncScheduler.schedulePeriodicSync()
@@ -185,6 +233,25 @@ class IdleService : Service() {
         }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
         stopSelf()
+    }
+
+    /** Records the wall-independent time of the last dataSync cap event, arming [capWindowActive]. */
+    private fun markCapReached() {
+        capReachedElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * True while still within [CAP_WINDOW_MS] of the last cap event ([markCapReached]) — a burst of
+     * restarts in that window is certainly still capped, so [onStartCommand] skips the foreground start
+     * (and its now-guaranteed rejection) entirely. The window is anchored to the last real cap event
+     * and never refreshed by the skip itself, so it expires and lets a later restart re-probe; that
+     * probe is safe because a still-capped rejection is caught. Uses [SystemClock.elapsedRealtime] (not
+     * wall-clock) so it is immune to clock changes, and the companion field survives service
+     * re-creation within the process (which is where the restart storm happens).
+     */
+    private fun capWindowActive(): Boolean {
+        val reachedAt = capReachedElapsedMs
+        return reachedAt != 0L && SystemClock.elapsedRealtime() - reachedAt < CAP_WINDOW_MS
     }
 
     private fun hasNotificationPermission(): Boolean =
@@ -246,5 +313,17 @@ class IdleService : Service() {
         // Re-establish IDLE on this cadence — under RFC 2177's 29-minute ceiling and short enough
         // to beat typical NAT/firewall idle-socket timeouts.
         const val IDLE_RENEWAL_MS = 9 * 60_000L
+
+        // How long after a dataSync cap event onStartCommand skips the (still-illegal) foreground start
+        // outright (#354). The true rolling-24h budget reset is unknowable client-side, so this is a
+        // restart-storm damper, not a precise predictor: it matches the periodic-sync interval — the
+        // fallback already covering mail — so at most one foreground-start probe happens per cycle, and
+        // re-probing after it is safe because a still-capped rejection is caught, not fatal.
+        const val CAP_WINDOW_MS = 15 * 60_000L
+
+        // elapsedRealtime() of the last dataSync cap event; 0 = none this process. Companion-scoped so
+        // it survives IdleService re-creation within the process, where the restart storm happens.
+        @Volatile
+        private var capReachedElapsedMs = 0L
     }
 }
