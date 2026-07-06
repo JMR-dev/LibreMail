@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + compileDebugAndroidTestKotlin + lintDebug + ktlintCheck + detekt) plus the local emulator E2E — the instrumented test class(es) you changed via local_instrumented.py (cold-boot, no Gradle Managed Devices), then the API 37 preview via api37_e2e.py — before pushing or opening a PR. Mirrors the merge gate; CI runs the full multi-API matrix. Use before treating a change as done.
+description: Run LibreMail's fast CI gate locally (assembleDebug + testDebugUnitTest + jacocoTestCoverageVerification + compileDebugAndroidTestKotlin + lintDebug + ktlintCheck + detekt) plus the local emulator E2E — the instrumented test class(es) you changed via local_instrumented.py (cold-boot, no Gradle Managed Devices), then the API 37 preview via api37_e2e.py — before pushing or opening a PR. Mirrors the merge gate; CI runs the full multi-API matrix. Use before treating a change as done.
 ---
 
 # /preflight
@@ -38,13 +38,18 @@ Run these, stopping at the first failure:
 
 ```bash
 ./gradlew :app:assembleDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest :app:jacocoTestCoverageVerification
 ./gradlew :app:compileDebugAndroidTestKotlin
 ./gradlew :app:lintDebug
 ./gradlew :app:ktlintCheck :app:detekt
 python3 .claude/skills/preflight/local_instrumented.py <your.Changed.TestClass>[,<Class2>,...]   # local instrumented/E2E, cold-boot (no GMD)
 python3 .claude/skills/preflight/api37_e2e.py   # api37 preview E2E (hand-provisioned; on Windows: py or python)
 ```
+
+`jacocoTestCoverageVerification` runs right after `testDebugUnitTest` because it reads that
+task's JVM exec data — it enforces the whole-app **no-regression line-coverage floor (currently
+0.79)**, so a coverage regression is caught locally instead of only in CI (the exact class of
+failure that reached CI on #367).
 
 `compileDebugAndroidTestKotlin` compiles the `androidTest` source set — the E2E/instrumented
 tests — without needing an emulator. `assembleDebug`, `testDebugUnitTest`, and `lintDebug` never
