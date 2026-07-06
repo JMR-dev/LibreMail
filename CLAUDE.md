@@ -27,11 +27,14 @@ or via Gradle Managed Devices `./gradlew e2eGroupDebugAndroidTest` (whole matrix
 `app/build.gradle.kts` must stay in lockstep with the E2E matrix in `.github/workflows/ci.yml`.
 
 **Before treating a change as done**, run the fast CI gate: `assembleDebug` +
-`testDebugUnitTest` + `compileDebugAndroidTestKotlin` + `lintDebug` + `ktlintCheck` +
-`detekt` + the local emulator E2E — the instrumented test class(es) you changed via
-`python3 .claude/skills/preflight/local_instrumented.py <classes>` + the API 37 preview E2E via
-`python3 .claude/skills/preflight/api37_e2e.py` (the `/preflight` skill does all of this).
-`compileDebugAndroidTestKotlin` compiles the `androidTest` source set
+`testDebugUnitTest` + `jacocoTestCoverageVerification` + `compileDebugAndroidTestKotlin` +
+`lintDebug` + `ktlintCheck` + `detekt` + the local emulator E2E — the instrumented test class(es)
+you changed via `python3 .claude/skills/preflight/local_instrumented.py <classes>` + the API 37
+preview E2E via `python3 .claude/skills/preflight/api37_e2e.py` (the `/preflight` skill does all
+of this). `jacocoTestCoverageVerification` runs right after `testDebugUnitTest` (it reads that
+task's JVM exec data) and enforces the whole-app **no-regression line-coverage floor (currently
+0.79)**, catching coverage regressions locally instead of only in CI (the exact class of failure
+that reached CI on #367). `compileDebugAndroidTestKotlin` compiles the `androidTest` source set
 that the static part of the gate skips, catching E2E/instrumented-test compile errors before
 they surface only in CI. `ktlintCheck`/`detekt` cover the `test`/`androidTest` source sets that
 `lintDebug` skips, so they catch style violations that would otherwise fail CI's Static analysis
