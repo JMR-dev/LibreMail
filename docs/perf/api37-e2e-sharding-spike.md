@@ -1,22 +1,27 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# API 37 preview E2E sharding — feasibility spike
+# API 37 preview E2E sharding — adopted at N=2
 
-A time-boxed investigation into whether **sharding the `e2e-preview` job** (the hand-provisioned
-API 37 / `google_apis_ps16k` 16 KB-page emulator that runs the whole instrumented suite serially)
-would meaningfully cut CI wall-clock. `e2e-preview` is **consistently the single longest leg in CI**
-(~16.4–17.6 min on recent runs), so it sets the pipeline's critical path.
+**Status: ADOPTED (N=2).** `e2e-preview` is sharded across 2 parallel API 37 emulators in
+`.github/workflows/ci.yml`. This document is the design + measurement record behind that change: it
+began as a time-boxed feasibility spike (should we shard the hand-provisioned API 37 /
+`google_apis_ps16k` 16 KB-page emulator that ran the whole instrumented suite serially?) and now
+records the adopted design. `e2e-preview` was **consistently the single longest leg in CI**
+(~16.4–17.6 min on recent runs), so it set the pipeline's critical path.
 
-This is an **assessment + recommendation**, not a finished feature. It was produced from CI run logs
-and repo config only — **no emulator was booted locally** (avoids the machine-freeze risk noted in the
-project memory and runner contention). All numbers below come from real successful `e2e-preview` runs.
+The analysis below was produced from CI run logs and repo config only — **no emulator was booted
+locally** (avoids the machine-freeze risk noted in the project memory and runner contention). All
+numbers come from real successful `e2e-preview` runs; the PR's own CI run validates the live 2-shard
+timings and that both shards gate `ci-passed`.
 
 ## TL;DR / recommendation
 
-**GO — shard `e2e-preview` in CI at `N = 2`** (a `strategy.matrix.shard: [1, 2]` fan-out, each shard
-provisioning its own API 37 emulator and running one half of the suite via AndroidJUnitRunner's built-in
-`numShards`/`shardIndex`). Projected: the leg drops from **~17.1 min → ~12.7 min**, cutting the whole
-pipeline's critical path by **~4.9 min (~28%)** for the cost of **+1 emulator job (~1.5× this leg's
-emulator-minutes)**.
+**ADOPTED — `e2e-preview` is sharded in CI at `N = 2`** (a `strategy.matrix.shard: [0, 1]` fan-out —
+the values are **0-based** `shardIndex`es — each shard provisioning its own API 37 emulator and running
+one half of the suite via AndroidJUnitRunner's built-in `numShards`/`shardIndex`). Projected: the leg
+drops from **~17.1 min → ~12.7 min**, cutting the whole pipeline's critical path by **~4.9 min (~28%)**
+for the cost of **+1 emulator job (~1.5× this leg's emulator-minutes)**. Two reliability fixes ship with
+it: per-shard **test-retry parity** with the stable `e2e` matrix and an **`adb start-server`** before the
+boot loop (§5.9 / §6).
 
 - **`N = 3` is a defensible stretch** (~11.2 min) but buys only ~0.7 min more of *total-CI* time, because
   at that point the **rest of the E2E matrix (API 30, ~12.0 min) becomes the new critical path**. The
@@ -65,7 +70,7 @@ Sharding only parallelizes **test execution**; every shard re-pays boot **and** 
 - **`T` (parallelizable test execution) ≈ 8.8 min**
 - **`B` (fixed, re-paid by every shard) ≈ 8.3 min**
 
-i.e. **B ≈ T** — roughly a 50/50 split. That is the single most important number in this spike: because
+i.e. **B ≈ T** — roughly a 50/50 split. That is the single most important number in this analysis: because
 the fixed overhead is about as large as the test time, sharding has a **hard floor of ~8.3 min** no matter
 how many shards you add.
 
@@ -107,10 +112,12 @@ hand-provisioned `connectedDebugAndroidTest`** (no GMD required) each shard runs
 ```bash
 ./gradlew connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.numShards=2 \
-  -Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard-index }}
+  -Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}
 ```
 
-Wrapped in a `strategy.matrix.shard: [1, 2]` (or `[1, 2, 3]`) fan-out where each matrix leg provisions its
+`shardIndex` is **0-based** (a bucket in `0..numShards-1`), so the matrix values are `[0, 1]`, **not**
+`[1, 2]` — `shardIndex=numShards` would run an empty bucket and silently drop half the suite.
+Wrapped in a `strategy.matrix.shard: [0, 1]` (or `[0, 1, 2]`) fan-out where each matrix leg provisions its
 **own** API 37 emulator and runs one shard. This is the same fan-in pattern the repo **already uses** for
 the `e2e` (API 29–36) matrix, and the same runner-arg channel `local_instrumented.py` already uses for
 `…arguments.class=` — so it is a known-good mechanism here, needs **no orchestrator, no Gradle-side change,
@@ -217,39 +224,41 @@ min (API 30 ≈ 12.0 is its ceiling)**. So the API 37 leg only helps the pipelin
    strictly cheaper than the unsharded whole-suite retry (`B + T`). So sharding makes flake-recovery both
    still-necessary and *cheaper*. **Framing: mitigation, not a fix** — a blanket retry also masks genuine
    regressions, so surface the retried-but-passed case as a `::warning::` and keep the real fix test-level
-   (as #370 does). See §6 for the recommendation and the PoC.
+   (as #370 does). See §6 for the recommendation and the implementation.
 
-## 6. Recommendation
+## 6. Recommendation (adopted)
 
-**Worth doing: yes.** `e2e-preview` is the pipeline's critical path, so unlike #258 (unit tests, which finish
-~8.5 min *inside* the E2E-bounded gate and were correctly closed as not-worthwhile) sharding this leg
+**Worth doing: yes — done.** `e2e-preview` is the pipeline's critical path, so unlike #258 (unit tests, which
+finish ~8.5 min *inside* the E2E-bounded gate and were correctly closed as not-worthwhile) sharding this leg
 **directly** shortens total CI.
 
-- **Ship `N = 2`** via a `strategy.matrix.shard` fan-out using AndroidJUnitRunner `numShards`/`shardIndex`
-  (§3a). Expected total-CI critical path **~17.6 → ~12.7 min (~28% off)** for **+1 emulator job**. Keep the
-  per-shard two-attempt boot loop; suffix shard index on the report/diagnostics artifact names; leave
-  `e2e-preview` in `ci-passed.needs` (matrix fan-in keeps the single gate).
-- **`N = 3` optional** only if the last ~0.7 min matters and runner headroom is comfortable — it moves the
-  critical path onto the API 30 matrix leg (~12.0 min). **Never `N ≥ 4`** without also sharding the API 29–36
-  matrix.
+- **Adopted `N = 2`** via a `strategy.matrix.shard: [0, 1]` fan-out using AndroidJUnitRunner
+  `numShards`/`shardIndex` (§3a). Expected total-CI critical path **~17.6 → ~12.7 min (~28% off)** for **+1
+  emulator job**. Each shard keeps the two-attempt boot loop; the report/diagnostics artifact names carry the
+  shard index; `e2e-preview` stays a single entry in `ci-passed.needs` (matrix fan-in keeps the single gate —
+  both shards must pass; §5.3). `fail-fast: false` so a failing shard doesn't cancel its sibling.
+- **`N = 3` not adopted** — reserved for if the last ~0.7 min ever matters and runner headroom is comfortable;
+  it moves the critical path onto the API 30 matrix leg (~12.0 min). **Never `N ≥ 4`** without also sharding
+  the API 29–36 matrix.
 - **Local preflight stays single-emulator** — `api37_e2e.py` and `local_instrumented.py` keep their single
-  hand-provisioned boot (do **not** shard locally). One free hypervisor per dev box; parallel local emulators
-  risk freezing the machine (project memory). The sharding divergence is intentional and should be documented
-  in the job comment.
+  hand-provisioned boot (not sharded). One free hypervisor per dev box; parallel local emulators risk freezing
+  the machine (project memory). The sharding divergence is intentional and is documented in the job comment.
 
-Two **reliability** fixes to pair with sharding (from the #370 root-cause; §5 item 9) — together they make
-the API 37 leg *faster **and** more reliable*:
+Two **reliability** fixes ship with sharding (from the #370 root-cause; §5 item 9) — together they make the
+API 37 leg *faster **and** more reliable*:
 
-- **Add retry parity.** Give `e2e-preview` the **same single test-run retry** the `e2e` matrix has, as a
-  **per-shard** retry (re-runs only that shard's `B + T/N`, not the whole suite), and **mirror it into the
-  local `api37_e2e.py`** test-run step (its `connectedDebugAndroidTest` invocation) so preflight and CI stay
-  in lockstep. **This is a mitigation, not a fix:** a blanket retry masks genuine regressions, so flag the
-  retried-but-passed case as a warning and keep real flakes fixed at the test level (as #370 did). Do **not**
-  raise the retry count above one. *Sharding interaction:* a per-shard retry is the natural fit and is
-  cheaper than an unsharded retry — see §5 item 9.
-- **Minor: `adb start-server` before the boot loop** in `e2e-preview` (mirror `api37_e2e.py`'s
-  `wait_for_boot`, which already does this), to avoid the attempt-1 adb-daemon "Address already in use" bind
-  race seen in #370 (self-recovered there; low priority, but free to harden).
+- **Retry parity — shipped (CI).** `e2e-preview` now gives each shard the **same single test-run retry** the
+  `e2e` matrix has, as a **per-shard** retry (re-runs only that shard's tests, not the whole suite). **This is
+  a mitigation, not a fix:** a blanket retry masks genuine regressions, so the retried-but-passed case is
+  flagged as a `::warning::` and real flakes stay fixed at the test level (as #370 did). The retry count is
+  **one**, not more. *Sharding interaction:* a per-shard retry is the natural fit and is cheaper than an
+  unsharded retry — see §5 item 9. **Local mirror deferred:** mirroring the same single test-retry into
+  `api37_e2e.py`'s `connectedDebugAndroidTest` step (for CI/local lockstep) is a small follow-up, kept out of
+  this change because it can't be validated without booting a local emulator (which this change deliberately
+  does not do). `api37_e2e.py` already matches CI on the boot-retry loop and `adb start-server`.
+- **`adb start-server` before the boot loop — shipped (CI).** Mirrors `api37_e2e.py`'s `wait_for_boot` (which
+  already does this), avoiding the attempt-1 adb-daemon "Address already in use" bind race seen in #370
+  (self-recovered there; free hardening).
 
 ### Relationship to #258 (unit-test sharding)
 
@@ -260,16 +269,20 @@ so the conclusion flips to GO. **Distinct from #258:** different layer (on-devic
 different mechanism (`numShards`/`shardIndex` matrix vs `maxParallelForks`), and **no coverage-merge
 constraint** (instrumented coverage is out of scope), which makes this strictly simpler to land.
 
-## PoC
+## Implementation
 
-This branch carries a **draft, non-auto-merged** PoC that converts `e2e-preview` to an `N = 2` shard matrix
-(clearly marked as a spike). It also folds in the two §6 reliability fixes on the CI side so the PoC shows
-the full *faster + more reliable* picture: a **per-shard single test retry** (retry parity with the `e2e`
-matrix, flagged `::warning::` on the retried-but-passed case) and an **`adb start-server` before the boot
-loop**. The matching `api37_e2e.py` retry mirror is left as a documented recommendation (a focused local
-change, since the local path is validated by a real emulator, which this spike deliberately did not boot).
+This change converts `e2e-preview` to an `N = 2` shard matrix (`strategy.matrix.shard: [0, 1]`,
+`fail-fast: false`), each leg hand-provisioning its own API 37 emulator and running one shard via
+`-Pandroid.testInstrumentationRunnerArguments.numShards=2 -Pandroid.testInstrumentationRunnerArguments.shardIndex=<0|1>`.
+Each uploaded artifact name carries the shard index (`…-shard${{ matrix.shard }}`) — `upload-artifact@v7`
+errors on duplicate names. It also folds in the two §6 reliability fixes on the CI side: a **per-shard single
+test retry** (retry parity with the `e2e` matrix, flagged `::warning::` on the retried-but-passed case) and
+an **`adb start-server` before the boot loop**. The matching `api37_e2e.py` local retry mirror is a
+documented follow-up (§6) — not bundled here because it can't be validated without booting a local emulator.
 
-Because a PR runs the workflow *from its own branch*, **the draft PR's own CI run is the validation** — the
-maintainer can confirm both shards go green and read the real per-shard wall-clock straight off that run
-(this is a CI-infra change, so a green pipeline is the "test", per #258's DoD note). It is **not** to be
-merged as-is: adopt after reviewing the live shard timings and confirming runner headroom.
+**Validation.** Because a PR runs the workflow *from its own branch*, **this PR's own CI run is the
+validation** — both shards must go green and the real per-shard wall-clock is readable straight off that run
+(this is a CI-infra change, so a green pipeline is the "test", per #258's DoD note). Both shards fan into the
+single `e2e-preview` entry in `ci-passed.needs`; GHA's matrix aggregation makes `e2e-preview`'s result
+`failure` if either shard fails, so `ci-passed` (the branch-protection-required "CI passed" context) stays
+red unless **both** shards pass — no branch-protection change needed (§5.3).

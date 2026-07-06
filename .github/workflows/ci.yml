@@ -314,13 +314,16 @@ jobs:
     name: E2E (API 37 preview)
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    # SPIKE / PoC (docs/perf/api37-e2e-sharding-spike.md) — DRAFT, DO NOT MERGE AS-IS.
-    # Shards the instrumented suite across N parallel API 37 emulators (each a separate matrix leg
-    # that hand-provisions its OWN emulator and runs one shard via AndroidJUnitRunner numShards/
-    # shardIndex). Projected: ~17.1 min -> ~12.7 min (N=2), cutting the pipeline's critical path
-    # ~28%. `ci-passed` still lists `e2e-preview` once; GHA rolls all shard legs under it (a matrix
-    # job's result is `failure` if any shard fails), so no branch-protection change is needed.
-    # Keep API37_NUM_SHARDS in lockstep with the length of matrix.shard.
+    # Sharded N=2 (docs/perf/api37-e2e-sharding-spike.md). The instrumented suite is split across
+    # 2 parallel API 37 emulators — each a separate matrix leg that hand-provisions its OWN emulator
+    # and runs one shard via AndroidJUnitRunner's numShards/shardIndex. This leg is the pipeline's
+    # critical path, so sharding cuts it ~17.1 min -> ~12.7 min (~28% off total CI) for +1 emulator
+    # job. FAN-IN: `ci-passed` lists `e2e-preview` once and GHA rolls BOTH shard legs under that one
+    # entry — a matrix job's aggregate result is `failure` if ANY leg fails — so both shards must
+    # pass, and branch protection (which requires the "CI passed" context, not the per-leg
+    # "E2E (API 37 preview) (N)" names) needs no change. `fail-fast: false` lets one shard's failure
+    # NOT cancel the other, so both reports always upload. Keep API37_NUM_SHARDS in lockstep with the
+    # length of matrix.shard.
     strategy:
       fail-fast: false
       matrix:
@@ -439,8 +442,8 @@ jobs:
             return 1
           }
 
-          # SPIKE: start the adb daemon up-front (mirror api37_e2e.py wait_for_boot) so attempt 1
-          # can't lose the adb-server "Address already in use" bind race that flaked #370's boot.
+          # Start the adb daemon up-front (mirrors api37_e2e.py wait_for_boot) so attempt 1 can't
+          # lose the adb-server "Address already in use" bind race that flaked #370's boot.
           adb start-server || true
 
           booted=0
@@ -448,21 +451,21 @@ jobs:
           [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
 
           adb shell input keyevent 82 || true
-          # SPIKE: run only this matrix leg's shard. AndroidJUnitRunner hashes each test name into
-          # one of numShards buckets and runs only shardIndex's bucket. The args flow through AGP's
-          # -Pandroid.testInstrumentationRunnerArguments.* channel (same one local_instrumented.py
+          # Run only this matrix leg's shard. AndroidJUnitRunner hashes each test name into one of
+          # numShards buckets and runs only shardIndex's bucket. The args flow through AGP's
+          # -Pandroid.testInstrumentationRunnerArguments.* channel (the same one local_instrumented.py
           # uses for .class=…) — no GMD, no orchestrator, no Gradle-side change.
           run_shard() {
             ./gradlew connectedDebugAndroidTest --stacktrace \
               "-Pandroid.testInstrumentationRunnerArguments.numShards=${API37_NUM_SHARDS}" \
               "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}"
           }
-          # SPIKE: retry this shard's test run ONCE on failure — retry parity with the stable `e2e`
-          # matrix (which retries once, so a flaky test self-heals on API 29–36 but wedges the
-          # required gate on API 37 today, e.g. #370). Per-shard, so the retry re-runs only this
-          # shard's ~T/N tests, not the whole suite. MITIGATION, NOT A FIX: a blanket retry also
-          # masks genuine regressions, so the retried-but-passed case is flagged as a ::warning::
-          # and the real fix stays test-level. See docs/perf/api37-e2e-sharding-spike.md.
+          # Retry this shard's test run ONCE on failure — retry parity with the stable `e2e` matrix
+          # (which retries once, so a flaky test self-heals on API 29–36 but would otherwise wedge
+          # the required gate on API 37, e.g. #370). Per-shard, so the retry re-runs only this shard's
+          # ~T/N tests, not the whole suite. MITIGATION, NOT A FIX: a blanket retry also masks genuine
+          # regressions, so the retried-but-passed case is flagged as a ::warning:: and the real fix
+          # stays test-level. See docs/perf/api37-e2e-sharding-spike.md.
           run_shard || { echo "::warning::API 37 shard ${{ matrix.shard }} test run failed — retrying once"; run_shard; }
 
       - name: Dump emulator log on failure
@@ -477,7 +480,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # SPIKE: shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
+          # Shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
           name: e2e-api37-boot-diagnostics-shard${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/emulator.log
@@ -493,7 +496,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # SPIKE: shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
+          # Shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
           name: e2e-test-report-api37-preview-shard${{ matrix.shard }}
           path: app/build/reports/androidTests/connected/
           if-no-files-found: warn
