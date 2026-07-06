@@ -30,6 +30,11 @@ androidxTestRules = "1.7.0"
 turbine = "1.2.1"
 mockk = "1.14.11"
 greenmail = "2.1.9"
+# Robolectric — runs the Android framework on the JVM so Compose UI (createComposeRule) can be
+# unit-tested without an emulator (issue #373). 4.16.x is the first line to support compileSdk 36
+# (Baklava) and requires JDK 21 for it; API 37 (preview) is unsupported, so Robolectric tests pin
+# @Config(sdk = 36) — also set in app/src/test/resources/robolectric.properties.
+robolectric = "4.16.1"
 errorprone = "2.50.0"
 # Lint/format. ktlint owns formatting; detekt owns static analysis (formatting ruleset off).
 # detekt 2.0 is the only line with Gradle 9 support (stable 1.23.x tops out at Gradle 8.12).
@@ -115,6 +120,8 @@ mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 # mockk's Android artifact for instrumented tests (dexmaker/byte-buddy-android backed).
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 greenmail = { group = "com.icegreen", name = "greenmail", version.ref = "greenmail" }
+# Robolectric — JVM Android framework for unit-testing Compose UI without an emulator (issue #373).
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 androidx-espresso-intents = { group = "androidx.test.espresso", name = "espresso-intents", version.ref = "espresso" }

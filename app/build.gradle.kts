@@ -147,6 +147,12 @@ android {
     }
 
     testOptions {
+        // Robolectric-backed Compose UI unit tests (issue #373) need the merged Android resources
+        // (drawables, strings, the compiled resource table) on the JVM unit-test classpath so
+        // `stringResource(...)` and Material3 theming resolve without an emulator. Off by default in
+        // AGP; JVM tests that don't touch resources are unaffected.
+        unitTests.isIncludeAndroidResources = true
+
         // Gradle Managed Devices define the per-API E2E matrix as config-as-code: one virtual
         // device per supported Android version (a rolling ~7-year window, API 29 → latest stable).
         // Run the whole matrix with `./gradlew e2eGroupDebugAndroidTest`, or one level with e.g.
@@ -251,7 +257,14 @@ val jacocoGeneratedExcludes = listOf(
 // audit): unlike `jacocoGeneratedExcludes` above, none of this is generated code — it is hand-written
 // but structurally unreachable from a JVM unit test, so counting it against the metric just measures
 // how much Compose/framework glue exists rather than how well the logic is tested. Four buckets:
-//  1. Compose screen/component render code — only exercisable via a Compose UI test or an emulator.
+//  1. Compose screen/component render code. Historically only exercisable via an emulator, so it was
+//     excluded here. Issue #373 changes that: Robolectric runs the Android framework on the JVM, so a
+//     `createComposeRule()` test in the `test` source set now gives these files real JVM coverage
+//     without an emulator. This bucket therefore SHRINKS one screen at a time — each glob is deleted
+//     in the same PR that adds that screen's Robolectric JVM Compose test. AddAnotherAccountScreen was
+//     the first (see AddAnotherAccountScreenJvmTest) and has been removed below; the rest are tracked
+//     as per-area conversion tickets under #373. The coverage-floor re-ratchet is deferred until the
+//     whole conversion is done and stable (#373) — do NOT raise it in a conversion PR.
 //  2. Android framework entry points the OS instantiates directly (Activity/Service/Application/
 //     BackupAgent) rather than the app's own code constructing them.
 //  3. Hilt DI modules — `@Provides`/`@Binds` one-liners with no branching logic.
@@ -298,7 +311,7 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/AppLockGateHost*",
     "**/FolderDrawer*",
     "**/MailboxScreen*",
-    "**/AddAnotherAccountScreen*",
+    // AddAnotherAccountScreen converted to a Robolectric JVM Compose test (#373) — now JVM-covered.
     "**/BatteryOptimizationScreen*",
     "**/ContactsAccessScreen*",
     "**/LicenseScreen*",
@@ -458,6 +471,18 @@ dependencies {
     testImplementation(libs.androidx.paging.testing)
     // The real org.json for unit tests (android.jar ships a stubbed, no-op version).
     testImplementation("org.json:json:20231013")
+
+    // Robolectric-backed JVM Compose UI tests (issue #373): Robolectric runs the Android framework
+    // on the JVM so `createComposeRule()` can drive composables without an emulator, bringing screen
+    // render code into the JaCoCo JVM-testable surface. The Compose test artifacts come from the same
+    // BOM as the app (aligned versions) and reuse the ui-test-junit4 / ui-test-manifest aliases the
+    // androidTest source set already declares — here in `test` (JVM), not `androidTest`. Robolectric
+    // sources Android's real org.json from its sandbox, so it does not clash with the stub-replacing
+    // org.json above (that is for the plain, non-Robolectric JVM tests).
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
