@@ -35,6 +35,17 @@ greenmail = "2.1.9"
 # (Baklava) and requires JDK 21 for it; API 37 (preview) is unsupported, so Robolectric tests pin
 # @Config(sdk = 36) — also set in app/src/test/resources/robolectric.properties.
 robolectric = "4.16.1"
+# The instrumented android-all runtime jar Robolectric loads into its sandbox to run the Android
+# framework on the JVM. By DEFAULT Robolectric downloads this ~200 MB artifact from Maven Central
+# lazily at TEST time (MavenDependencyResolver -> MavenArtifactFetcher); that runtime fetch is
+# unreliable on CI runners and failed the JVM Compose PoC with "Failed to fetch maven artifact"
+# (issue #373). Pinning it lets Gradle resolve+cache it and hand it to Robolectric in offline mode
+# (see the robolectricAndroidAll wiring in app/build.gradle.kts) so no network fetch happens at
+# test time. The value is BOTH Robolectric-version- and SDK-specific: it is exactly what
+# Robolectric 4.16.1's DefaultSdkProvider maps @Config(sdk = 36) to — androidVersion "16", build
+# "13921718", preinstrumented suffix "-i7". Bump it together with `robolectric` above, and update
+# it if the pinned @Config(sdk = ..) / robolectric.properties SDK ever changes.
+robolectricAndroidAll = "16-robolectric-13921718-i7"
 errorprone = "2.50.0"
 # Lint/format. ktlint owns formatting; detekt owns static analysis (formatting ruleset off).
 # detekt 2.0 is the only line with Gradle 9 support (stable 1.23.x tops out at Gradle 8.12).
@@ -122,6 +133,9 @@ mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "moc
 greenmail = { group = "com.icegreen", name = "greenmail", version.ref = "greenmail" }
 # Robolectric — JVM Android framework for unit-testing Compose UI without an emulator (issue #373).
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+# Resolved via Gradle (not Robolectric's runtime Maven fetch) and staged for offline use so the JVM
+# Compose tests run in CI without a flaky test-time download — see app/build.gradle.kts (issue #373).
+robolectric-android-all-instrumented = { group = "org.robolectric", name = "android-all-instrumented", version.ref = "robolectricAndroidAll" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 androidx-espresso-intents = { group = "androidx.test.espresso", name = "espresso-intents", version.ref = "espresso" }

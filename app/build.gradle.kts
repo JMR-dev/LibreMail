@@ -412,6 +412,45 @@ tasks.named("check") {
     dependsOn("jacocoTestCoverageVerification")
 }
 
+// --- Robolectric android-all offline resolution (issue #373) ------------------------------------
+// Robolectric runs the real Android framework on the JVM from a large `android-all-instrumented`
+// jar. By default it resolves that jar LAZILY AT TEST TIME by downloading it from Maven Central
+// (org.robolectric.internal.dependency.MavenDependencyResolver -> MavenArtifactFetcher). That
+// runtime download is unreliable on CI runners and failed the JVM Compose PoC in CI with
+// `java.lang.AssertionError at MavenArtifactFetcher ... Caused by: java.io.IOException` ("Failed to
+// fetch maven artifact"). Fix: resolve the jar through Gradle instead — reliable, cached, and
+// persisted by the CI Gradle cache, using the same repositories as every other dependency — then
+// hand it to Robolectric in OFFLINE mode so it never touches the network at test time.
+//
+// A DEDICATED resolvable configuration (deliberately NOT testImplementation/testRuntimeOnly) keeps
+// the ~200 MB instrumented framework jar OFF the JVM unit-test classpath: it must be loaded only by
+// Robolectric's sandbox classloader, never flattened onto the app's test classpath where it would
+// collide with the stub `android.jar`. `syncRobolectricAndroidAll` stages the resolved jar under
+// its Maven filename (android-all-instrumented-<version>.jar) — exactly what Robolectric's
+// LocalDependencyResolver looks up as <artifactId>-<version>.jar — and the two system properties
+// below switch Robolectric onto that offline directory (see LegacyDependencyResolver). Every
+// Robolectric test pins @Config(sdk = 36) (app/src/test/resources/robolectric.properties), so the
+// single sdk=36 jar covers them all; a test on a different SDK must add that android-all version to
+// this configuration too. The offline properties are inert for non-Robolectric JVM tests.
+val robolectricAndroidAll: Configuration = configurations.create("robolectricAndroidAll") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+val robolectricDepsDir = layout.buildDirectory.dir("robolectric-android-all")
+
+val syncRobolectricAndroidAll = tasks.register<Sync>("syncRobolectricAndroidAll") {
+    description = "Stages Robolectric's android-all-instrumented jar for offline resolution (issue #373)."
+    from(robolectricAndroidAll)
+    into(robolectricDepsDir)
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(syncRobolectricAndroidAll)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricDepsDir.get().asFile.absolutePath)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -480,6 +519,12 @@ dependencies {
     // sources Android's real org.json from its sandbox, so it does not clash with the stub-replacing
     // org.json above (that is for the plain, non-Robolectric JVM tests).
     testImplementation(libs.robolectric)
+    // The android-all-instrumented framework jar Robolectric loads into its sandbox — resolved via
+    // Gradle and staged for offline use by syncRobolectricAndroidAll above so no flaky test-time
+    // download happens in CI (issue #373). On its own dedicated configuration, NOT the test
+    // classpath — see that block for why. The artifact has no transitive dependencies (verified from
+    // its POM), so it resolves to exactly the one staged jar.
+    "robolectricAndroidAll"(libs.robolectric.android.all.instrumented)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.ui.test.manifest)
