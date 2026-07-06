@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.security
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
 import android.util.Base64
+import org.libremail.reporting.AppLog
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.AEADBadTagException
@@ -115,23 +118,52 @@ abstract class AesGcmKeystoreCipher(private val alias: String, private val gener
     // Synchronized so two concurrent first-run encrypts can't both generate a key under the same
     // alias — the second would overwrite the first, leaving the first secret undecryptable.
     protected open fun getOrCreateKey(): SecretKey = synchronized(keyLock) {
-        existingKey()?.let { return it }
+        existingKey() ?: generateKeyWithStrongBoxFallback()
+    }
+
+    /**
+     * Mint the key, preferring the hardware **StrongBox** secure element (a dedicated tamper-resistant
+     * chip) so the non-exportable key is bound to the strongest keystore available. Devices without
+     * StrongBox report [StrongBoxUnavailableException] at generation time; we then regenerate a
+     * TEE-backed key so key creation still succeeds on every device. Both the master ([KeystoreCrypto])
+     * and auth-bound ([DatabaseKeyCipher]) keys inherit this through the shared base.
+     */
+    private fun generateKeyWithStrongBoxFallback(): SecretKey = try {
+        generateKey(strongBox = true)
+    } catch (e: StrongBoxUnavailableException) {
+        // Expected on devices with no StrongBox — not an error. PII-free (a device-capability fact).
+        AppLog.i(TAG, "StrongBox unavailable for Keystore alias '$alias'; using a TEE-backed key: ${e.message}")
+        generateKey(strongBox = false)
+    }
+
+    /**
+     * Test seam over the raw Android Keystore key generation for a given [strongBox] preference. The
+     * real [KeyGenerator] is device-only, so JVM unit tests override this to exercise the StrongBox
+     * fallback in [generateKeyWithStrongBoxFallback] without a Keystore.
+     */
+    protected open fun generateKey(strongBox: Boolean): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-        generator.init(keySpec())
-        generator.generateKey()
+        generator.init(keySpec(strongBox))
+        return generator.generateKey()
     }
 
     /** The alias-bound [KeyGenParameterSpec] for this key; subclasses extend [keySpecBuilder]. */
-    protected abstract fun keySpec(): KeyGenParameterSpec
+    protected abstract fun keySpec(strongBox: Boolean): KeyGenParameterSpec
 
     /** The common AES-256-GCM builder (encrypt + decrypt, GCM, no padding, 256-bit) to extend. */
-    protected fun keySpecBuilder(): KeyGenParameterSpec.Builder = KeyGenParameterSpec.Builder(
+    protected fun keySpecBuilder(strongBox: Boolean): KeyGenParameterSpec.Builder = KeyGenParameterSpec.Builder(
         alias,
         KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
     )
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
         .setKeySize(AES_KEY_SIZE_BITS)
+        .apply {
+            // Bind the key to the StrongBox secure element when requested and supported (API 28+; minSdk
+            // is 29, so the guard is defensive). If the device has no StrongBox, generateKey() catches
+            // StrongBoxUnavailableException and retries with strongBox = false for a TEE-backed key.
+            if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setIsStrongBoxBacked(true)
+        }
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -139,5 +171,6 @@ abstract class AesGcmKeystoreCipher(private val alias: String, private val gener
         const val IV_LENGTH = 12
         const val TAG_BITS = 128
         const val AES_KEY_SIZE_BITS = 256
+        const val TAG = "AesGcmKeystoreCipher"
     }
 }
