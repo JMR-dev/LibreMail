@@ -10,7 +10,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.libremail.data.security.DatabaseKeyStore
+import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.reporting.AppLog
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -115,6 +118,24 @@ class DatabaseProvisioner internal constructor(
         // resolvePassphrase waits on PassphraseSession until the user authenticates — which is why this
         // must never run on the main thread while the cache is locked (issue #93).
         val settings = settingsRepository.settings.first()
+        return try {
+            resolveOpenMode(settings, dbFile)
+        } catch (nativeLoadFailure: LinkageError) {
+            // SQLCipher's native library could not be loaded/linked — most likely an `.so` not aligned
+            // for the 16 KB memory pages Android 15+ / SDK 37 devices use, which surfaces as an
+            // UnsatisfiedLinkError at SQLiteConnection.nativeOpen (issue #359). Rather than crash-loop the
+            // app on every cold start, degrade to an unencrypted cache.
+            degradeToUnencryptedCache(dbFile, nativeLoadFailure)
+        }
+    }
+
+    /**
+     * The encryption gate (step 3 of [runStartupSequence]): convert the on-disk cache to the form the
+     * `encryptCache` setting asks for and report how Room must open it. Split out so a native-library
+     * load failure on either the encrypt or the decrypt-on-disable path (both need SQLCipher's `.so`) is
+     * caught in one place — see [runStartupSequence]'s handler and [degradeToUnencryptedCache].
+     */
+    private suspend fun resolveOpenMode(settings: AppSettings, dbFile: File): CacheOpenMode {
         val appLock = settings.appLock
         return when {
             settings.encryptCache -> {
@@ -139,5 +160,27 @@ class DatabaseProvisioner internal constructor(
 
             else -> CacheOpenMode.Plaintext
         }
+    }
+
+    /**
+     * Fallback for issue #359 when SQLCipher's native library will not load on this device: encryption
+     * cannot apply, so open the cache unencrypted instead of throwing. Turns `encryptCache` off so the
+     * next start does not re-attempt (and re-wipe) the same failing conversion, and if the on-disk cache
+     * is currently ciphertext — which the plaintext framework opener cannot parse — clears it and resets
+     * its now-useless seals. The cache is a re-syncable copy of server mail, so clearing it loses nothing
+     * that cannot be re-fetched.
+     */
+    private suspend fun degradeToUnencryptedCache(dbFile: File, cause: LinkageError): CacheOpenMode {
+        AppLog.w(TAG, "SQLCipher native library failed to load; opening the cache unencrypted", cause)
+        settingsRepository.setEncryptCache(false)
+        if (DatabaseEncryption.isEncrypted(dbFile)) {
+            DatabaseFiles.clear(context)
+            keyStore.resetSealedPassphrase()
+        }
+        return CacheOpenMode.Plaintext
+    }
+
+    private companion object {
+        const val TAG = "DatabaseProvisioner"
     }
 }
