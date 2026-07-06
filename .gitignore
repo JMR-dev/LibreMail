@@ -30,6 +30,8 @@ secrets.properties
 
 # Log Files
 *.log
+# ...but keep the device-testing parser fixtures (verbatim logcat slices used as test inputs)
+!scripts/device-testing/tests/fixtures/*.log
 
 # Android Studio / IntelliJ
 .idea/

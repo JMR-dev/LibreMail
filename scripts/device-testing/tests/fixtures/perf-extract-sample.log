@@ -1,0 +1,17 @@
+07-05 17:55:38.343 10261 10423 D ImapPerf: prefetch-body connect=857ms work=2150ms live=3
+07-05 17:55:54.352 10261 10425 D ImapPerf: backfill-page connect=4366ms work=71989ms live=2
+07-05 17:57:38.981 10261 10425 I MailReader: openMessage imap:94058a folder=INBOX fetchedBody=false took=21ms
+07-05 17:57:39.041 10261 10261 D Reader  : reader ready took=82ms html=true inline=0
+07-05 18:04:37.001 10261 10408 I MailBackfiller: backfill slice done: moreWork=true
+07-05 18:04:37.002 10261 10408 I MailBackfiller: backfill slice: maxBatches=20
+07-05 18:07:16.094 10261 15306 D ImapPerf: body-fetch select=2566ms body=14253ms flag=2356ms rfc822=60457B chars=51610 att=0
+07-05 18:07:18.435 10261 15306 D ImapPerf: body-fetch connect=2624ms work=26211ms live=3
+07-05 18:07:20.817 10261 15306 I MailReader: openMessage imap:94058a folder=INBOX fetchedBody=true took=31227ms
+07-05 18:07:21.206 10261 10261 D Reader  : reader ready took=31617ms html=true inline=0
+07-05 18:07:32.607 10261 10414 D ImapPerf: backfill-page connect=656ms work=3038ms live=3
+07-05 18:36:37.959 19255 21059 D MailBackfiller: backfill outlook:6b54d6 folder=INBOX pages=20 complete=false
+07-05 18:36:54.941 19255 19314 D ImapPerf: body-fetch select=185ms body=1355ms flag=78ms rfc822=189086B chars=82986 att=0
+07-05 18:36:55.002 19255 19314 D ImapPerf: body-fetch connect=772ms work=2018ms live=2
+07-05 18:36:55.140 19255 21060 I MailReader: openMessage outlook:6b54d6 folder=INBOX fetchedBody=true took=2934ms
+07-05 18:36:55.144 19255 19255 D Reader  : reader ready took=2939ms html=true inline=0
+07-05 18:37:11.704 19255 19314 D ImapPerf: imap connect=3156ms work=8032ms live=2
