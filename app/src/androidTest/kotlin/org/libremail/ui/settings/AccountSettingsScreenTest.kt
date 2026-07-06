@@ -7,11 +7,13 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.work.WorkManager
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,13 +56,27 @@ class AccountSettingsScreenTest {
 
     private var manageSignaturesClicked = false
 
+    private lateinit var db: AccountDatabase
+
+    // Holds the real AccountSettingsViewModel built by hand in setContent() below, so tearDown() can
+    // clear() it (triggering ViewModel.onCleared()) before closing the DB.
+    private val viewModelStore = ViewModelStore()
+
+    @After
+    fun tearDown() {
+        // Clear the store (→ ViewModel.onCleared() → cancels viewModelScope) BEFORE closing the DB.
+        // The ViewModel's `settings`/`signatureCount`/`defaultSignatureName`/`account` Room
+        // InvalidationTracker Flows are kept alive by stateIn(WhileSubscribed(5_000)): without this,
+        // a collector can still be live up to 5s after the UI detaches, so a re-query lands on the
+        // just-closed in-memory DB and throws SQLITE_MISUSE ("connection is closed") — an intermittent
+        // teardown race, not a real bug. (Previously worked around by never closing the DB at all.)
+        viewModelStore.clear()
+        db.close()
+    }
+
     private fun setContent(): AccountSettingsRepository {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        // Intentionally not closed in an @After: the ViewModel's `settings` Room Flow (kept alive by
-        // stateIn/WhileSubscribed) keeps querying after the test body, so closing the in-memory DB out
-        // from under it races and crashes ("connection pool has been closed"). The DB is reclaimed with
-        // the test process.
-        val db = Room.inMemoryDatabaseBuilder(context, AccountDatabase::class.java).build()
+        db = Room.inMemoryDatabaseBuilder(context, AccountDatabase::class.java).build()
         val repository = AccountSettingsRepository(db.accountSettingsDao())
         runBlocking {
             db.accountDao().upsert(account.toEntity()) // FK parent for the account_settings row
@@ -74,6 +90,7 @@ class AccountSettingsScreenTest {
             syncScheduler = SyncScheduler(Provider { WorkManager.getInstance(context) }),
             settingsRepository = SettingsRepository(context),
         )
+        viewModelStore.put("account-settings", viewModel)
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {
                 AccountSettingsScreen(
