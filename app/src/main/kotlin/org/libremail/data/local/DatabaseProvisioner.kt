@@ -121,11 +121,21 @@ class DatabaseProvisioner internal constructor(
         return try {
             resolveOpenMode(settings, dbFile)
         } catch (nativeLoadFailure: LinkageError) {
-            // SQLCipher's native library could not be loaded/linked — most likely an `.so` not aligned
-            // for the 16 KB memory pages Android 15+ / SDK 37 devices use, which surfaces as an
-            // UnsatisfiedLinkError at SQLiteConnection.nativeOpen (issue #359). Rather than crash-loop the
-            // app on every cold start, degrade to an unencrypted cache.
-            degradeToUnencryptedCache(dbFile, nativeLoadFailure)
+            // FAIL CLOSED (issue #359, security rework of #367). SQLCipher's native library could not be
+            // loaded/linked (e.g. UnsatisfiedLinkError at SQLiteConnection.nativeOpen or from
+            // ensureNativeLibraryLoaded), so the encrypted cache cannot be opened OR converted. We must
+            // NOT silently degrade to an unencrypted cache (that would defeat the user's opt-in
+            // encryption), so we deliberately do NOT: open plaintext, wipe the on-disk ciphertext, or
+            // write the encryptCache setting. Instead raise a distinct signal the startup UI catches to
+            // show the encryption error gate. This throw is NOT memoized (it skips prepareCache's
+            // `.also { prepared = it }`), so the next launch re-attempts and recovers automatically if
+            // the library later loads.
+            AppLog.w(
+                TAG,
+                "SQLCipher native library failed to load; failing closed (encrypted cache unavailable)",
+                nativeLoadFailure,
+            )
+            throw CacheEncryptionUnavailableException(nativeLoadFailure)
         }
     }
 
@@ -133,7 +143,8 @@ class DatabaseProvisioner internal constructor(
      * The encryption gate (step 3 of [runStartupSequence]): convert the on-disk cache to the form the
      * `encryptCache` setting asks for and report how Room must open it. Split out so a native-library
      * load failure on either the encrypt or the decrypt-on-disable path (both need SQLCipher's `.so`) is
-     * caught in one place — see [runStartupSequence]'s handler and [degradeToUnencryptedCache].
+     * caught in one place — see [runStartupSequence]'s handler, which fails closed by raising
+     * [CacheEncryptionUnavailableException] rather than degrading to an unencrypted cache.
      */
     private suspend fun resolveOpenMode(settings: AppSettings, dbFile: File): CacheOpenMode {
         val appLock = settings.appLock
@@ -160,24 +171,6 @@ class DatabaseProvisioner internal constructor(
 
             else -> CacheOpenMode.Plaintext
         }
-    }
-
-    /**
-     * Fallback for issue #359 when SQLCipher's native library will not load on this device: encryption
-     * cannot apply, so open the cache unencrypted instead of throwing. Turns `encryptCache` off so the
-     * next start does not re-attempt (and re-wipe) the same failing conversion, and if the on-disk cache
-     * is currently ciphertext — which the plaintext framework opener cannot parse — clears it and resets
-     * its now-useless seals. The cache is a re-syncable copy of server mail, so clearing it loses nothing
-     * that cannot be re-fetched.
-     */
-    private suspend fun degradeToUnencryptedCache(dbFile: File, cause: LinkageError): CacheOpenMode {
-        AppLog.w(TAG, "SQLCipher native library failed to load; opening the cache unencrypted", cause)
-        settingsRepository.setEncryptCache(false)
-        if (DatabaseEncryption.isEncrypted(dbFile)) {
-            DatabaseFiles.clear(context)
-            keyStore.resetSealedPassphrase()
-        }
-        return CacheOpenMode.Plaintext
     }
 
     private companion object {

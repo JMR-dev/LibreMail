@@ -21,6 +21,7 @@ import org.libremail.ui.LibreMailApp
 import org.libremail.ui.compose.ComposePrefill
 import org.libremail.ui.compose.IntentComposeParser
 import org.libremail.ui.lock.AppLockGateHost
+import org.libremail.ui.security.CacheEncryptionGate
 import org.libremail.ui.theme.LibreMailTheme
 import javax.inject.Inject
 
@@ -73,12 +74,18 @@ class MainActivity : FragmentActivity() {
                 // Gate the whole app behind the screen-lock when app-lock is enabled. When it is off
                 // the gate resolves straight to the content, so this is a no-op for most users.
                 AppLockGateHost {
-                    LibreMailApp(
-                        pendingCompose = pendingCompose.value,
-                        onComposeHandled = { pendingCompose.value = null },
-                        pendingOpenMessageId = pendingOpenMessageId.value,
-                        onOpenMessageHandled = { pendingOpenMessageId.value = null },
-                    )
+                    // Inside the app-lock gate (so the auth-bound passphrase is already unlocked): fail
+                    // closed if the encrypted cache's SQLCipher library won't load (#359), showing the
+                    // error gate instead of ever opening the cache unencrypted. Resolves straight to the
+                    // content when the cache is openable, so it is a no-op for most users.
+                    CacheEncryptionGate {
+                        LibreMailApp(
+                            pendingCompose = pendingCompose.value,
+                            onComposeHandled = { pendingCompose.value = null },
+                            pendingOpenMessageId = pendingOpenMessageId.value,
+                            onOpenMessageHandled = { pendingOpenMessageId.value = null },
+                        )
+                    }
                 }
             }
         }

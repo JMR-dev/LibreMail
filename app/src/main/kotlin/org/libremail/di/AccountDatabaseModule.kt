@@ -12,6 +12,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.runBlocking
 import org.libremail.data.local.ACCOUNT_MIGRATION_1_2
 import org.libremail.data.local.AccountDatabase
+import org.libremail.data.local.CacheEncryptionUnavailableException
 import org.libremail.data.local.DatabaseFiles.ACCOUNTS_NAME
 import org.libremail.data.local.DatabaseProvisioner
 import org.libremail.data.local.DeferredOpenHelperFactory
@@ -19,6 +20,7 @@ import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.AccountSettingsDao
 import org.libremail.data.local.dao.CredentialDao
 import org.libremail.data.local.dao.SignatureDao
+import org.libremail.reporting.AppLog
 import javax.inject.Singleton
 
 /**
@@ -37,6 +39,13 @@ object AccountDatabaseModule {
      * the migrate-before-open ordering the old construction-time dependency on `LibreMailDatabase`
      * enforced, now moved OFF the injection path (issue #93). This store always opens unkeyed, so it
      * ignores the returned cache open-mode and only awaits the shared sequence.
+     *
+     * This store is plaintext and never uses SQLCipher, so a cache-encryption native-load failure
+     * (issue #359, surfaced as [CacheEncryptionUnavailableException]) must NOT brick it: the app still
+     * needs accounts/credentials to render the encryption error gate and let the user file a PII-free
+     * problem report. The wipe + migrate steps run BEFORE the encryption gate that can throw, so the
+     * migrate-before-open ordering still holds when we tolerate that one specific failure here; any
+     * other failure still propagates.
      */
     @Provides
     @Singleton
@@ -47,7 +56,11 @@ object AccountDatabaseModule {
         .addMigrations(ACCOUNT_MIGRATION_1_2)
         .openHelperFactory(
             DeferredOpenHelperFactory { configuration ->
-                runBlocking { provisioner.prepareCache() }
+                try {
+                    runBlocking { provisioner.prepareCache() }
+                } catch (e: CacheEncryptionUnavailableException) {
+                    AppLog.w(TAG, "cache encryption unavailable; opening the plaintext account store anyway", e)
+                }
                 FrameworkSQLiteOpenHelperFactory().create(configuration)
             },
         )
@@ -64,4 +77,6 @@ object AccountDatabaseModule {
 
     @Provides
     fun provideSignatureDao(database: AccountDatabase): SignatureDao = database.signatureDao()
+
+    private const val TAG = "AccountDatabaseModule"
 }
