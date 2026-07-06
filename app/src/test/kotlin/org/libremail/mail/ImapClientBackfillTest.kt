@@ -30,7 +30,9 @@ import kotlin.test.assertTrue
 class ImapClientBackfillTest {
 
     private lateinit var greenMail: GreenMail
-    private val client = ImapClient()
+
+    // Reuse off: this suite pins the connect-per-operation paging behaviour it was written against.
+    private val client = ImapClient(reuseConnections = false)
 
     @Before
     fun setUp() {

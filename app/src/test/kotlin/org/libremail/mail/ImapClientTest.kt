@@ -42,7 +42,10 @@ import kotlin.test.assertTrue
 class ImapClientTest {
 
     private lateinit var greenMail: GreenMail
-    private val client = ImapClient()
+
+    // Reuse off: this suite pins the connect-per-operation IMAP behaviour it was written against. The
+    // connection-reuse path (production default) has its own coverage in ImapFolderOpenLatencyTest.
+    private val client = ImapClient(reuseConnections = false)
 
     @Before
     fun setUp() {

@@ -112,6 +112,10 @@ class IdleService : Service() {
             }
             reconcileWatchers()
         }
+        // The reuse cache (issue #357 Part 2) keeps interactive/sync IMAP connections warm; sweep
+        // them so a socket that has gone idle past the reuse timeout is closed rather than left
+        // draining battery. Independent of push mode — it runs while the service lives.
+        scope.launch { evictIdleReuseConnectionsLoop() }
     }
 
     /**
@@ -132,6 +136,20 @@ class IdleService : Service() {
             markCapReached()
         }
         degradeToPeriodicSync()
+    }
+
+    /**
+     * Periodically evicts IMAP connections the reuse cache kept warm once they go idle past the reuse
+     * idle timeout (issue #357 Part 2). A no-op when reuse is disabled or nothing is idle;
+     * [ImapClient.evictIdleReusedConnections] skips any connection currently in use, so a sweep never
+     * disturbs an in-flight sync or interactive fetch.
+     */
+    private suspend fun evictIdleReuseConnectionsLoop() {
+        while (scope.isActive) {
+            delay(REUSE_EVICTION_SWEEP_MS)
+            runCatching { imapClient.evictIdleReusedConnections() }
+                .onFailure { AppLog.w(TAG, "reuse idle-eviction sweep failed", it) }
+        }
     }
 
     /**
@@ -185,6 +203,10 @@ class IdleService : Service() {
             // here is effectively a no-op — done anyway so the fallback provably exists whenever push is
             // paused, without disturbing the running period.
             syncScheduler.schedulePeriodicSync()
+            // Mirror the IDLE teardown for the reuse cache (issue #357 Part 2): drop any warm
+            // interactive/sync connections so we hold no kept-alive IMAP sockets while conserving
+            // battery. They re-establish on the next sync/interactive op once battery recovers.
+            scope.launch { imapClient.closeReusedConnections() }
         } else {
             AppLog.i(TAG, "Battery recovered: resuming IMAP IDLE push")
         }
@@ -309,6 +331,10 @@ class IdleService : Service() {
         const val TAG = "IdleService"
         const val INITIAL_BACKOFF_MS = 5_000L
         const val MAX_BACKOFF_MS = 5 * 60_000L
+
+        // Cadence of the reuse-cache idle-eviction sweep (issue #357 Part 2). Tighter than the reuse
+        // idle timeout so an idle socket is closed shortly after it crosses it.
+        const val REUSE_EVICTION_SWEEP_MS = 2 * 60_000L
 
         // Re-establish IDLE on this cadence — under RFC 2177's 29-minute ceiling and short enough
         // to beat typical NAT/firewall idle-socket timeouts.
