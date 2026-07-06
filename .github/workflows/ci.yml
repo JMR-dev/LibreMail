@@ -314,8 +314,20 @@ jobs:
     name: E2E (API 37 preview)
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    # SPIKE / PoC (docs/perf/api37-e2e-sharding-spike.md) — DRAFT, DO NOT MERGE AS-IS.
+    # Shards the instrumented suite across N parallel API 37 emulators (each a separate matrix leg
+    # that hand-provisions its OWN emulator and runs one shard via AndroidJUnitRunner numShards/
+    # shardIndex). Projected: ~17.1 min -> ~12.7 min (N=2), cutting the pipeline's critical path
+    # ~28%. `ci-passed` still lists `e2e-preview` once; GHA rolls all shard legs under it (a matrix
+    # job's result is `failure` if any shard fails), so no branch-protection change is needed.
+    # Keep API37_NUM_SHARDS in lockstep with the length of matrix.shard.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1] # 0-based shardIndex values; length must equal API37_NUM_SHARDS below
     env:
       API37_IMAGE: "system-images;android-37.0;google_apis_ps16k;x86_64"
+      API37_NUM_SHARDS: "2"
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -432,7 +444,13 @@ jobs:
           [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
 
           adb shell input keyevent 82 || true
-          ./gradlew connectedDebugAndroidTest --stacktrace
+          # SPIKE: run only this matrix leg's shard. AndroidJUnitRunner hashes each test name into
+          # one of numShards buckets and runs only shardIndex's bucket. The args flow through AGP's
+          # -Pandroid.testInstrumentationRunnerArguments.* channel (same one local_instrumented.py
+          # uses for .class=…) — no GMD, no orchestrator, no Gradle-side change.
+          ./gradlew connectedDebugAndroidTest --stacktrace \
+            "-Pandroid.testInstrumentationRunnerArguments.numShards=${API37_NUM_SHARDS}" \
+            "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}"
 
       - name: Dump emulator log on failure
         if: failure()
@@ -446,7 +464,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-api37-boot-diagnostics
+          # SPIKE: shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
+          name: e2e-api37-boot-diagnostics-shard${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/emulator.log
             ${{ runner.temp }}/logcat.txt
@@ -461,7 +480,8 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-test-report-api37-preview
+          # SPIKE: shard-unique name — upload-artifact@v7 errors on duplicate artifact names.
+          name: e2e-test-report-api37-preview-shard${{ matrix.shard }}
           path: app/build/reports/androidTests/connected/
           if-no-files-found: warn
 
