@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ============================================================================
+#  PROPOSED — NOT ACTIVE.  This is docs/ci/mergify.yml.proposed, a review
+#  artifact for issue #407.  It is deliberately NOT committed as a live
+#  `.mergify.yml` at the repo root, so Mergify does NOTHING until a maintainer
+#  (a) installs the Mergify GitHub App and (b) moves/renames this file to
+#  `.mergify.yml`.  Read docs/ci/mergify-integration-spec.md first — especially
+#  the require-up-to-date trilemma — before adopting.
+# ============================================================================
+#
+# Schema: https://docs.mergify.com/configuration/file-format/  (validated against
+# https://docs.mergify.com/mergify-configuration-schema.json on push once live).
+
+# ---------------------------------------------------------------------------
+# queue_rules — how a queued PR is validated and merged.
+# ---------------------------------------------------------------------------
+queue_rules:
+  - name: default
+    # ---- Final merge gate --------------------------------------------------
+    # Merge only when the SINGLE aggregating required context is green — the exact
+    # same check branch protection already requires — plus review + not-draft.
+    # "CI passed" is the name: field of the `ci-passed` job in .github/workflows/ci.yml.
+    merge_conditions:
+      - check-success = CI passed
+      - "#approved-reviews-by >= 1"
+      - -draft
+      - label != broken
+    # ---- Speculative validation on top of the latest main ------------------
+    # Mergify builds a temporary batch branch = (latest main + the next PRs) and runs
+    # CI on THAT, so what merges was tested against an up-to-date base. This is the
+    # up-to-date GUARANTEE, enforced by the queue instead of by a stale-branch re-push.
+    #
+    # PHASE 1 (safe, keeps GitHub "require branches up to date" literally ON):
+    #   set batch_size: 1 and merge_method: merge below, and comment out the Phase-2
+    #   block. Serial queue = automates the manual bumping, NO batching throughput win.
+    #
+    # PHASE 2 (the throughput win — REQUIRES the maintainer decision in the spec,
+    #   §"The require-up-to-date trilemma"): batch N PRs into ONE CI run. Batching is
+    #   incompatible with GitHub's literal "require branches up to date" checkbox
+    #   (Mergify docs), so that checkbox must be turned OFF and its guarantee moved
+    #   into this queue — OR use queue_branch_merge_method: fast-forward to keep the
+    #   checkbox at the cost of linear history (breaks the merge-commit policy).
+    batch_size: # dynamic: stays at min when runners are free, grows toward max on a backlog
+      min: 1
+      max: 5 # cap for the test-only batches (e.g. the #373 Robolectric epic: ~6 PRs -> ~1 run)
+    batch_max_wait_time: 5 min # how long to accumulate a partial batch before validating it
+    # One MERGE COMMIT per batch via the GitHub merge API — preserves the repo's
+    # merge-commit policy (never squash/rebase) at the batch granularity.
+    merge_method: merge-batch
+    # Slow + wedge-prone E2E matrix: bound the wait so a wedged emulator leg times the
+    # batch out (then Mergify bisects/splits it) instead of blocking the queue forever.
+    checks_timeout: 45 min
+    # How many speculative batches validate in parallel. This is the Mergify equivalent
+    # of the traffic-controller's MAX_INFLIGHT_RUNS (was 2). Each parallel check fans out
+    # to the full E2E matrix, so keep it modest against the runner budget.
+    # (Set under `merge_queue:` — see below — in current schema; kept here for context.)
+
+# max_parallel_checks lives under the top-level merge_queue options.
+merge_queue:
+  max_parallel_checks: 2 # == old MAX_INFLIGHT_RUNS; raise for throughput vs runner cost
+
+# ---------------------------------------------------------------------------
+# priority_rules — map the repo's P0–P9 labels onto queue priority.
+# Higher number merges first (Mergify: low=1000, medium=2000, high=3000; range 1–10000).
+# Unlabelled PRs get Mergify's default `medium` (2000) — equivalent to the old P5 default
+# in traffic_control.py. P0 is emergency-only and outranks everything.
+# ---------------------------------------------------------------------------
+priority_rules:
+  - name: p0-emergency
+    conditions: [label = P0]
+    priority: 10000
+  - name: p1
+    conditions: [label = P1]
+    priority: 9000
+  - name: p2
+    conditions: [label = P2]
+    priority: 8000
+  - name: p3
+    conditions: [label = P3]
+    priority: 7000
+  - name: p4
+    conditions: [label = P4]
+    priority: 6000
+  - name: p5
+    conditions: [label = P5]
+    priority: 5000
+  - name: p6
+    conditions: [label = P6]
+    priority: 4000
+  - name: p7
+    conditions: [label = P7]
+    priority: 3000
+  - name: p8
+    conditions: [label = P8]
+    priority: 2000
+  - name: p9
+    conditions: [label = P9]
+    priority: 1000
+
+# ---------------------------------------------------------------------------
+# pull_request_rules — WHICH PRs enter the queue (the `queue` action).
+# A maintainer opts a PR in by getting it green + approved (or by comment
+# `@mergifyio queue`). `broken`/`draft` PRs are never queued.
+# ---------------------------------------------------------------------------
+pull_request_rules:
+  - name: Queue green, approved, non-draft PRs targeting main
+    conditions:
+      - base = main
+      - -draft
+      - label != broken
+      - "#approved-reviews-by >= 1"
+      - check-success = CI passed
+    actions:
+      queue:
+        name: default
