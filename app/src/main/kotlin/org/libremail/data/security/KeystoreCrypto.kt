@@ -18,7 +18,7 @@ import javax.inject.Singleton
 @Singleton
 class KeystoreCrypto @Inject constructor() : AesGcmKeystoreCipher(alias = KEY_ALIAS, generateKeyOnDecrypt = true) {
 
-    override fun keySpec(): KeyGenParameterSpec = keySpecBuilder().build()
+    override fun keySpec(strongBox: Boolean): KeyGenParameterSpec = keySpecBuilder(strongBox).build()
 
     private companion object {
         const val KEY_ALIAS = "libremail.master.key"

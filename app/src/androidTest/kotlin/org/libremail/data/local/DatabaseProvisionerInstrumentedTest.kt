@@ -142,6 +142,34 @@ class DatabaseProvisionerInstrumentedTest {
         }
     }
 
+    /**
+     * Issue #359: with `encryptCache` on and NO cache yet (a fresh install enabling encryption), the
+     * provisioner must load SQLCipher's native library, report [CacheOpenMode.Encrypted], and a real keyed
+     * open must then create and read the encrypted cache — i.e. `libsqlcipher.so` actually loads and runs.
+     *
+     * On a 16 KB memory-page device/image (Android 15+, and the CI API-37 preview `google_apis_ps16k`
+     * E2E image) an `.so` not aligned for 16 KB pages fails exactly here with `UnsatisfiedLinkError` at
+     * `SQLiteConnection.nativeOpen`. Running this on that image makes the 16 KB native-lib load a tested
+     * invariant, so a dependency bump that regressed alignment is caught in CI rather than on-device.
+     */
+    @Test
+    fun freshEncryptOnStartLoadsThe16KbNativeLibAndOpensKeyedWithoutCrashing() = runBlocking<Unit> {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = false))
+        assertFalse("precondition: no cache file exists yet", dbFile.exists())
+
+        val mode = provisioner().prepareCache()
+
+        assertEquals(CacheOpenMode.Encrypted(passphrase), mode)
+        // The keyed open must actually succeed on real SQLCipher — loading and using libsqlcipher.so on
+        // whatever ABI / page size this device or emulator image uses.
+        openEncrypted().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            close()
+        }
+        assertTrue("the fresh cache was created in SQLCipher (encrypted) form", DatabaseEncryption.isEncrypted(dbFile))
+    }
+
     @Test
     fun encryptionTurnedOffDecryptsAnEncryptedCacheToPlaintext() = runBlocking<Unit> {
         every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = false, appLock = false))

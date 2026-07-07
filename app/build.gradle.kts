@@ -324,6 +324,15 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/SettingsComponents*",
     "**/SignatureEditScreen*",
     "**/SignaturesScreen*",
+    // CacheEncryptionGate.kt (issue #359/#367 fail-closed encryption gate) is pure render: the gate
+    // composable, its blank cover, the error screen, and the ephemeral report-review screen — no plain
+    // top-level logic. Spelled out to "...GateKt*" (the file's compiled facade class), NOT the bare
+    // "**/CacheEncryptionGate*" this list otherwise uses, because unlike every Screen/ViewModel pair
+    // above, CacheEncryptionGateViewModel's name literally starts with "CacheEncryptionGate" — a bare
+    // wildcard would also swallow the (94%-covered, dedicated-tested) ViewModel and its sealed
+    // CacheEncryptionGateState. CacheEncryptionGateViewModel and CacheEncryptionUnavailableException
+    // stay in scope (both have JVM tests: CacheEncryptionGateViewModelTest, DatabaseProvisionerTest).
+    "**/CacheEncryptionGateKt*",
     // --- Android framework entry points (OS-instantiated). NB: Workers are intentionally NOT here
     // --- (they are unit-tested — see the KEPT IN SCOPE note above).
     "**/*Activity*",

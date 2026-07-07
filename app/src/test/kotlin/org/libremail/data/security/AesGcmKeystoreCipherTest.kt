@@ -2,6 +2,11 @@
 package org.libremail.data.security
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.StrongBoxUnavailableException
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import org.junit.Test
 import java.security.GeneralSecurityException
 import javax.crypto.AEADBadTagException
@@ -71,6 +76,27 @@ class AesGcmKeystoreCipherTest {
     }
 
     @Test
+    fun `key generation falls back to a TEE-backed key when StrongBox is unavailable`() {
+        // AppLog.i (breadcrumb on the fallback) forwards to android.util.Log, a no-op stub under plain JVM
+        // tests; mock it (fully-qualified — a raw android.util.Log import is detekt-forbidden, epic #324).
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.i(any<String>(), any<String>()) } returns 0
+        try {
+            val teeKey = newAesKey()
+            val cipher = StrongBoxFakeCipher(teeKey)
+
+            val key = cipher.createKey()
+
+            // StrongBox is attempted first; its StrongBoxUnavailableException triggers a single retry with
+            // strongBox = false, and that TEE-backed key is returned — so generation succeeds everywhere.
+            assertSame(teeKey, key)
+            assertEquals(listOf(true, false), cipher.attempts)
+        } finally {
+            unmockkStatic(android.util.Log::class)
+        }
+    }
+
+    @Test
     fun `a non-AEAD failure propagates unwrapped so key invalidation still surfaces`() {
         // Only AEADBadTagException is remapped; every other cipher failure — including the
         // KeyPermanentlyInvalidatedException a real init throws on an invalidated key — must propagate
@@ -110,7 +136,36 @@ class AesGcmKeystoreCipherTest {
             return onDecrypt(key, encoded)
         }
 
-        override fun keySpec(): KeyGenParameterSpec = error("keySpec is not exercised in the JVM base test")
+        override fun keySpec(strongBox: Boolean): KeyGenParameterSpec =
+            error("keySpec is not exercised in the JVM base test")
+    }
+
+    /**
+     * A JVM-only cipher that exercises the REAL [getOrCreateKey]/StrongBox-fallback control flow (unlike
+     * [FakeCipher], which stubs [getOrCreateKey] out). [existingKey] returns null so a key is generated,
+     * and the [generateKey] seam simulates the device: a StrongBox attempt fails, the TEE attempt yields
+     * [teeKey]. [attempts] records the `strongBox` value of each generation attempt in order.
+     */
+    private class StrongBoxFakeCipher(private val teeKey: SecretKey) :
+        AesGcmKeystoreCipher(alias = "test.alias", generateKeyOnDecrypt = true) {
+
+        val attempts = mutableListOf<Boolean>()
+
+        override fun existingKey(): SecretKey? = null
+
+        override fun generateKey(strongBox: Boolean): SecretKey {
+            attempts += strongBox
+            // Objenesis-instantiated (no stubbed-constructor call) so it is throwable under the android.jar
+            // stub; it is still a StrongBoxUnavailableException, so the production catch clause matches.
+            if (strongBox) throw mockk<StrongBoxUnavailableException>(relaxed = true)
+            return teeKey
+        }
+
+        override fun keySpec(strongBox: Boolean): KeyGenParameterSpec =
+            error("keySpec is bypassed because generateKey is overridden")
+
+        /** Invokes the protected [getOrCreateKey] so the StrongBox fallback runs without touching Base64. */
+        fun createKey(): SecretKey = getOrCreateKey()
     }
 
     private companion object {
