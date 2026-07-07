@@ -313,9 +313,8 @@ val jacocoGeneratedExcludes = listOf(
 val jacocoNonJvmTestableSurface = listOf(
     // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
     "**/LibreMailApp*",
-    "**/AccountPickerScreen*",
-    "**/AppPasswordSetupScreen*",
-    "**/ManualSetupScreen*",
+    // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
+    // Compose tests (#378) — now JVM-covered.
     "**/ComposeScreen*",
     // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
     // Robolectric JVM Compose tests (#376) — now JVM-covered.
