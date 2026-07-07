@@ -397,6 +397,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.e2e_needed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -726,6 +727,9 @@ jobs:
           EMU_LOG="${RUNNER_TEMP:-/tmp}/emulator.log"
           LOGCAT_LOG="${RUNNER_TEMP:-/tmp}/logcat.txt"
           DIAG_LOG="${RUNNER_TEMP:-/tmp}/boot-diagnostics.txt"
+          # Wedge (hang) smoking-gun capture (#404) — see capture_wedge / run_shard below.
+          WEDGE_LOG="${RUNNER_TEMP:-/tmp}/wedge-diagnostics-api37-shard${{ matrix.shard }}.txt"
+          WEDGE_TIMEOUT=1200
           GPU_MODE="swiftshader_indirect"
 
           # On a boot timeout, capture the full system state (accel/KVM/GPU/mem/disk/AVD config +
@@ -792,22 +796,84 @@ jobs:
           [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
 
           adb shell input keyevent 82 || true
+
+          # WEDGE (hang) smoking-gun capture (#404). On the wrapper `timeout` below (exit 124), grab
+          # the smoking gun WHILE this hand-provisioned emulator is still alive (it stays up until the
+          # "Shut down emulator" step): which test was running, SIGQUIT (kill -3) thread dumps of the
+          # app + instrumentation processes (ART -> logcat + /data/anr), activity/window state, and —
+          # the boot-race crux — whether the binder services are published. Every probe guarded so a
+          # missing tool / dead device can't abort it; appended so both attempts survive. `|| true`
+          # keeps it from tripping this step's `set -e`.
+          capture_wedge() {
+            {
+              echo "==================================================================="
+              echo "===== E2E WEDGE — API 37 preview shard ${{ matrix.shard }} — $1 ====="
+              echo "===== $(date -u +%FT%TZ) — after ${WEDGE_TIMEOUT}s wrapper timeout ====="
+              echo "==================================================================="
+              echo "--- snapshot: N/A — preview cold-boots (-no-snapshot); no AVD snapshot cache ---"
+              echo "--- running/last instrumented test (logcat TestRunner) ---"
+              grep -a TestRunner "$LOGCAT_LOG" 2>/dev/null | tail -25 || true
+              echo "--- getprop sys.boot_completed ---"
+              adb shell getprop sys.boot_completed 2>&1 || true
+              echo "--- getprop init.svc.* (per-service init state) ---"
+              adb shell getprop 2>&1 | grep -a init.svc || true
+              echo "--- service list (are binder services published?) ---"
+              adb shell service list 2>&1 || true
+              for svc in input window activity; do
+                echo "--- service check $svc ---"
+                adb shell service check "$svc" 2>&1 || true
+              done
+              echo "--- pids ---"
+              APP_PID="$(adb shell pidof org.libremail.app 2>/dev/null | tr -d '\r')" || true
+              TEST_PID="$(adb shell pidof org.libremail.app.test 2>/dev/null | tr -d '\r')" || true
+              echo "app  pid: ${APP_PID:-<none>}"
+              echo "test pid: ${TEST_PID:-<none>}"
+              echo "--- SIGQUIT (kill -3) thread dumps -> ART writes to logcat + /data/anr ---"
+              for pid in $APP_PID $TEST_PID; do
+                [ -n "$pid" ] && adb shell kill -3 "$pid" 2>&1 || true
+              done
+              sleep 5
+              echo "--- /data/anr/* (SIGQUIT + ANR traces) ---"
+              adb shell 'cat /data/anr/* 2>/dev/null' 2>&1 || true
+              echo "--- dumpsys activity ---"
+              adb shell dumpsys activity 2>&1 || true
+              echo "--- dumpsys window ---"
+              adb shell dumpsys window 2>&1 || true
+              echo "--- logcat -d (tail 400 — includes the SIGQUIT thread dump) ---"
+              adb logcat -d 2>&1 | tail -400 || true
+              echo "--- emulator accel / kvm / mem / disk ---"
+              "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check 2>&1 || true
+              ls -l /dev/kvm 2>&1 || true
+              free -h 2>&1 || true
+              df -h 2>&1 || true
+            } >> "$WEDGE_LOG" 2>&1 || true
+            echo "::warning::E2E API 37 preview shard ${{ matrix.shard }} WEDGED ($1) — see the wedge-diagnostics-api37-preview-shard${{ matrix.shard }} artifact"
+          }
+
           # Run only this matrix leg's shard. AndroidJUnitRunner hashes each test name into one of
           # numShards buckets and runs only shardIndex's bucket. The args flow through AGP's
           # -Pandroid.testInstrumentationRunnerArguments.* channel (the same one local_instrumented.py
-          # uses for .class=…) — no GMD, no orchestrator, no Gradle-side change.
+          # uses for .class=…) — no GMD, no orchestrator, no Gradle-side change. The gradle run is
+          # wrapped in the #404 wrapper `timeout`: a wedge trips it (exit 124) -> capture_wedge runs,
+          # then the shard returns 124 so the retry / gate still see a failure. `|| status=$?` makes
+          # the exit code survive this step's `set -e`; -k 30s SIGKILLs a gradle client that ignores
+          # SIGTERM.
           run_shard() {
-            ./gradlew connectedDebugAndroidTest --stacktrace \
+            local status=0
+            timeout -k 30s "$WEDGE_TIMEOUT" ./gradlew connectedDebugAndroidTest --stacktrace \
               "-Pandroid.testInstrumentationRunnerArguments.numShards=${API37_NUM_SHARDS}" \
-              "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}"
+              "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${{ matrix.shard }}" || status=$?
+            if [ "$status" -eq 124 ]; then capture_wedge "$1"; fi
+            return "$status"
           }
           # Retry this shard's test run ONCE on failure — retry parity with the stable `e2e` matrix
           # (which retries once, so a flaky test self-heals on API 29–36 but would otherwise wedge
           # the required gate on API 37, e.g. #370). Per-shard, so the retry re-runs only this shard's
           # ~T/N tests, not the whole suite. MITIGATION, NOT A FIX: a blanket retry also masks genuine
           # regressions, so the retried-but-passed case is flagged as a ::warning:: and the real fix
-          # stays test-level. See docs/perf/api37-e2e-sharding-spike.md.
-          run_shard || { echo "::warning::API 37 shard ${{ matrix.shard }} test run failed — retrying once"; run_shard; }
+          # stays test-level. See docs/perf/api37-e2e-sharding-spike.md. A wedge on EITHER attempt is
+          # captured (capture_wedge runs inside run_shard on exit 124).
+          run_shard "attempt 1" || { echo "::warning::API 37 shard ${{ matrix.shard }} test run failed — retrying once"; run_shard "attempt 2 (retry)"; }
 
       - name: Dump emulator log on failure
         if: failure()
@@ -828,6 +894,17 @@ jobs:
             ${{ runner.temp }}/logcat.txt
             ${{ runner.temp }}/boot-diagnostics.txt
           if-no-files-found: warn
+
+      # Wedge-specific smoking gun (#404): only present when the wrapper `timeout` tripped (a hang)
+      # on either shard attempt — separate from the boot-diagnostics artifact above. `if-no-files-
+      # found: ignore` keeps healthy runs quiet (no wedge => no file). Shard-unique name.
+      - name: Upload wedge diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wedge-diagnostics-api37-preview-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/wedge-diagnostics-api37-shard${{ matrix.shard }}.txt
+          if-no-files-found: ignore
 
       - name: Shut down emulator
         if: always()
