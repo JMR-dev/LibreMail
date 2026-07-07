@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.util.Properties
@@ -212,6 +213,20 @@ jacoco {
     toolVersion = libs.versions.jacoco.get()
 }
 
+// The Robolectric-backed JVM Compose UI tests (#373) load the classes-under-test through
+// Robolectric's sandbox classloader, which presents them to the JaCoCo agent WITHOUT a code-source
+// location. JaCoCo skips no-location classes by default, so on-the-fly coverage for every composable
+// exercised only by a Robolectric test would silently record as zero — the file would be removed
+// from `jacocoNonJvmTestableSurface` yet contribute nothing but missed lines, dragging the bundle
+// ratio DOWN instead of up. `isIncludeNoLocationClasses = true` makes the agent keep that coverage;
+// `jdk.internal.*` is excluded because instrumenting those JDK classes breaks under JDK 17+.
+tasks.withType<Test>().configureEach {
+    configure<JacocoTaskExtension> {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
 // Unit-test coverage (issue #192). Two tasks share ONE scoping so they can never measure different
 // surfaces: `jacocoTestReport` (XML+HTML under build/reports/jacoco/jacocoTestReport/) and
 // `jacocoTestCoverageVerification` (the no-regression gate, further down). Both read the exec data
@@ -302,10 +317,8 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/AppPasswordSetupScreen*",
     "**/ManualSetupScreen*",
     "**/ComposeScreen*",
-    "**/ColorSwatch*",
-    "**/FontPicker*",
-    "**/FontSizePicker*",
-    "**/ParagraphAlignmentControl*",
+    // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
+    // Robolectric JVM Compose tests (#376) — now JVM-covered.
     "**/DraftsScreen*",
     "**/LockScreen*",
     "**/AppLockGateHost*",
