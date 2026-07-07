@@ -38,6 +38,7 @@ Scenarios (each independently selectable):
 | `back-nav`       | Time reader→mailbox back transitions ×N (dump-latency-bound; see caveat in the report). |
 | `prefetch-ab`    | Run `message-open` under **Fetch all on Wi-Fi** (prefetch ON) vs **Always on-demand** (prefetch OFF), cache cleared between conditions. |
 | `cross-provider` | Open N messages from the (unified) inbox and tabulate per provider (`imap:…` vs `outlook:…`) from the breadcrumb account refs. |
+| `cold-fetch-ab`  | Pause-hook cold-vs-warm A/B (**debug build only**). Pre-arm the FETCH_GATE halt, detect sign-in, confirm the halt, let headers sync, measure genuine **cold** opens, `resume`, then measure **warm** (cached) re-opens — reports the delta, the `connect=0ms` reuse proof, and any throttle signature. |
 
 Common options:
 
@@ -72,6 +73,34 @@ only as a "content is ready" signal so the driver knows when to move on:
 - `MailBackfiller: backfill … pages=<n> complete=<bool>` / `backfill slice…` — backfill activity.
 
 `cold-open` instead parses `am start -W`'s `TotalTime` / `WaitTime`.
+
+## Cold-fetch A/B (pause hook) — `cold-fetch-ab`
+
+Folds in the proven 2026-07-06 cold-vs-warm methodology (issue #405) as a first-class,
+reproducible scenario so the connection-reuse / throttle A/B can be re-run on demand to catch
+perf regressions. The flow:
+
+1. **Pre-arm the halt** — broadcast `FETCH_GATE pause backfill,prefetch` *before* sign-in, so
+   proactive body fetch is gated the instant sync starts (bodies stay uncached). The receiver
+   echoes its state back as ordered-broadcast result data (`data="paused=[backfill,prefetch]"`),
+   which the harness parses for a race-free read-back.
+2. **Detect sign-in** — tail the log for `MailSyncer: sync all: N accounts` (sign-in is manual;
+   OAuth can’t be automated, so add the account on the device when prompted).
+3. **Confirm the halt** — wait for `prefetch skipped: fetch-gate paused` (proof the gate held).
+4. **Wait for header sync** — until uncached message rows appear.
+5. **Measure cold opens** — genuine uncached opens (`ImapPerf` connect/work + `MailReader
+   openMessage fetchedBody=true`).
+6. **Resume + measure warm opens** — `FETCH_GATE resume`, then re-open the same messages (now
+   cached) for the A/B.
+
+It reports the cold-vs-warm median delta, the **`connect=0ms`** connection-reuse proof, and any
+**server-side throttle signature** (a very high cold IMAP `work`). The gate is **always cleared
+on exit** (even on error) — the scenario never leaves a device with fetch paused.
+
+> **Needs a debug build.** The `FETCH_GATE` pause hook (`FetchGateReceiver` / `DebugFetchGate`,
+> issues #393/#395) is compiled **only** into `src/debug` and R8-stripped from release, so this
+> scenario requires the **debug** APK. A full on-device run is a follow-up; the mocked unit
+> tests + `--dry-run` are the automated validation.
 
 ## Output
 
@@ -131,11 +160,18 @@ plus the lockscreen and deskclock-alarm negatives the keyguard/foreground guards
 - The safety guardrails accept the known-good commands and refuse every forbidden one.
 - Screen recognition (mailbox rows + cached flag, reader, lockscreen, foreign app).
 - The report renders the same tables/aggregates as the manual write-up.
-- `--dry-run` emits the correct command plan for all five scenarios.
+- **Pause-hook helpers** (`fetchgate.py`): the `FETCH_GATE` pause/resume/query broadcast is the
+  one the safety wrapper accepts, and the ordered-broadcast read-back (`paused=[…]`) parses.
+- **Cold-fetch A/B** flow: sign-in / halt-confirm detection, cold/warm open correlation, the
+  `connect=0ms` reuse proof + throttle signature, and the **always-resume** restore on error.
+- `--dry-run` emits the correct command plan for all six scenarios.
 
 **Needs the first monitored live run** (a device makes the state real):
 
 - End-to-end timing capture on hardware (streamed logcat → per-sample breadcrumb tailing).
+- **On-device `cold-fetch-ab` run** (needs a **debug** APK for the `FETCH_GATE` hook): pre-arm →
+  manual sign-in → cold/warm A/B. The pause/resume broadcasts, read-back parsing, and flow are
+  validated offline; the live run confirms the timings on real hardware.
 - **Settings-screen navigation for `prefetch-ab`.** No uiautomator dump of the settings
   screen was captured in the manual run, so `set_fetch_policy` navigates by the on-screen
   option text (`"Fetch all on Wi-Fi"`, `"Always on-demand"`, from `res/values/strings.xml`)
@@ -155,5 +191,12 @@ plus the lockscreen and deskclock-alarm negatives the keyguard/foreground guards
 - **Back-nav** timings are dominated by the ~2.5–3 s uiautomator-dump latency floor; the
   report labels them accordingly (true in-app back is sub-second and not resolvable via adb
   UI polling under load).
+- **Portability (subsumes #392).** The UI dump is **file-based** (`uiautomator dump
+  /sdcard/window_dump.xml` + `cat`), not `dump /dev/tty`, which interleaves a status banner
+  with the XML and is unreliable across devices/hosts. All adb output is decoded as **UTF-8**
+  (and the harness forces `PYTHONUTF8`/UTF-8 console I/O) so non-ASCII sender/subject text
+  doesn’t mojibake or crash on a Windows cp1252 console. Reader-open readiness is taken from
+  the `MailReader openMessage` **breadcrumb** (authoritative) rather than UI polling alone, and
+  row selection **skips non-message rows** (a tappable container with no sender/subject label).
 - Dev-script convention: Python 3, standard library only, cross-platform (Windows-primary),
   matching `.claude/skills/preflight/*.py`.

@@ -103,6 +103,46 @@ def is_perf_line(line: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Control-signal line matchers (not perf metrics -- flow signals for the harness)
+# --------------------------------------------------------------------------- #
+# These are *not* perf breadcrumbs (they carry no timing), so they are deliberately kept out
+# of PERF_TAGS / the Event dispatch. The cold-fetch scenario tails the live log for them to
+# know when sign-in/sync has started and whether the pre-armed fetch-gate halt took effect.
+_SYNC_ALL_RE = re.compile(r"^sync all:\s+(?P<n>\d+)\s+accounts?$")
+
+# Verbatim from MailSyncer.kt / MailBackfiller.kt when a paused FETCH_GATE skips prefetch.
+FETCH_GATE_SKIP_MESSAGE = "prefetch skipped: fetch-gate paused"
+
+
+def match_sync_all(line: str) -> Optional[int]:
+    """If ``line`` is the ``MailSyncer: sync all: N accounts`` breadcrumb, return N.
+
+    N is the account count logged at the start of a sync pass -- the harness's sign-in /
+    sync-start signal (a fresh sign-in triggers the first ``syncAll``). Returns ``None`` for
+    any other line.
+    """
+    log = parse_logcat_line(line)
+    if log is None or log.tag != "MailSyncer":
+        return None
+    m = _SYNC_ALL_RE.match(log.message)
+    return int(m.group("n")) if m else None
+
+
+def is_fetch_gate_skip(line: str) -> bool:
+    """True if ``line`` is the debug ``prefetch skipped: fetch-gate paused`` breadcrumb.
+
+    Emitted by ``MailSyncer``/``MailBackfiller`` when a pre-armed FETCH_GATE pause is honoured
+    -- the harness's proof the halt actually took effect (bodies will stay uncached).
+    """
+    log = parse_logcat_line(line)
+    return (
+        log is not None
+        and log.tag in ("MailSyncer", "MailBackfiller")
+        and log.message == FETCH_GATE_SKIP_MESSAGE
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Typed breadcrumb events
 # --------------------------------------------------------------------------- #
 class Breadcrumb:

@@ -19,6 +19,10 @@ from breadcrumbs import OpenSample
 # (see perf_summary.md: nav/back were dominated by the ~2.5-3 s dump latency).
 UIAUTOMATOR_LATENCY_FLOOR_MS = 3000
 
+# A cold IMAP ``work`` time at/above this reads as a server-side throttle signature (the manual
+# Gmail run saw 26-72 s of work vs Outlook's sub-second control).
+THROTTLE_WORK_MS = 10000
+
 
 # --------------------------------------------------------------------------- #
 # Stats + markdown helpers
@@ -235,6 +239,92 @@ def render_back_nav(samples: Sequence[BackNavSample]) -> str:
     )
     summary = "" if not agg.n else f"\n\nBack: n={agg.n}, mean {_ms(agg.mean)} ms, median {_ms(agg.median)} ms."
     return "## Reader -> mailbox (back)\n\n" + table + summary + caveat + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# Cold-fetch pause-hook A/B (issue #405)
+# --------------------------------------------------------------------------- #
+def _gate_data(state) -> str:
+    """The read-back payload of a fetchgate ``BroadcastResult`` (duck-typed), for display."""
+    if state is None:
+        return "(none)"
+    data = getattr(state, "data", None)
+    return data if data else "(no read-back)"
+
+
+def _uncached_took(rows: Sequence["ReaderOpenRow"]) -> List[int]:
+    return [r.took_ms for r in rows if not r.skipped and r.took_ms is not None]
+
+
+def render_gate_summary(results: dict) -> str:
+    """Render the FETCH_GATE control summary: pre-arm, sign-in, halt-confirm, restore."""
+    accounts = results.get("sign_in_accounts")
+    sign_in = f"yes ({accounts} account(s))" if accounts is not None else "no / not detected"
+    lines = [
+        "## Fetch-gate A/B control",
+        "",
+        f"- Pre-armed halt read-back: `{_gate_data(results.get('gate_prearm'))}`",
+        f"- Sign-in detected (sync all breadcrumb): {sign_in}",
+        "- Halt confirmed (prefetch-skipped breadcrumb): "
+        + ("yes" if results.get("gate_confirmed") else "no"),
+        "- Header sync ready: " + ("yes" if results.get("header_ready") else "no"),
+        f"- Gate restored/cleared read-back: `{_gate_data(results.get('gate_restored'))}`",
+        "",
+        "> The pause hook is **debug-build-only** (#393/#395): the scenario needs a debug APK.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_cold_warm_comparison(
+    cold: Sequence["ReaderOpenRow"], warm: Sequence["ReaderOpenRow"]
+) -> str:
+    """Render the cold-vs-warm delta, the connect=0ms reuse proof, and any throttle signature."""
+    cold_agg = aggregate(_uncached_took(cold))
+    warm_agg = aggregate(_uncached_took(warm))
+    lines = ["## Cold vs warm (A/B)", ""]
+    lines.append(
+        f"- Cold median openMessage: {_ms(cold_agg.median)} ms (n={cold_agg.n})"
+    )
+    lines.append(
+        f"- Warm median openMessage: {_ms(warm_agg.median)} ms (n={warm_agg.n})"
+    )
+    if cold_agg.median and warm_agg.median:
+        lines.append(
+            f"- Speedup (cold/warm median): {cold_agg.median / warm_agg.median:.1f}x"
+        )
+
+    # connect=0ms connection-reuse proof (from the cold opens' ImapPerf op).
+    connects = [r.connect_ms for r in cold if not r.skipped and r.connect_ms is not None]
+    if connects:
+        zero = [c for c in connects if c == 0]
+        proof = "reuse active" if zero else "no reuse observed"
+        lines.append(
+            f"- Connection reuse: connect=0ms on {len(zero)}/{len(connects)} "
+            f"cold opens ({proof})"
+        )
+
+    # Throttle signature -- a very high cold IMAP work time.
+    works = [r.work_ms for r in cold if not r.skipped and r.work_ms is not None]
+    if works:
+        peak = max(works)
+        note = " -- server-side throttle signature" if peak >= THROTTLE_WORK_MS else ""
+        lines.append(f"- Peak cold IMAP work: {peak} ms{note}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_cold_fetch_ab(results: dict) -> str:
+    """Assemble the whole cold-fetch A/B section: control summary, cold/warm tables, A/B delta."""
+    cold = results.get("cold", [])
+    warm = results.get("warm", [])
+    parts = [
+        render_gate_summary(results),
+        render_message_open("Cold opens (fetch-gate paused, uncached bodies)", cold),
+        render_message_open("Warm opens (gate resumed, cached re-open)", warm),
+        render_cold_warm_comparison(cold, warm),
+    ]
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #

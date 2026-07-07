@@ -33,6 +33,12 @@ from typing import List, Optional, Sequence
 DEFAULT_PACKAGE = "org.libremail.app"
 DEFAULT_COMPONENT = "org.libremail.app/org.libremail.MainActivity"
 
+# uiautomator's default public scratch file. The harness dumps the view hierarchy to this
+# file and ``cat``s it back (a file-based dump) rather than dumping to ``/dev/tty``: the tty
+# path interleaves the "dumped to" status banner with the XML and is unreliable across
+# devices/hosts (issue #392). It is public external storage -- never app-private data.
+UI_DUMP_DEVICE_PATH = "/sdcard/window_dump.xml"
+
 # adb subcommands the harness is ever allowed to invoke.
 _ALLOWED_SUBCOMMANDS = frozenset(
     {"devices", "get-state", "install", "shell", "logcat", "wait-for-device", "start-server"}
@@ -227,7 +233,8 @@ class Adb:
         completed = subprocess.run(
             argv,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout if timeout is not None else self.default_timeout,
         )
         result = AdbResult(list(args), completed.returncode, completed.stdout, completed.stderr)
@@ -257,6 +264,22 @@ class Adb:
         args += ["-n", component]
         return self.run(args)
 
+    def broadcast(
+        self, action: str, component: str, extras: Optional[dict] = None
+    ) -> AdbResult:
+        """Send an ``am broadcast`` to ``component`` (constrained to our package by the guard).
+
+        ``extras`` are sent as string extras (``--es <key> <value>``). Used for the debug
+        FETCH_GATE pause/resume/query hook (see :mod:`fetchgate`): ``am broadcast`` delivers
+        ordered, so the receiver echoes its result data back on stdout for a race-free
+        read-back. The ``-n`` component's package must equal our target package or the
+        :func:`assert_safe` guard refuses the command.
+        """
+        args = ["shell", "am", "broadcast", "-a", action, "-n", component]
+        for key, value in (extras or {}).items():
+            args += ["--es", str(key), str(value)]
+        return self.run(args)
+
     def clear_cache(self) -> AdbResult:
         """Clear ONLY the app's ``cache/`` via run-as. The sole sanctioned mutation."""
         return self.run(["shell", "run-as", self.package, "sh", "-c", "rm -rf cache/*"])
@@ -278,8 +301,15 @@ class Adb:
         return self.run(["shell", "input", "keyevent", str(keycode)])
 
     def uiautomator_dump(self) -> str:
-        """Return the current window's uiautomator XML (via ``dump /dev/tty``)."""
-        out = self.run(["shell", "uiautomator", "dump", "/dev/tty"], timeout=90).stdout
+        """Return the current window's uiautomator XML via a portable file-based dump.
+
+        Dumps to an on-device scratch file (``uiautomator dump <path>``) and ``cat``s it back
+        rather than dumping to ``/dev/tty``: the tty path interleaves the "dumped to" status
+        banner with the XML and is unreliable across devices/hosts (issue #392). The path is
+        uiautomator's own public default (:data:`UI_DUMP_DEVICE_PATH`), never app storage.
+        """
+        self.run(["shell", "uiautomator", "dump", UI_DUMP_DEVICE_PATH], timeout=90)
+        out = self.run(["shell", "cat", UI_DUMP_DEVICE_PATH], timeout=30).stdout
         return _extract_xml(out)
 
     # -- screen / keyguard --------------------------------------------------- #
@@ -360,7 +390,10 @@ def parse_am_start(output: str) -> dict:
 
 
 def _extract_xml(raw: str) -> str:
-    """Pull the ``<?xml ...</hierarchy>`` payload out of ``uiautomator dump /dev/tty`` output."""
+    """Pull the ``<?xml ...</hierarchy>`` payload out of a uiautomator dump's ``cat`` output.
+
+    Tolerant of a leading ``UI hierchary dumped to: <path>`` banner or other noise around the
+    XML payload (the file-based ``cat``; historically the ``/dev/tty`` output too)."""
     start = raw.find("<?xml")
     if start == -1:
         start = raw.find("<hierarchy")

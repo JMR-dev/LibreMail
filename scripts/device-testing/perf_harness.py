@@ -10,6 +10,7 @@ repeatable, cross-platform, standard-library-only tool. Run one scenario at a ti
     python scripts/device-testing/perf_harness.py back-nav        [opts]
     python scripts/device-testing/perf_harness.py prefetch-ab     [opts]
     python scripts/device-testing/perf_harness.py cross-provider  [opts]
+    python scripts/device-testing/perf_harness.py cold-fetch-ab   [opts]  # needs a debug build
 
 Common options: ``--serial`` (auto-detected if exactly one device), ``--count/-n``,
 ``--out``, ``--package``, ``--component``, ``--adb``, and ``--dry-run`` (print the exact
@@ -33,18 +34,45 @@ from typing import List, Optional
 # tests inject it explicitly. (The dir name contains a hyphen, so it is not an importable
 # package -- hence flat modules rather than `python -m`.)
 import breadcrumbs
+import fetchgate
 import report
 import scenarios
 from adb import Adb, DEFAULT_COMPONENT, DEFAULT_PACKAGE
 
-SCENARIOS = ("cold-open", "message-open", "back-nav", "prefetch-ab", "cross-provider")
+SCENARIOS = (
+    "cold-open",
+    "message-open",
+    "back-nav",
+    "prefetch-ab",
+    "cross-provider",
+    "cold-fetch-ab",
+)
 _DEFAULT_COUNTS = {
     "cold-open": 5,
     "message-open": 6,
     "back-nav": 6,
     "prefetch-ab": 3,
     "cross-provider": 8,
+    "cold-fetch-ab": 3,
 }
+
+
+def _configure_utf8_io() -> None:
+    """Force UTF-8 for this process and its console (issue #392).
+
+    Non-ASCII sender/subject text in a uiautomator dump -- and the harness's own output on a
+    Windows cp1252 console -- otherwise mojibake or raise ``UnicodeEncodeError``. adb output is
+    already decoded UTF-8 in :meth:`adb.Adb.run`; this covers the interpreter and console.
+    """
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - stream already detached
+                pass
 
 
 def _make_logger(log_path: Optional[str]):
@@ -125,6 +153,8 @@ def _render_sections(scenario: str, results, adb: Adb, count: int) -> List[str]:
         if not sections:
             sections.append("## Cross-provider\n\nNo opens captured.\n")
         return sections
+    if scenario == "cold-fetch-ab":
+        return [report.render_cold_fetch_ab(results)]
     return []
 
 
@@ -142,7 +172,7 @@ def _ab_comparison(results: dict) -> str:
     )
 
 
-def _run_scenario(scenario: str, adb: Adb, tailer, args, log):
+def _run_scenario(scenario: str, adb: Adb, tailer, gate, args, log):
     package, component, count = args.package, args.component, args.count
     if scenario == "cold-open":
         return scenarios.cold_open(adb, component, count, log)
@@ -154,6 +184,8 @@ def _run_scenario(scenario: str, adb: Adb, tailer, args, log):
         return scenarios.prefetch_ab(adb, package, component, tailer, count, log)
     if scenario == "cross-provider":
         return scenarios.cross_provider(adb, package, tailer, count, log)
+    if scenario == "cold-fetch-ab":
+        return scenarios.cold_fetch_ab(adb, package, component, tailer, gate, count, log)
     raise SystemExit(f"unknown scenario {scenario!r}")
 
 
@@ -183,6 +215,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    _configure_utf8_io()
     args = build_arg_parser().parse_args(argv)
     if args.count is None:
         args.count = _DEFAULT_COUNTS[args.scenario]
@@ -206,6 +239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         dry_run=args.dry_run,
         logger=log,
     )
+    gate = fetchgate.FetchGate(adb, log=log)
 
     logcat_proc = None
     raw_handle = None
@@ -220,7 +254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             scenarios.ensure_awake(adb, log)
             time.sleep(1.0)
 
-        results = _run_scenario(args.scenario, adb, tailer, args, log)
+        results = _run_scenario(args.scenario, adb, tailer, gate, args, log)
         sections = _render_sections(args.scenario, results, adb, args.count)
     finally:
         Adb.stop_logcat(logcat_proc)
