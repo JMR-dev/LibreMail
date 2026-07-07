@@ -312,6 +312,11 @@ val jacocoGeneratedExcludes = listOf(
 // every `*ViewModel*`.
 val jacocoNonJvmTestableSurface = listOf(
     // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
+    // LibreMailApp KEPT excluded (#384, the acceptable exception): the composable is a real NavHost whose
+    // non-onboarding start destinations call hiltViewModel(), and standing the graph up needs owners a
+    // plain JVM compose rule can't surface — so graph-level nav stays on the instrumented OnboardingFlowTest.
+    // Its JVM-tractable parts (LibreMailBottomBar, StartupCrashPrompt, the cold-start hold guards) ARE
+    // exercised by LibreMailAppJvmTest, but the file's compiled facade (LibreMailAppKt) stays excluded.
     "**/LibreMailApp*",
     // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
     // Compose tests (#378) — now JVM-covered.
@@ -322,7 +327,7 @@ val jacocoNonJvmTestableSurface = listOf(
     // DraftsScreen, OutboxScreen & ProblemReportsScreen converted to Robolectric JVM Compose tests
     // (#379) — now JVM-covered.
     // LockScreen converted to a Robolectric JVM Compose test (#377) — now JVM-covered.
-    "**/AppLockGateHost*",
+    // AppLockGateHost converted to a Robolectric JVM Compose test (#384) — now JVM-covered.
     // FolderDrawer & MailboxScreen (the Paging 3 mailbox list + folder drawer) converted to
     // Robolectric JVM Compose tests (#383) — now JVM-covered.
     // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
