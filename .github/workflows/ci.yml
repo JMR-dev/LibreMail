@@ -88,11 +88,57 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Restore Android SDK cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Cache the SHA-256-verified command-line tools + platform/build-tools so a
+          # green run doesn't re-download (and risk re-corrupting) them. Restore-only
+          # here + the success-gated save below == "integrity gates the cache": a
+          # corrupt/failed SDK is never saved (#389). Shared key (identical contents).
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          # Bump the prefix if ANDROID_PLATFORM/ANDROID_BUILD_TOOLS or the pinned
+          # cmdline-tools build (14742923) change.
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
+
+      # Provision the SHA-256-verified command-line tools into the exact path
+      # setup-android probes first, so the action reuses it and never does its own
+      # unverified "Wrong version in preinstalled sdkmanager" re-download (#389).
+      - name: Bootstrap verified Android command-line tools
+        run: python3 .github/scripts/setup_android_sdk.py bootstrap
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # Reuse the verified cmdline-tools bootstrapped above (matching version =>
+          # no unverified re-download) and pass '' packages so the action does NOT run
+          # the flaky `sdkmanager tools platform-tools` install — the corrupt-zip
+          # surface that failed the "Set up Android SDK" step (#389).
+          cmdline-tools-version: "14742923"
+          packages: ""
 
+      # verify -> reject -> retry: a corrupt package zip ("Error reading Zip
+      # content ...") is purged and re-downloaded instead of failing on sdkmanager's
+      # bare exit 1 (#389; supersedes the inline retry loop from #387/#388).
       - name: Install SDK platform and build-tools
-        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+        run: python3 .github/scripts/setup_android_sdk.py install "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      # Save the verified SDK only on success (never cache a corrupt SDK) and only on
+      # a miss (avoid redundant re-saves).
+      - name: Save Android SDK cache
+        if: success() && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -120,11 +166,57 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Restore Android SDK cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Cache the SHA-256-verified command-line tools + platform/build-tools so a
+          # green run doesn't re-download (and risk re-corrupting) them. Restore-only
+          # here + the success-gated save below == "integrity gates the cache": a
+          # corrupt/failed SDK is never saved (#389). Shared key (identical contents).
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          # Bump the prefix if ANDROID_PLATFORM/ANDROID_BUILD_TOOLS or the pinned
+          # cmdline-tools build (14742923) change.
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
+
+      # Provision the SHA-256-verified command-line tools into the exact path
+      # setup-android probes first, so the action reuses it and never does its own
+      # unverified "Wrong version in preinstalled sdkmanager" re-download (#389).
+      - name: Bootstrap verified Android command-line tools
+        run: python3 .github/scripts/setup_android_sdk.py bootstrap
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # Reuse the verified cmdline-tools bootstrapped above (matching version =>
+          # no unverified re-download) and pass '' packages so the action does NOT run
+          # the flaky `sdkmanager tools platform-tools` install — the corrupt-zip
+          # surface that failed the "Set up Android SDK" step (#389).
+          cmdline-tools-version: "14742923"
+          packages: ""
 
+      # verify -> reject -> retry: a corrupt package zip ("Error reading Zip
+      # content ...") is purged and re-downloaded instead of failing on sdkmanager's
+      # bare exit 1 (#389; supersedes the inline retry loop from #387/#388).
       - name: Install SDK platform and build-tools
-        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+        run: python3 .github/scripts/setup_android_sdk.py install "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      # Save the verified SDK only on success (never cache a corrupt SDK) and only on
+      # a miss (avoid redundant re-saves).
+      - name: Save Android SDK cache
+        if: success() && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -177,11 +269,57 @@ jobs:
           java-version: "21"
 
       # AGP configuration needs the SDK even for ktlint/detekt (they run on the :app module).
+      - name: Restore Android SDK cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Cache the SHA-256-verified command-line tools + platform/build-tools so a
+          # green run doesn't re-download (and risk re-corrupting) them. Restore-only
+          # here + the success-gated save below == "integrity gates the cache": a
+          # corrupt/failed SDK is never saved (#389). Shared key (identical contents).
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          # Bump the prefix if ANDROID_PLATFORM/ANDROID_BUILD_TOOLS or the pinned
+          # cmdline-tools build (14742923) change.
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
+
+      # Provision the SHA-256-verified command-line tools into the exact path
+      # setup-android probes first, so the action reuses it and never does its own
+      # unverified "Wrong version in preinstalled sdkmanager" re-download (#389).
+      - name: Bootstrap verified Android command-line tools
+        run: python3 .github/scripts/setup_android_sdk.py bootstrap
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # Reuse the verified cmdline-tools bootstrapped above (matching version =>
+          # no unverified re-download) and pass '' packages so the action does NOT run
+          # the flaky `sdkmanager tools platform-tools` install — the corrupt-zip
+          # surface that failed the "Set up Android SDK" step (#389).
+          cmdline-tools-version: "14742923"
+          packages: ""
 
+      # verify -> reject -> retry: a corrupt package zip ("Error reading Zip
+      # content ...") is purged and re-downloaded instead of failing on sdkmanager's
+      # bare exit 1 (#389; supersedes the inline retry loop from #387/#388).
       - name: Install SDK platform and build-tools
-        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+        run: python3 .github/scripts/setup_android_sdk.py install "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      # Save the verified SDK only on success (never cache a corrupt SDK) and only on
+      # a miss (avoid redundant re-saves).
+      - name: Save Android SDK cache
+        if: success() && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -225,28 +363,61 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Restore Android SDK cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Cache the SHA-256-verified command-line tools + platform/build-tools so a
+          # green run doesn't re-download (and risk re-corrupting) them. Restore-only
+          # here + the success-gated save below == "integrity gates the cache": a
+          # corrupt/failed SDK is never saved (#389). Shared key (identical contents).
+          # The emulator + system image stay with android-emulator-runner (boot logic
+          # is out of scope for #389).
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          # Bump the prefix if ANDROID_PLATFORM/ANDROID_BUILD_TOOLS or the pinned
+          # cmdline-tools build (14742923) change.
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
+
+      # Provision the SHA-256-verified command-line tools into the exact path
+      # setup-android probes first, so the action reuses it and never does its own
+      # unverified "Wrong version in preinstalled sdkmanager" re-download (#389).
+      - name: Bootstrap verified Android command-line tools
+        run: python3 .github/scripts/setup_android_sdk.py bootstrap
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # Reuse the verified cmdline-tools bootstrapped above (matching version =>
+          # no unverified re-download) and pass '' packages so the action does NOT run
+          # the flaky `sdkmanager tools platform-tools` install — the corrupt-zip
+          # surface that failed the "Set up Android SDK" step (#389).
+          cmdline-tools-version: "14742923"
+          packages: ""
 
-      # sdkmanager can exit 1 on a transient package-mirror/network hiccup with no useful trail —
-      # an `E2E (31)` leg died exactly this way (#387). Retry up to 3x with backoff so a transient
-      # failure self-heals, and on a hard failure print the installed-package list so the cause is
-      # visible in the step log instead of a bare exit 1.
+      # verify -> reject -> retry (#389, supersedes the #387/#388 inline loop): sdkmanager
+      # can exit 1 on a corrupt/truncated package zip ("Error reading Zip content ...") — an
+      # `E2E (31)` leg died this way. The helper purges each partial/corrupt package and
+      # re-downloads it clean, and on a hard failure prints the installed-package list so the
+      # cause is visible in the step log instead of a bare exit 1.
       - name: Install SDK platform and build-tools
-        run: |
-          for attempt in 1 2 3; do
-            echo "::group::sdkmanager install (attempt $attempt)"
-            if sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"; then
-              echo "::endgroup::"
-              exit 0
-            fi
-            echo "::endgroup::"
-            echo "::warning::sdkmanager attempt $attempt failed to install $ANDROID_PLATFORM / $ANDROID_BUILD_TOOLS"
-            if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 15))"; fi
-          done
-          echo "::error::sdkmanager failed to install the SDK packages after 3 attempts"
-          echo "--- sdkmanager --list_installed ---"; sdkmanager --list_installed 2>&1 || true
-          exit 1
+        run: python3 .github/scripts/setup_android_sdk.py install "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+
+      # Save the verified SDK only on success (never cache a corrupt SDK) and only on
+      # a miss (avoid redundant re-saves).
+      - name: Save Android SDK cache
+        if: success() && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -402,8 +573,39 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Restore Android SDK cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Cache the SHA-256-verified command-line tools + platform/build-tools so a
+          # green run doesn't re-download (and risk re-corrupting) them. Restore-only
+          # here + the success-gated save below == "integrity gates the cache": a
+          # corrupt/failed SDK is never saved (#389). The ~1 GB preview system image
+          # keeps its own cache below.
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          # Bump the prefix if ANDROID_PLATFORM/ANDROID_BUILD_TOOLS or the pinned
+          # cmdline-tools build (14742923) change.
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
+
+      # Provision the SHA-256-verified command-line tools into the exact path
+      # setup-android probes first, so the action reuses it and never does its own
+      # unverified "Wrong version in preinstalled sdkmanager" re-download (#389).
+      - name: Bootstrap verified Android command-line tools
+        run: python3 .github/scripts/setup_android_sdk.py bootstrap
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # Reuse the verified cmdline-tools bootstrapped above (matching version =>
+          # no unverified re-download) and pass '' packages so the action does NOT run
+          # the flaky `sdkmanager tools platform-tools` install — the corrupt-zip
+          # surface that failed the "Set up Android SDK" step (#389).
+          cmdline-tools-version: "14742923"
+          packages: ""
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -425,8 +627,25 @@ jobs:
           path: /usr/local/lib/android/sdk/system-images/android-37.0
           key: sysimg-android-37.0-google_apis_ps16k-x86_64
 
+      # verify -> reject -> retry (#389): the preview emulator + 16 KB-page system image
+      # download here; a corrupt/truncated package zip ("Error reading Zip content ...") is
+      # purged and re-downloaded clean instead of failing on sdkmanager's bare exit 1.
       - name: Install SDK packages + preview system image
-        run: sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "platform-tools" "emulator" "$API37_IMAGE"
+        run: python3 .github/scripts/setup_android_sdk.py install "platform-tools" "emulator" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$API37_IMAGE"
+
+      # Save the verified command-line tools + platform/build-tools only on success and only
+      # on a miss. The ~1 GB system image keeps its own cache above; the emulator re-downloads
+      # (self-healing via the retry) to keep this shared key small.
+      - name: Save Android SDK cache
+        if: success() && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmdline-tools/20.0
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+          key: android-sdk-v1-${{ runner.os }}-clt14742923-plat37.0-bt37.0.0
 
       - name: Create API 37 AVD
         run: |
