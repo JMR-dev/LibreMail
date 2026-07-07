@@ -203,6 +203,11 @@ def find_message_rows(root: UiNode, package: str) -> List[MessageRow]:
     ``ui_mailbox.xml``). A row carrying the ``"Available offline"`` content-desc has its
     body cached already, so it is marked ``cached`` (callers pick uncached rows for the
     uncached-open scenarios).
+
+    Row-selection hardening: a candidate is skipped unless it carries at least one multi-char
+    text label. A real message row always shows a sender/subject; a bare tappable container
+    (a stray clickable spacer, a "load more"/footer affordance, an empty section row) has
+    none, and tapping it would open nothing and corrupt a sample -- so it is not returned.
     """
     scrollables = root.find_all(lambda n: n.scrollable and n.package == package)
     rows: List[MessageRow] = []
@@ -217,6 +222,9 @@ def find_message_rows(root: UiNode, package: str) -> List[MessageRow]:
             texts = child.descendant_texts()
             # Drop single-letter avatar monograms; keep sender/subject/time.
             texts = [t for t in texts if len(t) > 1]
+            if not texts:
+                # No sender/subject label -> not a message row; skip it (hardening).
+                continue
             cached = any(d == "Available offline" for d in child.descendant_descs())
             rows.append(
                 MessageRow(

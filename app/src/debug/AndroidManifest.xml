@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       Debug-only test harness for issue #221 (never merged into a release APK — this manifest belongs to
@@ -16,6 +17,21 @@
             android:authorities="${applicationId}.coldopen"
             android:exported="false"
             android:process=":coldopen" />
+
+        <!--
+          Debug-only fetch-gate receiver (issue #393; also never merged into a release APK — this
+          manifest belongs to the debug source set). Lets the on-device perf harness pause proactive
+          fetch (backfill + body prefetch) via `adb shell am broadcast` so a genuine uncached
+          message-open can be measured. Must be exported="true" so the adb `shell` UID can reach it by
+          explicit component (`-n`); it targets the debug BuildConfig.DEBUG-guarded DebugFetchGate only,
+          carries no PII, and — being debug-only — can never ship. tools:ignore suppresses the
+          exported-without-permission lint note: a signature permission would (by design) also lock out
+          the shell UID this hook exists to serve.
+        -->
+        <receiver
+            android:name="org.libremail.debug.FetchGateReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
     </application>
 
 </manifest>

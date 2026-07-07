@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.libremail.BuildConfig
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.BackfillProgressDao
 import org.libremail.data.local.dao.MessageDao
@@ -224,6 +225,14 @@ class MailBackfiller @Inject constructor(
      * fetched is filled in lazily when the message is opened.
      */
     private suspend fun prefetchIfEnabled(ids: List<String>) {
+        // Debug-only fetch gate (issue #393): pause proactive body prefetch so a later open is a genuine
+        // uncached fetch. Header paging above is untouched (its own gate is the BackfillWorker entry), so
+        // history still lands; a skipped body is filled in lazily on open. Compiled out of release
+        // (BuildConfig.DEBUG is a compile-time false, so R8 drops the branch).
+        if (BuildConfig.DEBUG && DebugFetchGate.isPaused(FetchScope.PREFETCH)) {
+            AppLog.i(TAG, "prefetch skipped: fetch-gate paused")
+            return
+        }
         val shouldPrefetch = SyncResourcePolicy.shouldPrefetchContent(
             policy = settingsRepository.fetchPolicy(),
             unmetered = { context.isActiveNetworkUnmetered() },

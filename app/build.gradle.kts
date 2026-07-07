@@ -312,27 +312,34 @@ val jacocoGeneratedExcludes = listOf(
 // every `*ViewModel*`.
 val jacocoNonJvmTestableSurface = listOf(
     // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
+    // LibreMailApp KEPT excluded (#384, the acceptable exception): the composable is a real NavHost whose
+    // non-onboarding start destinations call hiltViewModel(), and standing the graph up needs owners a
+    // plain JVM compose rule can't surface — so graph-level nav stays on the instrumented OnboardingFlowTest.
+    // Its JVM-tractable parts (LibreMailBottomBar, StartupCrashPrompt, the cold-start hold guards) ARE
+    // exercised by LibreMailAppJvmTest, but the file's compiled facade (LibreMailAppKt) stays excluded.
     "**/LibreMailApp*",
     // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
     // Compose tests (#378) — now JVM-covered.
-    "**/ComposeScreen*",
+    // ComposeScreen (the email editor) converted to a Robolectric JVM Compose test (#382) — now
+    // JVM-covered.
     // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
     // Robolectric JVM Compose tests (#376) — now JVM-covered.
-    "**/DraftsScreen*",
+    // DraftsScreen, OutboxScreen & ProblemReportsScreen converted to Robolectric JVM Compose tests
+    // (#379) — now JVM-covered.
     // LockScreen converted to a Robolectric JVM Compose test (#377) — now JVM-covered.
-    "**/AppLockGateHost*",
-    "**/FolderDrawer*",
-    "**/MailboxScreen*",
+    // AppLockGateHost converted to a Robolectric JVM Compose test (#384) — now JVM-covered.
+    // FolderDrawer & MailboxScreen (the Paging 3 mailbox list + folder drawer) converted to
+    // Robolectric JVM Compose tests (#383) — now JVM-covered.
     // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
     // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
-    "**/OutboxScreen*",
-    "**/ReaderScreen*",
-    "**/ProblemReportsScreen*",
-    "**/AccountSettingsScreen*",
-    "**/SettingsScreen*",
-    "**/SettingsComponents*",
-    "**/SignatureEditScreen*",
-    "**/SignaturesScreen*",
+    // ReaderScreen converted to a Robolectric JVM Compose test (#381) — now JVM-covered. Its HTML body
+    // renders through HtmlBody, a hardened WebView that Robolectric can only present as a non-rendering
+    // shadow, so ReaderScreenJvmTest asserts the chrome (top bar, star/delete/reply actions, attachment
+    // accordion) and the loading/plain-text/empty/error/remote-images-banner branches — never the
+    // WebView's rendered HTML. HtmlBody.kt stays in scope covered by HtmlBodyTest/InlineImageResolverTest.
+    // SettingsScreen (+ ContactAutocompleteRow), AccountSettingsScreen, SettingsComponents (SwitchRow/
+    // ClickRow/RadioRow/RetentionSection), SignaturesScreen & SignatureEditScreen converted to
+    // Robolectric JVM Compose tests (#380) — now JVM-covered.
     // CacheEncryptionGate.kt (issue #359/#367 fail-closed encryption gate) is pure render: the gate
     // composable, its blank cover, the error screen, and the ephemeral report-review screen — no plain
     // top-level logic. Spelled out to "...GateKt*" (the file's compiled facade class), NOT the bare
@@ -352,6 +359,10 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/di/**",
     // --- src/debug cold-open probe (issue #221) ---
     "**/data/local/coldopen/**",
+    // --- src/debug fetch-gate receiver (issue #393): a BroadcastReceiver that only runs on-device
+    // --- (adb-driven), covered by an instrumented test, never packaged into a release build. Its
+    // --- pure collaborators DebugFetchGate/FetchScope stay IN scope (unit-tested by DebugFetchGateTest).
+    "**/debug/FetchGateReceiver*",
 )
 
 // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output), with the generated
@@ -396,11 +407,17 @@ tasks.register<JacocoReport>("jacocoTestReport") {
 // No-regression coverage gate (closes #251; scoping from #290/#292). Fails `check` / CI when the
 // overall LINE coverage of the scoped surface above drops below `jacocoLineCoverageFloor`. This is a
 // FLOOR, not an absolute 95% target — the maintainer chose a ratchet over a fixed goal. The floor is
-// set a hair (~0.5–1%) below the measured baseline so ordinary run-to-run noise doesn't red-flag it,
-// while a real regression still fails the build. Manual ratchet FOR NOW: when coverage rises
-// materially, bump this number up in the SAME PR so the floor tracks reality (there is no auto-ratchet
-// yet). Baseline measured when this floor was set: 80.21% line (4838/6032), floor 0.79 (~1.2% headroom).
-val jacocoLineCoverageFloor = "0.79"
+// normally set a hair (~0.5–1%) below the measured baseline so ordinary run-to-run noise doesn't
+// red-flag it, while a real regression still fails the build. Manual ratchet FOR NOW: when coverage
+// rises materially, bump this number up in the SAME PR so the floor tracks reality (there is no
+// auto-ratchet yet).
+//
+// Re-ratcheted for #386 (final step of the Robolectric Compose epic #373, once infra/PoC #375 and
+// conversion batches #376-384 had all landed and proven stable): new baseline 87.89% line
+// (7994/9095), floor 0.84 — a wider ~3.9% headroom than the usual ~0.5-1%, chosen deliberately
+// conservative for this first post-epic measurement; the maintainer can tighten it further in a
+// follow-up PR. Prior baseline: 80.21% line (4838/6032), floor 0.79 (~1.2% headroom).
+val jacocoLineCoverageFloor = "0.84"
 tasks.register<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     // Same inputs as jacocoTestReport (shared vals above) so the gate enforces exactly what the
     // report shows. Depend on the unit tests so the exec data exists before verifying.

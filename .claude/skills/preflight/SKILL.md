@@ -48,7 +48,7 @@ python3 .claude/skills/preflight/api37_e2e.py   # api37 preview E2E (hand-provis
 
 `jacocoTestCoverageVerification` runs right after `testDebugUnitTest` because it reads that
 task's JVM exec data — it enforces the whole-app **no-regression line-coverage floor (currently
-0.79)**, so a coverage regression is caught locally instead of only in CI (the exact class of
+0.84)**, so a coverage regression is caught locally instead of only in CI (the exact class of
 failure that reached CI on #367).
 
 `compileDebugAndroidTestKotlin` compiles the `androidTest` source set — the E2E/instrumented

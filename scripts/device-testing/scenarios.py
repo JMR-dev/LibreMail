@@ -25,6 +25,7 @@ import time
 from typing import Callable, List, Optional
 
 import breadcrumbs
+import fetchgate
 import uidump
 from adb import Adb, parse_am_start
 from report import BackNavSample, ColdOpenSample, ReaderOpenRow
@@ -34,6 +35,13 @@ from report import BackNavSample, ColdOpenSample, ReaderOpenRow
 OPEN_TIMEOUT_S = 150.0
 POLL_INTERVAL_S = 2.0
 SETTLE_S = 1.5
+
+# Cold-fetch A/B: waiting for a human-driven sign-in, then for header sync, then for the
+# pre-armed halt's confirming breadcrumb. Sign-in is manual (OAuth can't be automated), so
+# it gets the most headroom.
+SIGN_IN_TIMEOUT_S = 300.0
+GATE_CONFIRM_TIMEOUT_S = 120.0
+HEADER_SYNC_TIMEOUT_S = 180.0
 
 # Fetch-policy option labels (from res/values/strings.xml) used to drive the A/B toggle.
 FETCH_WIFI_LABEL = "Fetch all on Wi-Fi"       # prefetch ON  (Condition A / WIFI_ONLY)
@@ -443,3 +451,287 @@ def cross_provider(
         key = row.account_ref or "unknown"
         buckets.setdefault(key, []).append(row)
     return buckets
+
+
+# --------------------------------------------------------------------------- #
+# Scenario 6: cold-fetch pause-hook A/B (issue #405)
+# --------------------------------------------------------------------------- #
+# The proven flow (2026-07-06): pre-arm the FETCH_GATE halt BEFORE sign-in so proactive body
+# fetch is gated the instant sync starts; detect sign-in; confirm the halt took effect; let
+# headers sync (bodies stay uncached); measure genuine COLD opens; resume the gate; measure
+# WARM (cached) re-opens of the same messages; report the cold-vs-warm delta, the connect=0ms
+# connection-reuse proof, and any server-side throttle signature. Needs a **debug build** --
+# the pause hook (#393/#395) is compiled only into src/debug and R8-stripped from release.
+
+
+def wait_for_open_breadcrumb(
+    tailer: LogTailer, timeout_s: float, log: Callable[[str], None]
+) -> List[breadcrumbs.Event]:
+    """Poll the tail until a ``MailReader openMessage`` breadcrumb lands; return every event.
+
+    An ``openMessage`` marker is the authoritative "the reader open finished" signal -- far
+    more reliable than UI polling for a spinner under load (issue #392). All perf events seen
+    (the ``ImapPerf``/``body-fetch`` lines precede the marker) are returned so the caller can
+    correlate the full open without re-reading -- draining them here would lose them.
+    """
+    deadline = time.monotonic() + timeout_s
+    collected: List[breadcrumbs.Event] = []
+    while True:
+        for line in tailer.read_new().splitlines():
+            event = breadcrumbs.parse_breadcrumb(line)
+            if event is not None:
+                collected.append(event)
+        if any(isinstance(e, breadcrumbs.OpenMessage) for e in collected):
+            return collected
+        if time.monotonic() >= deadline:
+            log("openMessage breadcrumb not seen before timeout")
+            return collected
+        time.sleep(POLL_INTERVAL_S)
+
+
+def wait_for_sign_in(
+    tailer: LogTailer, timeout_s: float, log: Callable[[str], None]
+) -> Optional[int]:
+    """Tail the log until the ``MailSyncer: sync all: N accounts`` breadcrumb; return N.
+
+    Sign-in is manual on the device (OAuth can't be automated), so this simply waits for the
+    first sync pass a fresh sign-in kicks off. ``None`` on timeout.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        for line in tailer.read_new().splitlines():
+            accounts = breadcrumbs.match_sync_all(line)
+            if accounts is not None:
+                log(f"sign-in detected: sync all: {accounts} account(s)")
+                return accounts
+        if time.monotonic() >= deadline:
+            log("sign-in not detected within timeout")
+            return None
+        time.sleep(POLL_INTERVAL_S)
+
+
+def wait_for_gate_skip(
+    tailer: LogTailer, timeout_s: float, log: Callable[[str], None]
+) -> bool:
+    """Tail until the ``prefetch skipped: fetch-gate paused`` breadcrumb proves the halt held."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        for line in tailer.read_new().splitlines():
+            if breadcrumbs.is_fetch_gate_skip(line):
+                log("fetch-gate halt confirmed: prefetch skipped")
+                return True
+        if time.monotonic() >= deadline:
+            log("fetch-gate skip breadcrumb not seen (halt unconfirmed)")
+            return False
+        time.sleep(POLL_INTERVAL_S)
+
+
+def wait_for_header_sync(
+    adb: Adb, package: str, timeout_s: float, log: Callable[[str], None]
+) -> bool:
+    """Poll the mailbox until at least one uncached message row is visible (headers synced)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        root = goto_mailbox(adb, package, log)
+        if root is not None:
+            rows = uidump.find_message_rows(root, package)
+            uncached = [r for r in rows if not r.cached]
+            if uncached:
+                log(f"header sync ready: {len(uncached)} uncached row(s) visible")
+                return True
+        if time.monotonic() >= deadline:
+            log("header sync not confirmed within timeout")
+            return False
+        time.sleep(POLL_INTERVAL_S)
+
+
+def _open_target(
+    adb: Adb,
+    package: str,
+    tailer: LogTailer,
+    index: int,
+    label: str,
+    center: Optional[tuple],
+    log: Callable[[str], None],
+) -> ReaderOpenRow:
+    """Tap a known message row, time the open from the ``openMessage`` breadcrumb, go back."""
+    if center is None:
+        return ReaderOpenRow(index=index, label=label, skipped=True, reason="no tap target")
+    tailer.mark()
+    log(f"opening #{index} {label!r} at {center}")
+    adb.input_tap(*center)
+    events = wait_for_open_breadcrumb(tailer, OPEN_TIMEOUT_S, log)
+    row = _row_from_events(index, label, events)
+    if not any(isinstance(e, breadcrumbs.OpenMessage) for e in events) and not row.skipped:
+        row.skipped = True
+        row.reason = "no openMessage breadcrumb"
+    adb.input_keyevent("KEYCODE_BACK")
+    time.sleep(SETTLE_S)
+    return row
+
+
+def _next_uncached(
+    adb: Adb, package: str, already: set, log: Callable[[str], None]
+) -> Optional[uidump.MessageRow]:
+    """The next not-yet-opened uncached mailbox row (scrolling once to reveal more)."""
+    root = goto_mailbox(adb, package, log)
+    if root is None:
+        return None
+    rows = uidump.find_message_rows(root, package)
+    cands = [r for r in rows if not r.cached and r.label not in already]
+    if cands:
+        return cands[0]
+    adb.input_swipe(672, 2000, 672, 900, 400)
+    time.sleep(SETTLE_S)
+    root = guard_ready(adb, package, log)
+    if root is None:
+        return None
+    cands = [
+        r
+        for r in uidump.find_message_rows(root, package)
+        if not r.cached and r.label not in already
+    ]
+    return cands[0] if cands else None
+
+
+def measure_cold_opens(
+    adb: Adb,
+    package: str,
+    tailer: LogTailer,
+    count: int,
+    log: Callable[[str], None],
+) -> tuple:
+    """Open up to ``count`` distinct uncached messages; return ``(rows, [(label, center)])``.
+
+    The ``(label, center)`` list identifies exactly which messages to re-open for the warm
+    phase.
+    """
+    rows: List[ReaderOpenRow] = []
+    opened: List[tuple] = []
+    already: set = set()
+    for i in range(1, count + 1):
+        target = _next_uncached(adb, package, already, log)
+        if target is None:
+            log("no more uncached messages to open (cold phase)")
+            break
+        already.add(target.label)
+        rows.append(_open_target(adb, package, tailer, i, target.label, target.center, log))
+        opened.append((target.label, target.center))
+    return rows, opened
+
+
+def measure_warm_opens(
+    adb: Adb,
+    package: str,
+    tailer: LogTailer,
+    opened: List[tuple],
+    log: Callable[[str], None],
+) -> List[ReaderOpenRow]:
+    """Re-open each message from :func:`measure_cold_opens`; bodies are now cached (warm)."""
+    rows: List[ReaderOpenRow] = []
+    for i, (label, center) in enumerate(opened, start=1):
+        # Re-find the row by label for a fresh centre (the list may have shifted); fall back
+        # to the cold-phase centre.
+        tgt_center = center
+        root = goto_mailbox(adb, package, log)
+        if root is not None:
+            for r in uidump.find_message_rows(root, package):
+                if r.label == label:
+                    tgt_center = r.center
+                    break
+        rows.append(_open_target(adb, package, tailer, i, label, tgt_center, log))
+    return rows
+
+
+def _gate_shown(state) -> str:
+    """The read-back payload for a log line (duck-typed on the fetchgate BroadcastResult)."""
+    if state is not None and getattr(state, "read_back", False):
+        return state.data
+    return "(no read-back)"
+
+
+def cold_fetch_ab(
+    adb: Adb,
+    package: str,
+    component: str,
+    tailer: LogTailer,
+    gate: "fetchgate.FetchGate",
+    count: int,
+    log: Callable[[str], None],
+    sign_in_timeout_s: float = SIGN_IN_TIMEOUT_S,
+    gate_confirm_timeout_s: float = GATE_CONFIRM_TIMEOUT_S,
+    header_sync_timeout_s: float = HEADER_SYNC_TIMEOUT_S,
+) -> dict:
+    """Cold-fetch pause-hook A/B: pre-arm halt, sign-in, cold opens, resume, warm opens.
+
+    ALWAYS clears the gate at the end (``finally``) so a device is never left with proactive
+    fetch paused, even on error.
+    """
+    results: dict = {
+        "gate_prearm": None,
+        "sign_in_accounts": None,
+        "gate_confirmed": False,
+        "header_ready": False,
+        "cold": [],
+        "warm": [],
+        "gate_resume": None,
+        "gate_restored": None,
+    }
+    try:
+        # 1. Pre-arm the halt BEFORE sign-in so proactive fetch is gated as soon as sync starts.
+        log(f"pre-arming fetch-gate halt (pause {fetchgate.DEFAULT_SCOPE})")
+        results["gate_prearm"] = gate.pause(fetchgate.DEFAULT_SCOPE)
+        log(f"pre-armed halt read-back: {_gate_shown(results['gate_prearm'])}")
+
+        if adb.dry_run:
+            _dry_run_cold_fetch_demo(adb, gate, log)
+            results["cold"] = [
+                ReaderOpenRow(index=1, label="<dry-run cold>", skipped=True, reason="dry-run")
+            ]
+            results["warm"] = [
+                ReaderOpenRow(index=1, label="<dry-run warm>", skipped=True, reason="dry-run")
+            ]
+            return results
+
+        # 2. Detect the manual sign-in via the sync-start breadcrumb.
+        log("waiting for sign-in (add an account on the device now)")
+        results["sign_in_accounts"] = wait_for_sign_in(tailer, sign_in_timeout_s, log)
+        # 3. Confirm the pre-armed halt actually took effect.
+        results["gate_confirmed"] = wait_for_gate_skip(tailer, gate_confirm_timeout_s, log)
+        # 4. Wait for header sync so uncached rows exist to open.
+        results["header_ready"] = wait_for_header_sync(
+            adb, package, header_sync_timeout_s, log
+        )
+        # 5. Measure COLD opens -- bodies uncached because prefetch is gated.
+        log("measuring cold opens (uncached bodies)")
+        cold_rows, opened = measure_cold_opens(adb, package, tailer, count, log)
+        results["cold"] = cold_rows
+        # 6. Resume (restore normal fetch), then measure WARM re-opens of the same messages.
+        log(f"resuming fetch-gate before warm phase (resume {fetchgate.DEFAULT_SCOPE})")
+        results["gate_resume"] = gate.resume(fetchgate.DEFAULT_SCOPE)
+        log("measuring warm opens (cached re-open of the same messages)")
+        results["warm"] = measure_warm_opens(adb, package, tailer, opened, log)
+    finally:
+        # Restore semantics: ALWAYS clear the gate, even on error -- never leave fetch paused.
+        results["gate_restored"] = gate.resume(fetchgate.DEFAULT_SCOPE)
+        log(f"fetch-gate restored (cleared): {_gate_shown(results['gate_restored'])}")
+    return results
+
+
+def _dry_run_cold_fetch_demo(
+    adb: Adb, gate: "fetchgate.FetchGate", log: Callable[[str], None]
+) -> None:
+    """Issue the canonical cold-fetch A/B command shape once (dry-run only).
+
+    The pre-arm ``pause`` and the final restoring ``resume`` are issued by :func:`cold_fetch_ab`
+    itself (the latter in its ``finally``); this fills in a representative cold open, the
+    warm-phase ``resume``, a warm re-open, and a state ``query`` so the whole plan is auditable.
+    """
+    adb.uiautomator_dump()
+    adb.input_tap(672, 504)  # cold-open a representative message row
+    adb.input_keyevent("KEYCODE_BACK")
+    gate.resume(fetchgate.DEFAULT_SCOPE)  # restore normal fetch before the warm phase
+    adb.uiautomator_dump()
+    adb.input_tap(672, 504)  # warm re-open (now cached)
+    adb.input_keyevent("KEYCODE_BACK")
+    gate.query(fetchgate.DEFAULT_SCOPE)  # confirm the gate state

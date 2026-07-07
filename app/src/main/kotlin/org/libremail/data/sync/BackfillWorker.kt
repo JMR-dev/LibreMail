@@ -9,6 +9,7 @@ import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import org.libremail.BuildConfig
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.reporting.AppLog
 
@@ -30,6 +31,16 @@ class BackfillWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
+        // Debug-only fetch gate (issue #393): a test harness can pause backfill via an adb broadcast so a
+        // genuinely uncached message-open can be measured (proactive backfill would otherwise warm the
+        // cache first). Skip-and-reschedule exactly like the cache-lock deferral below; WorkManager
+        // retries and picks up from the persisted per-folder boundary once the gate resumes. The whole
+        // branch is compiled out of release: BuildConfig.DEBUG is a compile-time `false` there, so R8
+        // strips it (and DebugFetchGate with it).
+        if (BuildConfig.DEBUG && DebugFetchGate.isPaused(FetchScope.BACKFILL)) {
+            AppLog.i(TAG, "backfill deferred: fetch-gate paused")
+            return Result.retry()
+        }
         // Can't open the encrypted DB without the user present — retry later rather than parking a
         // WorkManager thread (which also wedges the shared serial executor) on an unsatisfiable await.
         if (cacheGuard.isCacheLocked()) {
