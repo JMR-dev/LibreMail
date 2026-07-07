@@ -82,8 +82,8 @@ class DatabaseKeyCipher @Inject constructor() :
     /** A missing auth-bound key means it was invalidated; surface that instead of regenerating. */
     override fun onMissingDecryptionKey(): Nothing = error("auth-bound database key is missing")
 
-    override fun keySpec(): KeyGenParameterSpec {
-        val builder = keySpecBuilder()
+    override fun keySpec(strongBox: Boolean): KeyGenParameterSpec {
+        val builder = keySpecBuilder(strongBox)
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

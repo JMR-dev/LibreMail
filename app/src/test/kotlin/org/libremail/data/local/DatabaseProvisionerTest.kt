@@ -10,6 +10,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
@@ -28,7 +29,9 @@ import org.libremail.data.settings.SettingsRepository
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * [DatabaseProvisioner] holds the one-time startup sequence that `DatabaseModule.provideDatabase` used
@@ -56,6 +59,11 @@ class DatabaseProvisionerTest {
             .asCoroutineDispatcher()
         mockkObject(DatabaseEncryption)
         mockkObject(DatabaseFiles)
+        // `android.util.Log` is a no-op stub under plain JVM unit tests; the #359 degrade path breadcrumbs
+        // through AppLog.w, so statically mock Log (fully-qualified — a raw android.util.Log import is
+        // detekt-forbidden, epic #324) so it does not throw "not mocked".
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.w(any<String>(), any<String>(), any()) } returns 0
 
         every { context.getDatabasePath(any()) } returns File("libremail.db")
         every { DatabaseFiles.clear(any()) } just Runs
@@ -96,6 +104,62 @@ class DatabaseProvisionerTest {
         // load only rode on that conversion, Room's keyed open would hit nativeOpen with no .so loaded
         // and throw UnsatisfiedLinkError on every cold start.
         verify(exactly = 1) { DatabaseEncryption.ensureNativeLibraryLoaded() }
+    }
+
+    @Test
+    fun `a native-library load failure fails closed without opening plaintext or touching the setting`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = false))
+        // Issue #359: the SQLCipher `.so` fails to load, throwing UnsatisfiedLinkError (a LinkageError) at
+        // the keyed open. The provisioner must FAIL CLOSED — raise a distinct signal, never silently
+        // degrade to an unencrypted cache (which would defeat the user's opt-in encryption).
+        val nativeLoadFailure = UnsatisfiedLinkError("dlopen failed: libsqlcipher.so is not 16 KB aligned")
+        every { DatabaseEncryption.ensureNativeLibraryLoaded() } throws nativeLoadFailure
+
+        val error = assertFailsWith<CacheEncryptionUnavailableException> { provisioner().prepareCache() }
+
+        // The distinct signal preserves the underlying native LinkageError in its cause chain (coroutine
+        // stack-trace recovery may re-wrap the exception across withContext, so assert the chain rather
+        // than exact instance identity), and NONE of the old fail-open side effects run: the setting is
+        // never flipped, nothing is wiped, and no seal is reset.
+        assertTrue(
+            generateSequence(error.cause) { it.cause }.any { it is LinkageError },
+            "the native-load LinkageError must be preserved as the cause",
+        )
+        coVerify(exactly = 0) { settingsRepository.setEncryptCache(any()) }
+        verify(exactly = 0) { DatabaseFiles.clear(any()) }
+        coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
+    }
+
+    @Test
+    fun `a native-library load failure never wipes an already-encrypted cache`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = false))
+        every { DatabaseEncryption.isEncrypted(any()) } returns true
+        every { DatabaseEncryption.ensureEncrypted(any(), any()) } throws
+            UnsatisfiedLinkError("dlopen failed: libsqlcipher.so is not 16 KB aligned")
+
+        assertFailsWith<CacheEncryptionUnavailableException> { provisioner().prepareCache() }
+
+        // The ciphertext the plaintext opener can't parse is deliberately PRESERVED (it may become
+        // readable again once the library loads on a later launch), the seals stay intact, and the
+        // setting is untouched — the opposite of the rejected degrade-and-wipe behaviour.
+        verify(exactly = 0) { DatabaseFiles.clear(any()) }
+        coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
+        coVerify(exactly = 0) { settingsRepository.setEncryptCache(any()) }
+    }
+
+    @Test
+    fun `a native-library load failure is not memoized and retries on the next open`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = false))
+        every { DatabaseEncryption.ensureNativeLibraryLoaded() } throws
+            UnsatisfiedLinkError("dlopen failed: libsqlcipher.so is not 16 KB aligned")
+        val provisioner = provisioner()
+
+        assertFailsWith<CacheEncryptionUnavailableException> { provisioner.prepareCache() }
+        assertFailsWith<CacheEncryptionUnavailableException> { provisioner.prepareCache() }
+
+        // A failure is NOT memoized (unlike a success): each open re-runs the whole sequence, so the
+        // migrator ran on BOTH attempts. That is what lets a later launch recover once the library loads.
+        coVerify(exactly = 2) { accountDataMigrator.migrateIfNeeded() }
     }
 
     @Test

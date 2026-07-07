@@ -390,6 +390,18 @@
     <string name="report_submit_unavailable">Online submission isn\'t available in this build. Use Copy or Save to share the report.</string>
     <string name="report_copied">Copied to clipboard</string>
     <string name="report_saved">Saved</string>
+    <!-- Fail-closed encrypted-cache gate (#359): shown when SQLCipher's native library will not load,
+         so the opt-in encrypted cache cannot be opened. The app fails closed here instead of falling
+         back to an unencrypted cache. -->
+    <string name="cache_encryption_error_title">Encrypted mail unavailable</string>
+    <!-- Verbatim maintainer-specified message; do not reword. -->
+    <string name="cache_encryption_error_message">Error - decryption could not proceed. Native decryption library load failure.</string>
+    <string name="cache_encryption_error_body">A required security component could not be loaded, so your encrypted mail can\'t be opened on this device right now. Nothing was changed or deleted — your mail is still on your server. LibreMail will try again the next time you open it.</string>
+    <string name="cache_encryption_report_action">Report a problem</string>
+    <!-- Ephemeral report: it is prepared in memory only, so the copy must say it is NOT saved unless
+         the user explicitly saves/exports it, and that it holds no personal information. -->
+    <string name="cache_encryption_report_ephemeral_notice">This report contains only diagnostic information — no email addresses, message content, or passwords. It is prepared just for you to review now and is NOT saved to this device unless you tap Save.</string>
+    <string name="cache_encryption_report_generating">Preparing report…</string>
     <string name="crash_prompt_title">LibreMail closed unexpectedly</string>
     <string name="crash_prompt_message">A problem report from the last crash is ready for you to review. Nothing is sent automatically.</string>
     <string name="crash_prompt_review">Review</string>
