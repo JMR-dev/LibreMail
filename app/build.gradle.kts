@@ -331,11 +331,9 @@ val jacocoNonJvmTestableSurface = listOf(
     // shadow, so ReaderScreenJvmTest asserts the chrome (top bar, star/delete/reply actions, attachment
     // accordion) and the loading/plain-text/empty/error/remote-images-banner branches — never the
     // WebView's rendered HTML. HtmlBody.kt stays in scope covered by HtmlBodyTest/InlineImageResolverTest.
-    "**/AccountSettingsScreen*",
-    "**/SettingsScreen*",
-    "**/SettingsComponents*",
-    "**/SignatureEditScreen*",
-    "**/SignaturesScreen*",
+    // SettingsScreen (+ ContactAutocompleteRow), AccountSettingsScreen, SettingsComponents (SwitchRow/
+    // ClickRow/RadioRow/RetentionSection), SignaturesScreen & SignatureEditScreen converted to
+    // Robolectric JVM Compose tests (#380) — now JVM-covered.
     // CacheEncryptionGate.kt (issue #359/#367 fail-closed encryption gate) is pure render: the gate
     // composable, its blank cover, the error screen, and the ephemeral report-review screen — no plain
     // top-level logic. Spelled out to "...GateKt*" (the file's compiled facade class), NOT the bare
