@@ -47,10 +47,15 @@
 #      each PR IN PLACE, on the real PR branch, which requires ALL THREE of:
 #        (a) `merge_queue.max_parallel_checks: 1` (below),
 #        (b) every `queue_rules[].batch_size: 1` (below), and
-#        (c) `queue_rules.default.merge_conditions` IDENTICAL (same conditions, same
-#            order) to `merge_protections_settings.auto_merge_conditions` — i.e. no
-#            "two-step CI" where the conditions that queue a PR differ from the
-#            conditions that merge it. Do not let these two lists drift apart.
+#        (c) `queue_rules.default.queue_conditions` IDENTICAL (same conditions, same
+#            order) to `queue_rules.default.merge_conditions` — i.e. no "two-step CI"
+#            where the conditions to ENTER the queue differ from the conditions to
+#            MERGE. Mergify runs three condition sets, sequentially:
+#            `merge_protections_settings.auto_merge_conditions` (TRIGGERS auto-queueing)
+#            → `queue_conditions` (validates a PR's queue ENTRY) → `merge_conditions`
+#            (validates the MERGE). Omitting `queue_conditions` — as this config first
+#            did — reads as a two-step-CI mismatch and re-trips the incompatibility
+#            check, so we keep all three lists identical. Do not let them drift apart.
 
 # ---------------------------------------------------------------------------
 # queue_rules — how a queued PR is validated and merged.
@@ -64,13 +69,23 @@ queue_rules:
     # = 0), so there is deliberately NO `#approved-reviews-by` condition — adding one
     # would wedge the solo-maintainer flow, where nobody can approve their own PR.
     #
-    # MUST stay IDENTICAL (same conditions, same order) to
-    # `merge_protections_settings.auto_merge_conditions` below. That equality is what
-    # lets Mergify validate PRs with IN-PLACE checks instead of speculative draft-PR
-    # checks — required for compatibility with the strict require-up-to-date ruleset
-    # (see the HARD INVARIANTS note at the top of this file). If this list and
-    # `auto_merge_conditions` ever diverge, Mergify's ruleset-compatibility check will
-    # flag it again.
+    # IN-PLACE CHECKS: `queue_conditions` (what a PR must satisfy to ENTER/stay in the
+    # queue) MUST be IDENTICAL (same conditions, same order) to `merge_conditions` (what
+    # it must satisfy to MERGE) below. When those two lists match — plus batch_size 1 and
+    # max_parallel_checks 1 — Mergify validates each PR IN PLACE on the real PR branch
+    # instead of running speculative draft-PR checks, which is what GitHub's strict
+    # `required_status_checks` ruleset (require-branches-up-to-date) demands. Omitting
+    # `queue_conditions` (as this config originally did) is treated as a "two-step CI"
+    # mismatch and Mergify flags the ruleset as incompatible. Keep the three lists here —
+    # `queue_conditions`, `merge_conditions`, and
+    # `merge_protections_settings.auto_merge_conditions` — all identical; if any diverge,
+    # Mergify's ruleset-compatibility check fails again.
+    queue_conditions:
+      - base = main
+      - -draft
+      - -conflict
+      - label != broken
+      - check-success = CI passed
     merge_conditions:
       - base = main
       - -draft
@@ -184,8 +199,8 @@ priority_rules:
 # enforced on top of queue_rules.merge_conditions.
 #
 # This list MUST stay IDENTICAL (same conditions, same order) to
-# `queue_rules.default.merge_conditions` above — see the note there and the IN-PLACE
-# CHECKS hard invariant at the top of this file.
+# `queue_rules.default.queue_conditions` and `.merge_conditions` above — see the note
+# there and the IN-PLACE CHECKS hard invariant at the top of this file.
 # ---------------------------------------------------------------------------
 merge_protections_settings:
   auto_merge_conditions:
