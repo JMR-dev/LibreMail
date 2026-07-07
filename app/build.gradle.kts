@@ -315,7 +315,8 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/LibreMailApp*",
     // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
     // Compose tests (#378) — now JVM-covered.
-    "**/ComposeScreen*",
+    // ComposeScreen (the email editor) converted to a Robolectric JVM Compose test (#382) — now
+    // JVM-covered.
     // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
     // Robolectric JVM Compose tests (#376) — now JVM-covered.
     // DraftsScreen, OutboxScreen & ProblemReportsScreen converted to Robolectric JVM Compose tests
@@ -326,12 +327,14 @@ val jacocoNonJvmTestableSurface = listOf(
     // Robolectric JVM Compose tests (#383) — now JVM-covered.
     // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
     // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
-    "**/ReaderScreen*",
-    "**/AccountSettingsScreen*",
-    "**/SettingsScreen*",
-    "**/SettingsComponents*",
-    "**/SignatureEditScreen*",
-    "**/SignaturesScreen*",
+    // ReaderScreen converted to a Robolectric JVM Compose test (#381) — now JVM-covered. Its HTML body
+    // renders through HtmlBody, a hardened WebView that Robolectric can only present as a non-rendering
+    // shadow, so ReaderScreenJvmTest asserts the chrome (top bar, star/delete/reply actions, attachment
+    // accordion) and the loading/plain-text/empty/error/remote-images-banner branches — never the
+    // WebView's rendered HTML. HtmlBody.kt stays in scope covered by HtmlBodyTest/InlineImageResolverTest.
+    // SettingsScreen (+ ContactAutocompleteRow), AccountSettingsScreen, SettingsComponents (SwitchRow/
+    // ClickRow/RadioRow/RetentionSection), SignaturesScreen & SignatureEditScreen converted to
+    // Robolectric JVM Compose tests (#380) — now JVM-covered.
     // CacheEncryptionGate.kt (issue #359/#367 fail-closed encryption gate) is pure render: the gate
     // composable, its blank cover, the error screen, and the ephemeral report-review screen — no plain
     // top-level logic. Spelled out to "...GateKt*" (the file's compiled facade class), NOT the bare
