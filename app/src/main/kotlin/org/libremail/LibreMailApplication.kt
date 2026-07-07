@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import org.libremail.data.security.KeystoreReportEncryption
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.repository.AccountRepository
@@ -48,6 +49,8 @@ class LibreMailApplication :
 
     @Inject lateinit var diagnosticsCollector: DiagnosticsCollector
 
+    @Inject lateinit var reportEncryption: KeystoreReportEncryption
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Whether the IDLE push service should currently be running (push enabled AND an account exists). */
@@ -74,6 +77,10 @@ class LibreMailApplication :
         // Warm the settings cache so a later crash report can include non-PII settings without
         // touching DataStore on the crashing thread.
         appScope.launch { runCatching { diagnosticsCollector.warmSettingsCache() } }
+        // Mirror the encryptCache setting so a crash-time report save (synchronous, on the crashing
+        // thread) can seal the report at rest without touching DataStore (#369). Collects for the
+        // process lifetime, so a mid-session toggle takes effect on the next report write.
+        appScope.launch { runCatching { reportEncryption.observeEncryptCacheSetting() } }
         syncScheduler.schedulePeriodicSync()
         // Full-history backfill (#12) and device-only retention pruning (#13) run as their own bounded,
         // resumable background jobs so they never block foreground sync / pull-to-refresh.
