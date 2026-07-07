@@ -407,11 +407,17 @@ tasks.register<JacocoReport>("jacocoTestReport") {
 // No-regression coverage gate (closes #251; scoping from #290/#292). Fails `check` / CI when the
 // overall LINE coverage of the scoped surface above drops below `jacocoLineCoverageFloor`. This is a
 // FLOOR, not an absolute 95% target — the maintainer chose a ratchet over a fixed goal. The floor is
-// set a hair (~0.5–1%) below the measured baseline so ordinary run-to-run noise doesn't red-flag it,
-// while a real regression still fails the build. Manual ratchet FOR NOW: when coverage rises
-// materially, bump this number up in the SAME PR so the floor tracks reality (there is no auto-ratchet
-// yet). Baseline measured when this floor was set: 80.21% line (4838/6032), floor 0.79 (~1.2% headroom).
-val jacocoLineCoverageFloor = "0.79"
+// normally set a hair (~0.5–1%) below the measured baseline so ordinary run-to-run noise doesn't
+// red-flag it, while a real regression still fails the build. Manual ratchet FOR NOW: when coverage
+// rises materially, bump this number up in the SAME PR so the floor tracks reality (there is no
+// auto-ratchet yet).
+//
+// Re-ratcheted for #386 (final step of the Robolectric Compose epic #373, once infra/PoC #375 and
+// conversion batches #376-384 had all landed and proven stable): new baseline 87.89% line
+// (7994/9095), floor 0.84 — a wider ~3.9% headroom than the usual ~0.5-1%, chosen deliberately
+// conservative for this first post-epic measurement; the maintainer can tighten it further in a
+// follow-up PR. Prior baseline: 80.21% line (4838/6032), floor 0.79 (~1.2% headroom).
+val jacocoLineCoverageFloor = "0.84"
 tasks.register<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     // Same inputs as jacocoTestReport (shared vals above) so the gate enforces exactly what the
     // report shows. Depend on the unit tests so the exec data exists before verifying.
