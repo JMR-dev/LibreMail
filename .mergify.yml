@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ============================================================================
+#  Mergify configuration — PHASE 1: serial merge queue (issue #409).
+#
+#  Spec:   docs/ci/mergify-integration-spec.md + docs/ci/mergify.yml.proposed
+#          (issues #407 / #408).
+#  Schema: https://docs.mergify.com/configuration/file-format/
+#          Verified against the LIVE Mergify docs on 2026-07-06 (queue rules,
+#          the queue action, priority rules, parallel checks, batches, setup and
+#          lifecycle pages) — the config format evolves, so this is not from memory.
+# ============================================================================
+#
+#  WHAT THIS DOES
+#    A SERIAL merge queue that ends the manual serial-bump grind and supersedes the
+#    hand-rolled "poor-man's merge queue" (autoupdate.yml + ci-trigger.yml +
+#    traffic-control.yml — all already `disabled_manually`). Mergify updates each
+#    queued PR onto the latest `main`, re-runs CI, and merges it with a MERGE COMMIT
+#    when the single required gate — the "CI passed" check — is green. One PR at a
+#    time, in P0–P9 priority order.
+#
+#  HARD INVARIANTS (do NOT relax without the trilemma decision recorded in the spec):
+#    * require-up-to-date STAYS ON. This is Phase 1 = batch_size 1 + merge_method:
+#      merge — the ONLY trilemma combination that keeps GitHub's "Require branches to
+#      be up to date before merging" LITERALLY enabled AND preserves the merge-commit
+#      policy. Mergify honours it by updating each PR onto the latest `main` and
+#      re-running CI before merging ("Updates PRs against the latest main before
+#      merging" — docs.mergify.com/merge-queue/setup). NO batching: batching would
+#      require turning that checkbox OFF (docs.mergify.com/merge-queue/batches) and is
+#      the blocked Phase 2 / issue #410 — explicitly OUT OF SCOPE here.
+#    * The single required status check stays "CI passed" — the exact `name:` of the
+#      `ci-passed` job in .github/workflows/ci.yml. NOT "ci-passed". A wrong name means
+#      PRs queue but never merge.
+
+# ---------------------------------------------------------------------------
+# queue_rules — how a queued PR is validated and merged.
+# ---------------------------------------------------------------------------
+queue_rules:
+  - name: default
+    # Final merge gate. Merge ONLY when the single required context is green (the exact
+    # same check branch protection requires), the PR is not a draft, has no merge
+    # conflicts, and is not flagged `broken`. NOTE: branch protection requires 0
+    # approvals here (the active repository ruleset sets required_approving_review_count
+    # = 0), so there is deliberately NO `#approved-reviews-by` condition — adding one
+    # would wedge the solo-maintainer flow, where nobody can approve their own PR.
+    merge_conditions:
+      - check-success = CI passed
+      - -draft
+      - -conflict
+      - label != broken
+    # SERIAL: exactly one PR per merge. No batching (Phase 2 / #410). One merge commit
+    # per PR, which is what lets require-up-to-date stay literally ON.
+    batch_size: 1
+    # Merge commit — never squash / rebase / fast-forward (repo policy: merges use
+    # merge commits, never squash).
+    merge_method: merge
+
+# ---------------------------------------------------------------------------
+# merge_queue — queue-wide options.
+# ---------------------------------------------------------------------------
+merge_queue:
+  # Validate ONE PR at a time — true serial, no speculative parallel checks. This is the
+  # strictest, unambiguously require-up-to-date-compatible setting: Mergify updates the
+  # REAL PR branch onto the latest `main`, runs CI on that branch, and merges on the real
+  # green "CI passed" — with no speculative temp-branch/real-branch check mismatch to
+  # reason about. It also caps the expensive, wedge-prone ~15-min E2E matrix at a single
+  # concurrent run. Raising this (speculative parallelism) is a throughput optimisation to
+  # weigh alongside the Phase 2 / #410 batching decision — not part of serial Phase 1.
+  max_parallel_checks: 1
+
+# ---------------------------------------------------------------------------
+# priority_rules — map the repo's P0–P9 labels onto queue priority.
+# Higher number merges first (Mergify keywords: low=1000 / medium=2000 / high=3000;
+# numeric range 1–10000). P0 is emergency-only and outranks everything. PRs with no P-label
+# fall to Mergify's default `medium` (2000).
+# ---------------------------------------------------------------------------
+priority_rules:
+  - name: p0-emergency
+    conditions:
+      - label = P0
+    priority: 10000
+  - name: p1
+    conditions:
+      - label = P1
+    priority: 9000
+  - name: p2
+    conditions:
+      - label = P2
+    priority: 8000
+  - name: p3
+    conditions:
+      - label = P3
+    priority: 7000
+  - name: p4
+    conditions:
+      - label = P4
+    priority: 6000
+  - name: p5
+    conditions:
+      - label = P5
+    priority: 5000
+  - name: p6
+    conditions:
+      - label = P6
+    priority: 4000
+  - name: p7
+    conditions:
+      - label = P7
+    priority: 3000
+  - name: p8
+    conditions:
+      - label = P8
+    priority: 2000
+  - name: p9
+    conditions:
+      - label = P9
+    priority: 1000
+
+# ---------------------------------------------------------------------------
+# pull_request_rules — WHICH PRs enter the queue.
+# The `queue` action is what actually ADDS a PR to the merge queue: per
+# docs.mergify.com/merge-queue/lifecycle, queue_conditions alone do NOT auto-queue a PR —
+# a queue action (or an `@mergifyio queue` command / auto_merge) is required, otherwise the
+# "Mergify Merge Queue" check sits permanently pending. A PR is queued as soon as it is green
+# on "CI passed", targets `main`, is not a draft, has no conflicts, and is not flagged
+# `broken`. `broken` / `draft` PRs are never queued.
+# ---------------------------------------------------------------------------
+pull_request_rules:
+  - name: Queue green, non-draft, non-conflicting PRs targeting main
+    conditions:
+      - base = main
+      - -draft
+      - -conflict
+      - label != broken
+      - check-success = CI passed
+    actions:
+      queue:
+        name: default
