@@ -326,7 +326,11 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/MailboxScreen*",
     // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
     // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
-    "**/ReaderScreen*",
+    // ReaderScreen converted to a Robolectric JVM Compose test (#381) — now JVM-covered. Its HTML body
+    // renders through HtmlBody, a hardened WebView that Robolectric can only present as a non-rendering
+    // shadow, so ReaderScreenJvmTest asserts the chrome (top bar, star/delete/reply actions, attachment
+    // accordion) and the loading/plain-text/empty/error/remote-images-banner branches — never the
+    // WebView's rendered HTML. HtmlBody.kt stays in scope covered by HtmlBodyTest/InlineImageResolverTest.
     "**/AccountSettingsScreen*",
     "**/SettingsScreen*",
     "**/SettingsComponents*",
