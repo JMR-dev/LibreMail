@@ -22,10 +22,19 @@ import java.io.File
  * to [scope] (IO by default). Reactive consumers (Problem Reports, the startup prompt) observe
  * [reports] and update when the scan lands; the empty window is momentary. Writes ([save] etc.)
  * re-scan synchronously so a crash-time save is never lost to the pending initial scan.
+ *
+ * At-rest encryption (issue #369): when [encryption] reports it is [ReportEncryption.enabled], each
+ * report's storage JSON is sealed before it is written and tagged with [ENCRYPTED_PREFIX]; when it is
+ * off the JSON is stored plaintext exactly as before. Reads sniff the prefix, so plaintext reports from
+ * before the setting was turned on and sealed reports written after it coexist transparently. Writes
+ * FAIL CLOSED: if sealing throws while encryption is on, the report is dropped rather than written in
+ * plaintext, so the user's opt-in encryption is never silently defeated by leaving a plaintext report
+ * on disk. The default [ReportEncryption.None] keeps the store plaintext (its historical behaviour).
  */
 class ReportStore(
     private val directory: File,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val encryption: ReportEncryption = ReportEncryption.None,
 ) {
     private val lock = Any()
     private val _reports = MutableStateFlow<List<DebugReport>>(emptyList())
@@ -41,8 +50,9 @@ class ReportStore(
 
     fun save(report: DebugReport) {
         synchronized(lock) {
+            val serialized = serializeForDisk(report) ?: return
             directory.mkdirs()
-            File(directory, fileName(report.id)).writeText(report.toStorageJson())
+            File(directory, fileName(report.id)).writeText(serialized)
             _reports.value = scan()
         }
     }
@@ -58,7 +68,8 @@ class ReportStore(
         synchronized(lock) {
             val report = _reports.value.firstOrNull { it.id == id } ?: return
             if (report.surfaced) return
-            File(directory, fileName(id)).writeText(report.copy(surfaced = true).toStorageJson())
+            val serialized = serializeForDisk(report.copy(surfaced = true)) ?: return
+            File(directory, fileName(id)).writeText(serialized)
             _reports.value = scan()
         }
     }
@@ -85,13 +96,57 @@ class ReportStore(
         val files = directory.listFiles { file -> file.isFile && file.name.endsWith(SUFFIX) }
             ?: return emptyList()
         return files
-            .mapNotNull { file -> runCatching { DebugReport.fromStorageJson(file.readText()) }.getOrNull() }
+            .mapNotNull { file -> readReport(file) }
             .sortedByDescending { it.createdAtMillis }
+    }
+
+    /**
+     * Renders [report] for on-disk storage. With encryption OFF this is the plaintext storage JSON,
+     * byte-for-byte as before. With it ON the JSON is sealed and tagged with [ENCRYPTED_PREFIX]. Returns
+     * `null` — so the caller writes nothing — when sealing fails while encryption is ON: the report is
+     * deliberately NOT written in plaintext (that would defeat the user's opt-in encryption, #369), so a
+     * failed seal drops the report rather than leaking it. A dropped crash report still lets the original
+     * crash propagate to the system handler.
+     */
+    private fun serializeForDisk(report: DebugReport): String? {
+        val json = report.toStorageJson()
+        if (!encryption.enabled()) return json
+        return runCatching { ENCRYPTED_PREFIX + encryption.encrypt(json) }.getOrElse { e ->
+            AppLog.e(TAG, "Report encryption failed; not persisting to avoid a plaintext report on disk", e)
+            null
+        }
+    }
+
+    /**
+     * Reads one stored report, transparently unsealing files tagged with [ENCRYPTED_PREFIX]. A file that
+     * cannot be decrypted (e.g. the master key was cleared) is logged and skipped rather than crashing
+     * the list; an unparseable plaintext file is skipped silently, as before.
+     */
+    private fun readReport(file: File): DebugReport? {
+        val raw = runCatching { file.readText() }.getOrNull() ?: return null
+        val json = if (raw.startsWith(ENCRYPTED_PREFIX)) {
+            runCatching { encryption.decrypt(raw.removePrefix(ENCRYPTED_PREFIX)) }.getOrElse { e ->
+                AppLog.w(TAG, "Skipping a stored report that could not be decrypted", e)
+                return null
+            }
+        } else {
+            raw
+        }
+        return runCatching { DebugReport.fromStorageJson(json) }.getOrNull()
     }
 
     private fun fileName(id: String) = "$id$SUFFIX"
 
     private companion object {
         const val SUFFIX = ".json"
+        const val TAG = "ReportStore"
+
+        /**
+         * Marks a file whose body is `Base64(iv || ciphertext)` rather than plaintext JSON. Contains
+         * characters outside Base64's alphabet (`.`/`:`) and never matches a plaintext report's leading
+         * `{`, so a read tells sealed from plaintext files unambiguously — the two coexist on disk after
+         * the encryption setting is toggled.
+         */
+        const val ENCRYPTED_PREFIX = "libremail.report.enc.v1:"
     }
 }
