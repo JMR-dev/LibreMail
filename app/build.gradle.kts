@@ -315,7 +315,8 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/LibreMailApp*",
     // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
     // Compose tests (#378) — now JVM-covered.
-    "**/ComposeScreen*",
+    // ComposeScreen (the email editor) converted to a Robolectric JVM Compose test (#382) — now
+    // JVM-covered.
     // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
     // Robolectric JVM Compose tests (#376) — now JVM-covered.
     // DraftsScreen, OutboxScreen & ProblemReportsScreen converted to Robolectric JVM Compose tests
