@@ -52,7 +52,10 @@ class BackfillWorkerTest {
     }
 
     @After
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        unmockkAll()
+        DebugFetchGate.reset() // the gate is a process-global object; don't leak a pause to other tests
+    }
 
     @Test
     fun `retries without resolving the backfiller when the cache is locked`() = runTest {
@@ -121,5 +124,45 @@ class BackfillWorkerTest {
         assertTrue(entry.message.startsWith("backfill worker: retry"), entry.message)
         assertTrue(entry.message.contains("IllegalStateException"), entry.message)
         assertFalse(entry.message.contains("a@example.org"), entry.message)
+    }
+
+    // --- issue #393: debug-only fetch gate ------------------------------------------------------
+
+    @Test
+    fun `defers without resolving the backfiller when the fetch gate pauses backfill`() = runTest {
+        // Cache unlocked, so the ONLY reason to defer is the gate. (BuildConfig.DEBUG is true under
+        // testDebugUnitTest, so the gate branch is live.)
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        DebugFetchGate.pause(setOf(FetchScope.BACKFILL))
+
+        assertEquals(Result.retry(), worker().doWork())
+
+        // Same invariant as the cache-lock deferral: never resolve the DB-backed collaborator.
+        verify(exactly = 0) { lazyBackfiller.get() }
+        coVerify(exactly = 0) { backfiller.runBackfill(any()) }
+    }
+
+    @Test
+    fun `pausing only prefetch does NOT defer the backfill worker`() = runTest {
+        // The worker gate honours BACKFILL only — a PREFETCH pause must leave history paging running.
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        coEvery { backfiller.runBackfill(any()) } returns false
+        DebugFetchGate.pause(setOf(FetchScope.PREFETCH))
+
+        assertEquals(Result.success(), worker().doWork())
+
+        coVerify(exactly = 1) { backfiller.runBackfill(any()) }
+    }
+
+    @Test
+    fun `logs a deferred breadcrumb when the fetch gate pauses backfill`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        DebugFetchGate.pause(setOf(FetchScope.BACKFILL))
+
+        worker().doWork()
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('I', entry.level)
+        assertEquals("backfill deferred: fetch-gate paused", entry.message)
     }
 }

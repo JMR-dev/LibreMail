@@ -359,6 +359,10 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/di/**",
     // --- src/debug cold-open probe (issue #221) ---
     "**/data/local/coldopen/**",
+    // --- src/debug fetch-gate receiver (issue #393): a BroadcastReceiver that only runs on-device
+    // --- (adb-driven), covered by an instrumented test, never packaged into a release build. Its
+    // --- pure collaborators DebugFetchGate/FetchScope stay IN scope (unit-tested by DebugFetchGateTest).
+    "**/debug/FetchGateReceiver*",
 )
 
 // Classes = the debug variant's compiled Kotlin (AGP 9 built-in Kotlin output), with the generated
