@@ -79,34 +79,42 @@ priority_rules:
     conditions:
       - label = P0
     priority: 10000
+    allow_checks_interruption: true
   - name: p1
     conditions:
       - label = P1
     priority: 9000
+    allow_checks_interruption: true
   - name: p2
     conditions:
       - label = P2
     priority: 8000
+    allow_checks_interruption: true
   - name: p3
     conditions:
       - label = P3
     priority: 7000
+    allow_checks_interruption: true
   - name: p4
     conditions:
       - label = P4
     priority: 6000
+    allow_checks_interruption: true
   - name: p5
     conditions:
       - label = P5
     priority: 5000
+    allow_checks_interruption: true
   - name: p6
     conditions:
       - label = P6
     priority: 4000
+    allow_checks_interruption: true
   - name: p7
     conditions:
       - label = P7
     priority: 3000
+    allow_checks_interruption: true
   - name: p8
     conditions:
       - label = P8
