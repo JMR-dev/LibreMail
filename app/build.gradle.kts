@@ -322,8 +322,8 @@ val jacocoNonJvmTestableSurface = listOf(
     // (#379) — now JVM-covered.
     // LockScreen converted to a Robolectric JVM Compose test (#377) — now JVM-covered.
     "**/AppLockGateHost*",
-    "**/FolderDrawer*",
-    "**/MailboxScreen*",
+    // FolderDrawer & MailboxScreen (the Paging 3 mailbox list + folder drawer) converted to
+    // Robolectric JVM Compose tests (#383) — now JVM-covered.
     // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
     // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
     "**/ReaderScreen*",
