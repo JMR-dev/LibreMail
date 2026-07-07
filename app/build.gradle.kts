@@ -147,6 +147,12 @@ android {
     }
 
     testOptions {
+        // Robolectric-backed Compose UI unit tests (issue #373) need the merged Android resources
+        // (drawables, strings, the compiled resource table) on the JVM unit-test classpath so
+        // `stringResource(...)` and Material3 theming resolve without an emulator. Off by default in
+        // AGP; JVM tests that don't touch resources are unaffected.
+        unitTests.isIncludeAndroidResources = true
+
         // Gradle Managed Devices define the per-API E2E matrix as config-as-code: one virtual
         // device per supported Android version (a rolling ~7-year window, API 29 → latest stable).
         // Run the whole matrix with `./gradlew e2eGroupDebugAndroidTest`, or one level with e.g.
@@ -251,7 +257,14 @@ val jacocoGeneratedExcludes = listOf(
 // audit): unlike `jacocoGeneratedExcludes` above, none of this is generated code — it is hand-written
 // but structurally unreachable from a JVM unit test, so counting it against the metric just measures
 // how much Compose/framework glue exists rather than how well the logic is tested. Four buckets:
-//  1. Compose screen/component render code — only exercisable via a Compose UI test or an emulator.
+//  1. Compose screen/component render code. Historically only exercisable via an emulator, so it was
+//     excluded here. Issue #373 changes that: Robolectric runs the Android framework on the JVM, so a
+//     `createComposeRule()` test in the `test` source set now gives these files real JVM coverage
+//     without an emulator. This bucket therefore SHRINKS one screen at a time — each glob is deleted
+//     in the same PR that adds that screen's Robolectric JVM Compose test. AddAnotherAccountScreen was
+//     the first (see AddAnotherAccountScreenJvmTest) and has been removed below; the rest are tracked
+//     as per-area conversion tickets under #373. The coverage-floor re-ratchet is deferred until the
+//     whole conversion is done and stable (#373) — do NOT raise it in a conversion PR.
 //  2. Android framework entry points the OS instantiates directly (Activity/Service/Application/
 //     BackupAgent) rather than the app's own code constructing them.
 //  3. Hilt DI modules — `@Provides`/`@Binds` one-liners with no branching logic.
@@ -298,7 +311,7 @@ val jacocoNonJvmTestableSurface = listOf(
     "**/AppLockGateHost*",
     "**/FolderDrawer*",
     "**/MailboxScreen*",
-    "**/AddAnotherAccountScreen*",
+    // AddAnotherAccountScreen converted to a Robolectric JVM Compose test (#373) — now JVM-covered.
     "**/BatteryOptimizationScreen*",
     "**/ContactsAccessScreen*",
     "**/LicenseScreen*",
@@ -408,6 +421,45 @@ tasks.named("check") {
     dependsOn("jacocoTestCoverageVerification")
 }
 
+// --- Robolectric android-all offline resolution (issue #373) ------------------------------------
+// Robolectric runs the real Android framework on the JVM from a large `android-all-instrumented`
+// jar. By default it resolves that jar LAZILY AT TEST TIME by downloading it from Maven Central
+// (org.robolectric.internal.dependency.MavenDependencyResolver -> MavenArtifactFetcher). That
+// runtime download is unreliable on CI runners and failed the JVM Compose PoC in CI with
+// `java.lang.AssertionError at MavenArtifactFetcher ... Caused by: java.io.IOException` ("Failed to
+// fetch maven artifact"). Fix: resolve the jar through Gradle instead — reliable, cached, and
+// persisted by the CI Gradle cache, using the same repositories as every other dependency — then
+// hand it to Robolectric in OFFLINE mode so it never touches the network at test time.
+//
+// A DEDICATED resolvable configuration (deliberately NOT testImplementation/testRuntimeOnly) keeps
+// the ~200 MB instrumented framework jar OFF the JVM unit-test classpath: it must be loaded only by
+// Robolectric's sandbox classloader, never flattened onto the app's test classpath where it would
+// collide with the stub `android.jar`. `syncRobolectricAndroidAll` stages the resolved jar under
+// its Maven filename (android-all-instrumented-<version>.jar) — exactly what Robolectric's
+// LocalDependencyResolver looks up as <artifactId>-<version>.jar — and the two system properties
+// below switch Robolectric onto that offline directory (see LegacyDependencyResolver). Every
+// Robolectric test pins @Config(sdk = 36) (app/src/test/resources/robolectric.properties), so the
+// single sdk=36 jar covers them all; a test on a different SDK must add that android-all version to
+// this configuration too. The offline properties are inert for non-Robolectric JVM tests.
+val robolectricAndroidAll: Configuration = configurations.create("robolectricAndroidAll") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+val robolectricDepsDir = layout.buildDirectory.dir("robolectric-android-all")
+
+val syncRobolectricAndroidAll = tasks.register<Sync>("syncRobolectricAndroidAll") {
+    description = "Stages Robolectric's android-all-instrumented jar for offline resolution (issue #373)."
+    from(robolectricAndroidAll)
+    into(robolectricDepsDir)
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(syncRobolectricAndroidAll)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricDepsDir.get().asFile.absolutePath)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -467,6 +519,24 @@ dependencies {
     testImplementation(libs.androidx.paging.testing)
     // The real org.json for unit tests (android.jar ships a stubbed, no-op version).
     testImplementation("org.json:json:20231013")
+
+    // Robolectric-backed JVM Compose UI tests (issue #373): Robolectric runs the Android framework
+    // on the JVM so `createComposeRule()` can drive composables without an emulator, bringing screen
+    // render code into the JaCoCo JVM-testable surface. The Compose test artifacts come from the same
+    // BOM as the app (aligned versions) and reuse the ui-test-junit4 / ui-test-manifest aliases the
+    // androidTest source set already declares — here in `test` (JVM), not `androidTest`. Robolectric
+    // sources Android's real org.json from its sandbox, so it does not clash with the stub-replacing
+    // org.json above (that is for the plain, non-Robolectric JVM tests).
+    testImplementation(libs.robolectric)
+    // The android-all-instrumented framework jar Robolectric loads into its sandbox — resolved via
+    // Gradle and staged for offline use by syncRobolectricAndroidAll above so no flaky test-time
+    // download happens in CI (issue #373). On its own dedicated configuration, NOT the test
+    // classpath — see that block for why. The artifact has no transitive dependencies (verified from
+    // its POM), so it resolves to exactly the one staged jar.
+    "robolectricAndroidAll"(libs.robolectric.android.all.instrumented)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
