@@ -319,15 +319,12 @@ val jacocoNonJvmTestableSurface = listOf(
     // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
     // Robolectric JVM Compose tests (#376) — now JVM-covered.
     "**/DraftsScreen*",
-    "**/LockScreen*",
+    // LockScreen converted to a Robolectric JVM Compose test (#377) — now JVM-covered.
     "**/AppLockGateHost*",
     "**/FolderDrawer*",
     "**/MailboxScreen*",
-    // AddAnotherAccountScreen converted to a Robolectric JVM Compose test (#373) — now JVM-covered.
-    "**/BatteryOptimizationScreen*",
-    "**/ContactsAccessScreen*",
-    "**/LicenseScreen*",
-    "**/OnboardingWelcomeScreen*",
+    // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
+    // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
     "**/OutboxScreen*",
     "**/ReaderScreen*",
     "**/ProblemReportsScreen*",
