@@ -39,6 +39,18 @@
 #    * The single required status check stays "CI passed" — the exact `name:` of the
 #      `ci-passed` job in .github/workflows/ci.yml. NOT "ci-passed". A wrong name means
 #      PRs queue but never merge.
+#    * IN-PLACE CHECKS, not speculative draft-PR checks. GitHub's strict
+#      `required_status_checks` ruleset (require-branches-up-to-date) rejects
+#      speculative checks outright — Mergify surfaced this as a "Configuration not
+#      compatible with `required_status_checks` ruleset rule" check on #422. The fix
+#      (per Mergify: docs.mergify.com/merge-queue/rules) is to make Mergify validate
+#      each PR IN PLACE, on the real PR branch, which requires ALL THREE of:
+#        (a) `merge_queue.max_parallel_checks: 1` (below),
+#        (b) every `queue_rules[].batch_size: 1` (below), and
+#        (c) `queue_rules.default.merge_conditions` IDENTICAL (same conditions, same
+#            order) to `merge_protections_settings.auto_merge_conditions` — i.e. no
+#            "two-step CI" where the conditions that queue a PR differ from the
+#            conditions that merge it. Do not let these two lists drift apart.
 
 # ---------------------------------------------------------------------------
 # queue_rules — how a queued PR is validated and merged.
@@ -46,16 +58,25 @@
 queue_rules:
   - name: default
     # Final merge gate. Merge ONLY when the single required context is green (the exact
-    # same check branch protection requires), the PR is not a draft, has no merge
-    # conflicts, and is not flagged `broken`. NOTE: branch protection requires 0
+    # same check branch protection requires), the PR targets `main`, is not a draft, has
+    # no merge conflicts, and is not flagged `broken`. NOTE: branch protection requires 0
     # approvals here (the active repository ruleset sets required_approving_review_count
     # = 0), so there is deliberately NO `#approved-reviews-by` condition — adding one
     # would wedge the solo-maintainer flow, where nobody can approve their own PR.
+    #
+    # MUST stay IDENTICAL (same conditions, same order) to
+    # `merge_protections_settings.auto_merge_conditions` below. That equality is what
+    # lets Mergify validate PRs with IN-PLACE checks instead of speculative draft-PR
+    # checks — required for compatibility with the strict require-up-to-date ruleset
+    # (see the HARD INVARIANTS note at the top of this file). If this list and
+    # `auto_merge_conditions` ever diverge, Mergify's ruleset-compatibility check will
+    # flag it again.
     merge_conditions:
-      - check-success = CI passed
+      - base = main
       - -draft
       - -conflict
       - label != broken
+      - check-success = CI passed
     # SERIAL: exactly one PR per merge. No batching (Phase 2 / #410). One merge commit
     # per PR, which is what lets require-up-to-date stay literally ON.
     batch_size: 1
@@ -161,6 +182,10 @@ priority_rules:
 # "CI passed". Mergify also auto-reads GitHub branch protection (the required "CI passed"
 # check + require-up-to-date) and injects it as a merge condition, so the GitHub gate is
 # enforced on top of queue_rules.merge_conditions.
+#
+# This list MUST stay IDENTICAL (same conditions, same order) to
+# `queue_rules.default.merge_conditions` above — see the note there and the IN-PLACE
+# CHECKS hard invariant at the top of this file.
 # ---------------------------------------------------------------------------
 merge_protections_settings:
   auto_merge_conditions:
