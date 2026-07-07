@@ -73,7 +73,10 @@ class MailSyncerTest {
     }
 
     @After
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        unmockkAll()
+        DebugFetchGate.reset() // the gate is a process-global object; don't leak a pause to other tests
+    }
 
     /** The IMAP client of the most recently built [syncer], for verifying the fetch window size. */
     private lateinit var lastImapClient: ImapClient
@@ -226,6 +229,22 @@ class MailSyncerTest {
 
         assertEquals(0, result.getOrNull()) // header sync still ran and succeeded
         coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+    }
+
+    // --- issue #393: debug-only fetch gate ------------------------------------------------------
+
+    @Test
+    fun `a paused prefetch gate skips prefetch while the header sync still runs`() = runTest {
+        val repo = mockk<MailRepository>(relaxed = true)
+        DebugFetchGate.pause(setOf(FetchScope.PREFETCH))
+
+        // ALWAYS + healthy battery: without the gate this WOULD prefetch, so the gate is the only cause.
+        val result = syncer(FetchPolicy.ALWAYS, repo).syncFolder("acct", "INBOX")
+
+        assertEquals(0, result.getOrNull()) // header sync still ran and succeeded
+        coVerify { lastImapClient.fetchRecent(any(), "INBOX", any()) } // headers still fetched
+        coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+        assertTrue(logBuffer.snapshot().any { it.message == "prefetch skipped: fetch-gate paused" })
     }
 
     @Test

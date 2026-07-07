@@ -107,6 +107,7 @@ class MailBackfillerTest {
     fun tearDown() {
         greenMail.stop()
         unmockkAll()
+        DebugFetchGate.reset() // the gate is a process-global object; don't leak a pause to other tests
     }
 
     private fun params() = ImapConnectionParams(
@@ -232,6 +233,23 @@ class MailBackfillerTest {
         // #89 gates only the aggressive body/attachment prefetch; history headers keep paging in.
         assertEquals(60, distinctCachedUids().size, "header paging itself is not battery-gated")
         coVerify(exactly = 0) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+    }
+
+    // --- issue #393: debug-only fetch gate ------------------------------------------------------
+
+    @Test
+    fun `a paused prefetch gate skips body prefetch but still pages history headers`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+        DebugFetchGate.pause(setOf(FetchScope.PREFETCH))
+
+        // ALWAYS + healthy battery: without the gate this WOULD prefetch, so the gate is the only cause.
+        backfiller(AccountSettings("acct"), fetchPolicy = FetchPolicy.ALWAYS).runBackfill()
+
+        // The gate stops only the body/attachment prefetch; the history headers still page in.
+        assertEquals(60, distinctCachedUids().size, "header paging itself is not gated")
+        coVerify(exactly = 0) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+        assertTrue(logBuffer.snapshot().any { it.message == "prefetch skipped: fetch-gate paused" })
     }
 
     @Test

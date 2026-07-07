@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.libremail.BuildConfig
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
 import org.libremail.data.local.toDomain
@@ -166,6 +167,14 @@ class MailSyncer @Inject constructor(
      * and is cancellable between messages so an IDLE renewal stops it promptly.
      */
     private suspend fun prefetchIfEnabled(account: Account, folder: String) {
+        // Debug-only fetch gate (issue #393): a test harness pauses proactive body prefetch so a later
+        // open does a genuine uncached fetch. Header sync above already ran, so mail still arrives; the
+        // skipped prefetch is filled in lazily on open, exactly as the low-battery pause behaves. Compiled
+        // out of release (BuildConfig.DEBUG is a compile-time false, so R8 drops the branch).
+        if (BuildConfig.DEBUG && DebugFetchGate.isPaused(FetchScope.PREFETCH)) {
+            AppLog.i(TAG, "prefetch skipped: fetch-gate paused")
+            return
+        }
         val shouldPrefetch = SyncResourcePolicy.shouldPrefetchContent(
             policy = settingsRepository.fetchPolicy(),
             unmetered = { context.isActiveNetworkUnmetered() },
