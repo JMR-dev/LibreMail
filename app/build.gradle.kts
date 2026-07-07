@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.util.Properties
@@ -212,6 +213,20 @@ jacoco {
     toolVersion = libs.versions.jacoco.get()
 }
 
+// The Robolectric-backed JVM Compose UI tests (#373) load the classes-under-test through
+// Robolectric's sandbox classloader, which presents them to the JaCoCo agent WITHOUT a code-source
+// location. JaCoCo skips no-location classes by default, so on-the-fly coverage for every composable
+// exercised only by a Robolectric test would silently record as zero — the file would be removed
+// from `jacocoNonJvmTestableSurface` yet contribute nothing but missed lines, dragging the bundle
+// ratio DOWN instead of up. `isIncludeNoLocationClasses = true` makes the agent keep that coverage;
+// `jdk.internal.*` is excluded because instrumenting those JDK classes breaks under JDK 17+.
+tasks.withType<Test>().configureEach {
+    configure<JacocoTaskExtension> {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
 // Unit-test coverage (issue #192). Two tasks share ONE scoping so they can never measure different
 // surfaces: `jacocoTestReport` (XML+HTML under build/reports/jacoco/jacocoTestReport/) and
 // `jacocoTestCoverageVerification` (the no-regression gate, further down). Both read the exec data
@@ -297,33 +312,34 @@ val jacocoGeneratedExcludes = listOf(
 // every `*ViewModel*`.
 val jacocoNonJvmTestableSurface = listOf(
     // --- Compose UI render code: one glob per screen/component file (see the exceptions above) ---
+    // LibreMailApp KEPT excluded (#384, the acceptable exception): the composable is a real NavHost whose
+    // non-onboarding start destinations call hiltViewModel(), and standing the graph up needs owners a
+    // plain JVM compose rule can't surface — so graph-level nav stays on the instrumented OnboardingFlowTest.
+    // Its JVM-tractable parts (LibreMailBottomBar, StartupCrashPrompt, the cold-start hold guards) ARE
+    // exercised by LibreMailAppJvmTest, but the file's compiled facade (LibreMailAppKt) stays excluded.
     "**/LibreMailApp*",
-    "**/AccountPickerScreen*",
-    "**/AppPasswordSetupScreen*",
-    "**/ManualSetupScreen*",
-    "**/ComposeScreen*",
-    "**/ColorSwatch*",
-    "**/FontPicker*",
-    "**/FontSizePicker*",
-    "**/ParagraphAlignmentControl*",
-    "**/DraftsScreen*",
-    "**/LockScreen*",
-    "**/AppLockGateHost*",
-    "**/FolderDrawer*",
-    "**/MailboxScreen*",
-    // AddAnotherAccountScreen converted to a Robolectric JVM Compose test (#373) — now JVM-covered.
-    "**/BatteryOptimizationScreen*",
-    "**/ContactsAccessScreen*",
-    "**/LicenseScreen*",
-    "**/OnboardingWelcomeScreen*",
-    "**/OutboxScreen*",
-    "**/ReaderScreen*",
-    "**/ProblemReportsScreen*",
-    "**/AccountSettingsScreen*",
-    "**/SettingsScreen*",
-    "**/SettingsComponents*",
-    "**/SignatureEditScreen*",
-    "**/SignaturesScreen*",
+    // AccountPickerScreen, AppPasswordSetupScreen & ManualSetupScreen converted to Robolectric JVM
+    // Compose tests (#378) — now JVM-covered.
+    // ComposeScreen (the email editor) converted to a Robolectric JVM Compose test (#382) — now
+    // JVM-covered.
+    // ColorSwatch(Row), FontPicker, FontSizePicker & ParagraphAlignmentControl converted to
+    // Robolectric JVM Compose tests (#376) — now JVM-covered.
+    // DraftsScreen, OutboxScreen & ProblemReportsScreen converted to Robolectric JVM Compose tests
+    // (#379) — now JVM-covered.
+    // LockScreen converted to a Robolectric JVM Compose test (#377) — now JVM-covered.
+    // AppLockGateHost converted to a Robolectric JVM Compose test (#384) — now JVM-covered.
+    // FolderDrawer & MailboxScreen (the Paging 3 mailbox list + folder drawer) converted to
+    // Robolectric JVM Compose tests (#383) — now JVM-covered.
+    // AddAnotherAccountScreen (#373) plus the onboarding welcome/license and contacts/battery steps
+    // (#377) converted to Robolectric JVM Compose tests — now JVM-covered.
+    // ReaderScreen converted to a Robolectric JVM Compose test (#381) — now JVM-covered. Its HTML body
+    // renders through HtmlBody, a hardened WebView that Robolectric can only present as a non-rendering
+    // shadow, so ReaderScreenJvmTest asserts the chrome (top bar, star/delete/reply actions, attachment
+    // accordion) and the loading/plain-text/empty/error/remote-images-banner branches — never the
+    // WebView's rendered HTML. HtmlBody.kt stays in scope covered by HtmlBodyTest/InlineImageResolverTest.
+    // SettingsScreen (+ ContactAutocompleteRow), AccountSettingsScreen, SettingsComponents (SwitchRow/
+    // ClickRow/RadioRow/RetentionSection), SignaturesScreen & SignatureEditScreen converted to
+    // Robolectric JVM Compose tests (#380) — now JVM-covered.
     // CacheEncryptionGate.kt (issue #359/#367 fail-closed encryption gate) is pure render: the gate
     // composable, its blank cover, the error screen, and the ephemeral report-review screen — no plain
     // top-level logic. Spelled out to "...GateKt*" (the file's compiled facade class), NOT the bare

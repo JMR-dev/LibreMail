@@ -43,6 +43,56 @@ env:
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
 
 jobs:
+  # Path-filter gate (issue #399): a cheap first job that decides whether the heavy E2E matrix
+  # (`e2e` + `e2e-preview`, ~10 emulator jobs) needs to run for this change. Test-only / docs /
+  # dev-script PRs then skip E2E and merge on the fast gate (unit + static) instead of queuing
+  # behind the emulator matrix. The `ci-passed` gate below is rewritten to treat an INTENTIONAL
+  # E2E skip as a pass while still blocking a real E2E failure/cancel or a broken filter.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    # dorny/paths-filter lists a pull request's changed files via the GitHub API (no checkout),
+    # which needs pull-requests: read on top of the workflow-default contents: read.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # 'true' -> run the E2E matrix; 'false' -> skip it (only for test-only/docs/script PRs).
+      e2e_needed: ${{ steps.decide.outputs.e2e_needed }}
+    steps:
+      - name: Filter changed paths (pull requests only)
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          # predicate-quantifier: 'every' makes the `skippable` filter true ONLY when EVERY changed
+          # file matches one of these safe patterns. We invert it below (e2e_needed = NOT skippable),
+          # so ANY file outside this small allow-list — app/src/main, app/src/androidTest,
+          # app/build.gradle.kts, root build.gradle*/settings.gradle*, gradle/** (incl. the version
+          # catalog & wrapper), gradle.properties, app/schemas, app/proguard-rules.pro, another
+          # workflow, .github/scripts, … — forces the E2E matrix to run. That is the conservative
+          # "err toward running E2E / default to true if unsure" rule: the skip list is an explicit
+          # allow-list of things that provably cannot affect app runtime or instrumented tests,
+          # never a guess about what is unsafe.
+          predicate-quantifier: 'every'
+          filters: |
+            skippable:
+              - 'app/src/test/**'
+              - '**/*.md'
+              - 'docs/**'
+              - 'scripts/**'
+              - '.claude/**'
+      - name: Decide whether the E2E matrix is needed
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ steps.filter.outputs.skippable }}" = "true" ]; then
+            echo "e2e_needed=false" >> "$GITHUB_OUTPUT"
+            echo "E2E matrix SKIPPED: every changed file is under a test-only / docs / script / .claude path."
+          else
+            echo "e2e_needed=true" >> "$GITHUB_OUTPUT"
+            echo "E2E matrix NEEDED: build/runtime/instrumented paths changed, or this is not a pull_request (conservative default)."
+          fi
+
   # Runner-priority orchestration (traffic-control) has been EXTRACTED from this file.
   # The `traffic-control` job that used to run here first (ordering the heavy jobs below, which
   # each declared it as a `needs:` dependency) now lives VERBATIM in its own workflow at
@@ -340,6 +390,12 @@ jobs:
 
   e2e:
     name: E2E
+    # Path-filter gate (issue #399): gating the whole job means every matrix leg runs — or is
+    # skipped — together. On an intentional skip the `ci-passed` gate treats e2e's 'skipped'
+    # result as OK (a real failure/cancel still blocks). `needs: changes` waits only on the
+    # seconds-long filter job.
+    needs: changes
+    if: needs.changes.outputs.e2e_needed == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -544,6 +600,11 @@ jobs:
   # 37 into the main `e2e` matrix and delete this job.
   e2e-preview:
     name: E2E (API 37 preview)
+    # Path-filter gate (issue #399): runs or skips together with the `e2e` matrix. On an
+    # intentional skip the `ci-passed` gate treats e2e-preview's 'skipped' result as OK; a real
+    # failure/cancel still blocks. Both shard legs fan in under this one gated job.
+    needs: changes
+    if: needs.changes.outputs.e2e_needed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     # Sharded N=2 (docs/perf/api37-e2e-sharding-spike.md). The instrumented suite is split across
@@ -791,20 +852,45 @@ jobs:
     # `traffic-control` is intentionally NOT listed here — it has been extracted to its own
     # (mothballed/disabled) workflow, .github/workflows/traffic-control.yml, and the heavy jobs
     # below no longer depend on it, so it plays no part in this gate. The `traffic-control-tests`
-    # job (its pure-Python decision-core unit tests) IS a required input below. Treating a
-    # 'skipped'/'cancelled' required job as a gate failure keeps this fail-safe (blocks the
-    # merge rather than letting an untested change through).
-    needs: [traffic-control-tests, static-analysis, debug-build, unit-tests, e2e, e2e-preview]
+    # job (its pure-Python decision-core unit tests) IS a required input below.
+    #
+    # E2E path-filter (issue #399): `e2e` / `e2e-preview` are SKIPPED for test-only/docs/script
+    # PRs (see the `changes` job). A skip there is INTENTIONAL and must PASS, so — unlike the
+    # naive `contains(needs.*.result, 'skipped')` gate this replaces — 'skipped' is TOLERATED for
+    # those two jobs only. The gate stays fail-safe by BLOCKING on:
+    #   * changes           != success                 (a broken/failed filter never waves a PR through)
+    #   * traffic-control-tests / static-analysis / debug-build / unit-tests != success
+    #   * e2e               == failure OR cancelled     (a real E2E failure/cancel still blocks)
+    #   * e2e-preview       == failure OR cancelled
+    # i.e. e2e/e2e-preview may be ONLY 'success' or 'skipped'; every other required job must be
+    # 'success'. (If `changes` itself fails, e2e/e2e-preview skip — but `changes != success`
+    # blocks the merge anyway, so a broken filter is never waved through.)
+    needs: [changes, traffic-control-tests, static-analysis, debug-build, unit-tests, e2e, e2e-preview]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify every required job succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+      # Always echo every required job's result (and the filter decision) for debuggability,
+      # before the gate step decides pass/fail.
+      - name: Echo required job results
         run: |
-          echo "Required CI jobs did not all succeed:"
+          echo "Required-job results (an E2E 'skipped' is allowed ONLY via the #399 path-filter):"
+          echo "  changes:               ${{ needs.changes.result }} (e2e_needed=${{ needs.changes.outputs.e2e_needed }})"
           echo "  traffic-control-tests: ${{ needs.traffic-control-tests.result }}"
-          echo "  static-analysis: ${{ needs.static-analysis.result }}"
-          echo "  debug-build: ${{ needs.debug-build.result }}"
-          echo "  unit-tests:  ${{ needs.unit-tests.result }}"
-          echo "  e2e:         ${{ needs.e2e.result }}"
-          echo "  e2e-preview: ${{ needs.e2e-preview.result }}"
+          echo "  static-analysis:       ${{ needs.static-analysis.result }}"
+          echo "  debug-build:           ${{ needs.debug-build.result }}"
+          echo "  unit-tests:            ${{ needs.unit-tests.result }}"
+          echo "  e2e:                   ${{ needs.e2e.result }}"
+          echo "  e2e-preview:           ${{ needs.e2e-preview.result }}"
+      - name: Fail unless every required job passed (an intentionally path-filtered E2E skip is OK)
+        if: >-
+          needs.changes.result != 'success' ||
+          needs.traffic-control-tests.result != 'success' ||
+          needs.static-analysis.result != 'success' ||
+          needs.debug-build.result != 'success' ||
+          needs.unit-tests.result != 'success' ||
+          needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled' ||
+          needs.e2e-preview.result == 'failure' || needs.e2e-preview.result == 'cancelled'
+        run: |
+          echo "::error::Required CI jobs did not all succeed (see the results above)."
+          echo "A path-filtered E2E 'skipped' is allowed; an E2E 'failure'/'cancelled', or any"
+          echo "non-success in changes/traffic-control-tests/static-analysis/debug-build/unit-tests, is not."
           exit 1
