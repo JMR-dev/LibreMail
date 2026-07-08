@@ -122,7 +122,7 @@ class MainActivity : FragmentActivity() {
     private fun handleIntent(intent: Intent) {
         if (!IntentHandledMarker.markIfUnhandled(intent)) return
         IntentComposeParser.parse(intent)?.let { pendingCompose.value = it }
-        NotificationIntents.messageId(intent)?.let { pendingOpenMessageId.value = it }
+        NotificationIntents.messageId(this, intent)?.let { pendingOpenMessageId.value = it }
     }
 }
 
