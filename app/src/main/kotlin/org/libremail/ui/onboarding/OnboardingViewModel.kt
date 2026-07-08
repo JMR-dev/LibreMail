@@ -2,6 +2,7 @@
 package org.libremail.ui.onboarding
 
 import android.content.Intent
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,6 +14,8 @@ import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.push.BatteryOptimizationManager
 import org.libremail.push.BatteryPromptDecision
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 
 /**
@@ -28,11 +31,18 @@ class OnboardingViewModel @Inject constructor(
     private val batteryOptimizationManager: BatteryOptimizationManager,
     private val contactsPermissionManager: ContactsPermissionManager,
     private val settingsRepository: SettingsRepository,
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    /** The id of the first account added this session, or null if none has been added yet. */
-    var firstAddedAccountId: String? = null
-        private set
+    /**
+     * The id of the first account added this session, or null if none has been added yet. Held in
+     * [SavedStateHandle] rather than a plain field so it survives process death: this ViewModel is
+     * scoped to the onboarding nav-graph back-stack entry, whose saved state is restored after a
+     * process kill. Without that, a kill mid-onboarding — e.g. the excursion to system battery
+     * settings on the opt-in step — would drop the id and finish onto the unfiltered mailbox instead
+     * of the first account's inbox, defeating #30.
+     */
+    val firstAddedAccountId: String? get() = savedStateHandle[KEY_FIRST_ACCOUNT_ID]
 
     private val _batteryPromptNeeded = MutableStateFlow<Boolean?>(null)
 
@@ -82,7 +92,9 @@ class OnboardingViewModel @Inject constructor(
     /** Records a freshly added account. Only the first one sticks — later adds don't overwrite it. */
     fun onAccountAdded(accountId: String) {
         if (firstAddedAccountId == null) {
-            firstAddedAccountId = accountId
+            savedStateHandle[KEY_FIRST_ACCOUNT_ID] = accountId
+            // PII-free: the id embeds the email, so reference it only via its non-reversible log ref.
+            AppLog.i(TAG, "onboarding recorded first account ${accountLogRef(accountId)}")
         }
     }
 
@@ -127,5 +139,12 @@ class OnboardingViewModel @Inject constructor(
     /** Record that the user has seen/acted on the contacts opt-in so onboarding won't ask again. */
     fun markContactsPromptHandled() {
         viewModelScope.launch { settingsRepository.setContactsPromptHandled(true) }
+    }
+
+    private companion object {
+        const val TAG = "OnboardingVM"
+
+        /** SavedStateHandle key for [firstAddedAccountId], persisted across process death (#308). */
+        const val KEY_FIRST_ACCOUNT_ID = "onboarding_first_added_account_id"
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -75,6 +76,7 @@ class BatteryOptimizationStepTest {
             BatteryOptimizationManager(context),
             ContactsPermissionManager(context),
             settingsRepository,
+            SavedStateHandle(),
         )
         onboarding.onAccountAdded(FIRST_ACCOUNT_ID)
 

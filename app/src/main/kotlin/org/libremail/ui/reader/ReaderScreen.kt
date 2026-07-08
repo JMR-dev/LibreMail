@@ -85,6 +85,7 @@ fun ReaderScreen(
     val noAppMessage = stringResource(R.string.attachment_no_app)
     val downloadFailedTemplate = stringResource(R.string.attachment_download_failed)
     val replyFailedMessage = stringResource(R.string.reader_reply_failed)
+    val starFailedMessage = stringResource(R.string.reader_star_failed)
 
     LaunchedEffect(state.deleted) {
         if (state.deleted) onBack()
@@ -105,6 +106,8 @@ fun ReaderScreen(
 
                 is ReaderEvent.ComposeFailed ->
                     snackbarHostState.showSnackbar(event.message ?: replyFailedMessage)
+
+                ReaderEvent.StarFailed -> snackbarHostState.showSnackbar(starFailedMessage)
             }
         }
     }

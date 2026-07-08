@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -70,7 +71,21 @@ fun AppLockGateHost(viewModel: AppLockViewModel = hiltViewModel(), content: @Com
     LaunchedEffect(uiState) { if (uiState is AppLockUiState.Unlocked) hasEverUnlocked = true }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (hasEverUnlocked) content()
+        // While the app is covered (Checking/Locked) the opaque LockCover hides the content visually and
+        // blocks its input, but the content stays in the composition (so its state survives a re-lock).
+        // Clear the covered subtree out of the semantics/accessibility tree so an accessibility service
+        // (e.g. TalkBack) can't traverse the occluded mailbox/compose nodes behind the cover (#308). When
+        // Unlocked the modifier is dropped, restoring the content's full semantics.
+        val contentCovered = uiState !is AppLockUiState.Unlocked
+        Box(
+            modifier = if (contentCovered) {
+                Modifier.fillMaxSize().clearAndSetSemantics { }
+            } else {
+                Modifier.fillMaxSize()
+            },
+        ) {
+            if (hasEverUnlocked) content()
+        }
 
         when (val state = uiState) {
             AppLockUiState.Unlocked -> Unit
