@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.libremail.data.local.CacheEncryptionUnavailableException
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.reporting.AppLog
 import org.libremail.reporting.RingLogBuffer
@@ -82,6 +83,23 @@ class PruneWorkerTest {
         coEvery { pruner.prune(any()) } throws IllegalStateException("boom")
 
         assertEquals(Result.retry(), worker().doWork())
+    }
+
+    @Test
+    fun `defers with a retry and a distinct breadcrumb when the encrypted cache is unavailable`() = runTest {
+        // Issue #359: the DB open fails because SQLCipher's native library is unavailable. It lands in the
+        // worker's runCatching (thrown inside prune()), so it already retried — but it must now log a
+        // DISTINCT breadcrumb so a debug report shows "encrypted cache unavailable" rather than a generic
+        // retry, and still never crash.
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        coEvery { pruner.prune(any()) } throws
+            CacheEncryptionUnavailableException(UnsatisfiedLinkError("SQLiteConnection.nativeOpen"))
+
+        assertEquals(Result.retry(), worker().doWork())
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('W', entry.level)
+        assertTrue(entry.message.startsWith("prune deferred: encrypted cache unavailable"), entry.message)
     }
 
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------

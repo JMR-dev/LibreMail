@@ -19,6 +19,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.libremail.data.attachment.AttachmentUriGrants
+import org.libremail.data.local.CacheEncryptionUnavailableException
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.AccountEntity
@@ -137,6 +138,21 @@ class SendWorkerTest {
         verify(exactly = 0) { lazyAccount.get() }
         verify(exactly = 0) { lazyConnection.get() }
         verify(exactly = 0) { lazyGrants.get() }
+    }
+
+    @Test
+    fun `defers with a retry when the encrypted cache is unavailable, without crashing`() = runTest {
+        // Cache unlocked (setUp), so the worker resolves its Lazy DB deps and reads the outbox; that first
+        // DB access (Room's deferred cache open) throws because SQLCipher's native library is unavailable
+        // on this device (issue #359). It is OUTSIDE any per-message runCatching, so without the guard it
+        // would escape doWork — the guard turns it into a soft retry with a PII-free breadcrumb.
+        coEvery { outboxDao.getAll() } throws
+            CacheEncryptionUnavailableException(UnsatisfiedLinkError("SQLiteConnection.nativeOpen"))
+
+        assertEquals(Result.retry(), worker().doWork())
+
+        val messages = logBuffer.snapshot().map { it.message }
+        assertTrue(messages.any { it.startsWith("deferred: encrypted cache unavailable") }, "messages=$messages")
     }
 
     @Test
