@@ -361,6 +361,7 @@ class MailSyncConcurrencyTest {
             mailRepository = mockk(relaxed = true),
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = AccountThrottleGate(),
+            interactiveGate = InteractiveImapGate(),
         )
     }
 
