@@ -33,10 +33,15 @@ object RichTextEditing {
         return content.copy(spans = (otherKinds + updated).sortedBy { it.start })
     }
 
-    /** Links [[start], [end]) to [url], replacing any links that overlap the range. */
+    /**
+     * Links [[start], [end]) to [url]. A link that only partially overlaps the range keeps its
+     * non-overlapping remainder — the same split [toggleStyle]/[subtractRange] does for spans — instead
+     * of being dropped whole, so relinking part of a longer link no longer silently un-links the rest
+     * of it (#298). A link fully inside the range is replaced outright.
+     */
     fun applyLink(content: RichTextContent, start: Int, end: Int, url: String): RichTextContent {
         if (start >= end || url.isBlank()) return content
-        val kept = content.links.filter { it.end <= start || it.start >= end }
+        val kept = subtractLinkRange(content.links, start, end)
         return content.copy(links = (kept + RichLink(start, end, url)).sortedBy { it.start })
     }
 
@@ -217,6 +222,17 @@ private fun subtractRange(spans: List<RichSpan>, start: Int, end: Int): List<Ric
         else -> buildList {
             if (span.start < start) add(span.copy(end = start))
             if (span.end > end) add(span.copy(start = end))
+        }
+    }
+}
+
+/** Links analogue of [subtractRange]: drops the [[start], [end]) slice of each link, keeping the rest. */
+private fun subtractLinkRange(links: List<RichLink>, start: Int, end: Int): List<RichLink> = links.flatMap { link ->
+    when {
+        link.end <= start || link.start >= end -> listOf(link)
+        else -> buildList {
+            if (link.start < start) add(link.copy(end = start))
+            if (link.end > end) add(link.copy(start = end))
         }
     }
 }

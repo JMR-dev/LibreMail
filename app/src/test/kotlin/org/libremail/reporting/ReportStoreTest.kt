@@ -112,6 +112,29 @@ class ReportStoreTest {
     }
 
     @Test
+    fun `save leaves no temporary file behind (atomic write renames it into place)`() {
+        val store = newStore()
+
+        store.save(report("a"))
+
+        // The write-and-rename temp must not linger: only the final ".json" remains on disk (#298).
+        assertEquals(listOf("a.json"), tempFolder.root.listFiles()?.map { it.name }.orEmpty())
+    }
+
+    @Test
+    fun `a stray temp file from an interrupted write is never scanned as a report`() {
+        // A process death mid-write leaves a ".json.tmp" file, never a torn ".json". scan() filters on
+        // ".json", so the orphan is ignored and a valid report saved alongside still lists cleanly — the
+        // old in-place write could instead leave a truncated ".json" that scan() silently dropped (#298).
+        File(tempFolder.root, "torn.json.tmp").writeText("{ half-written")
+        val store = newStore()
+
+        store.save(report("valid"))
+
+        assertEquals(listOf("valid"), store.reports.value.map { it.id })
+    }
+
+    @Test
     fun `purgeOlderThan deletes reports strictly older than the cutoff`() {
         val store = newStore()
         store.save(report("old", createdAt = 1_000L))

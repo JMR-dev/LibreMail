@@ -99,14 +99,24 @@ private fun providerLabel(account: Account): String = when (account.authType) {
     AuthType.PASSWORD_IMAP -> imapProviderLabel(account.imap.host)
 }
 
+/**
+ * Buckets an IMAP host to a coarse provider by matching brand tokens at DNS-label boundaries rather
+ * than as raw substrings, so a custom domain that merely contains a brand name — e.g.
+ * `mail.notgmail.example` — is no longer mislabeled (here it would have read as Gmail) (#298). The
+ * short, common tokens (`me`/`mac`/`live`) match only as a registrable-domain suffix, never as a bare
+ * label, so an innocent `me.company.example` doesn't read as iCloud either.
+ */
 private fun imapProviderLabel(host: String): String {
     val h = host.lowercase()
+    val labels = h.split('.')
+    fun hasLabel(vararg brands: String) = brands.any { it in labels }
+    fun hasDomain(vararg domains: String) = domains.any { h == it || h.endsWith(".$it") }
     return when {
-        "gmail" in h || "googlemail" in h -> "Gmail"
-        "yahoo" in h -> "Yahoo"
-        "icloud" in h || "me.com" in h || "mac.com" in h -> "iCloud"
-        "outlook" in h || "office365" in h || "hotmail" in h || "live.com" in h -> "Outlook"
-        "aol" in h -> "AOL"
+        hasLabel("gmail", "googlemail") -> "Gmail"
+        hasLabel("yahoo") -> "Yahoo"
+        hasLabel("icloud") || hasDomain("me.com", "mac.com") -> "iCloud"
+        hasLabel("outlook", "office365", "hotmail") || hasDomain("live.com") -> "Outlook"
+        hasLabel("aol") -> "AOL"
         else -> "Other"
     }
 }
