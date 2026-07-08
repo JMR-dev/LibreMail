@@ -39,6 +39,14 @@ object Routes {
     const val ONBOARDING_LICENSE = "onboarding/license"
     const val ONBOARDING_WELCOME = "onboarding/welcome"
     const val ONBOARDING_PICKER = "onboarding/picker"
+
+    // Pre-auth interstitial shown when the user picks Outlook during onboarding (#411): new
+    // personal outlook.com accounts ship with IMAP OFF by default, so OAuth can succeed while the
+    // IMAP AUTHENTICATE step later fails. This screen asks the user to confirm IMAP is on and links
+    // Microsoft's help/settings pages before its bottom "Sign in" button continues the existing
+    // Outlook OAuth flow. Onboarding-only; the standalone "Add account" picker still launches auth
+    // inline (the reactive complement for that path is #390).
+    const val ONBOARDING_OUTLOOK_IMAP = "onboarding/outlook_imap"
     const val ONBOARDING_MANUAL = "onboarding/manual"
     const val ONBOARDING_ADD_ANOTHER = "onboarding/add_another"
 
