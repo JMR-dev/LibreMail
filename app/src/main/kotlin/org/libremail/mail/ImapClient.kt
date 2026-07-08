@@ -5,6 +5,7 @@ import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
 import jakarta.mail.Message
+import jakarta.mail.MessagingException
 import jakarta.mail.Multipart
 import jakarta.mail.Part
 import jakarta.mail.Session
@@ -103,6 +104,16 @@ data class ReplyContext(
 class ImapClient internal constructor(
     private val reuseConnections: Boolean,
     private val reuseIdleTimeoutMillis: Long = DEFAULT_REUSE_IDLE_TIMEOUT_MS,
+    /**
+     * Reports whether the folder's already-open IMAP connection advertises the UIDPLUS extension (RFC
+     * 4315), which gates the targeted `UID EXPUNGE` vs. the plain-EXPUNGE fallback in [expungeTargeted]
+     * (issue #319). Reads the capability from the folder's own protocol so it never opens a second
+     * connection + LOGIN mid-operation — preserving the one-connection-per-batch invariant of issues
+     * #125/#295. Defaults to the real probe ([probeUidPlusCapability]); the internal constructor lets a
+     * test inject a fixed value, because GreenMail always advertises UIDPLUS and so cannot exercise the
+     * no-UIDPLUS fallback path on its own.
+     */
+    private val supportsUidPlus: (IMAPFolder) -> Boolean = ::probeUidPlusCapability,
 ) {
 
     /**
@@ -432,17 +443,61 @@ class ImapClient internal constructor(
     }
 
     /**
-     * Permanently removes exactly [messages] — which the caller has already flagged `\Deleted` — with a
-     * **targeted** UID EXPUNGE (RFC 4315, [IMAPFolder.expunge]). Deliberately never the untargeted
-     * [Folder.expunge], which expunges *every* `\Deleted`-flagged message in [mailbox] — including ones
-     * a second client, Gmail, or a partial earlier move left flagged — the data-loss bug in issue #295.
-     * Every folder this client opens is an [IMAPFolder], so the cast holds in production and under
-     * GreenMail. The server must advertise UIDPLUS (Gmail, Outlook, and GreenMail do); on one that does
-     * not, Angus raises "UID EXPUNGE not supported" here rather than silently falling back to the
-     * unrelated-mail-destroying untargeted expunge — a loud failure is the correct, safe outcome.
+     * Permanently removes exactly [messages] — which the caller has already flagged `\Deleted` — using a
+     * **targeted** UID EXPUNGE (RFC 4315, [IMAPFolder.expunge]) whenever the server advertises UIDPLUS
+     * (Gmail, Outlook, and GreenMail do). That never touches other `\Deleted`-flagged mail in [mailbox]
+     * — ones a second client, Gmail, or a partial earlier move left flagged — the data-loss bug in
+     * issue #295.
+     *
+     * On a server **without** UIDPLUS the targeted UID EXPUNGE throws `UID EXPUNGE not supported`, which
+     * used to break delete/move entirely (issue #319). There we fall back to a plain, untargeted
+     * [Folder.expunge] — but **only** when it is provably safe, i.e. the messages we just flagged are the
+     * *only* `\Deleted` ones in [mailbox] ([countForeignDeletedMessages] is 0). A plain EXPUNGE removes
+     * **every** `\Deleted` message, so when unrelated `\Deleted` mail is present we refuse and fail loud
+     * rather than destroy mail the user never selected: there is no UIDPLUS-free way to expunge one
+     * specific UID while sparing the others (that capability is exactly what UIDPLUS provides), so
+     * preserving the issue-#295 invariant — never touch unrelated `\Deleted` mail — wins over completing
+     * the delete. Every folder this client opens is an [IMAPFolder], so the cast holds in production and
+     * under GreenMail.
      */
     private fun expungeTargeted(mailbox: Folder, messages: Array<Message>) {
-        (mailbox as IMAPFolder).expunge(messages)
+        val imapFolder = mailbox as IMAPFolder
+        if (supportsUidPlus(imapFolder)) {
+            imapFolder.expunge(messages)
+            return
+        }
+        val foreignDeleted = countForeignDeletedMessages(imapFolder, messages)
+        if (foreignDeleted == 0) {
+            AppLog.i(EXPUNGE_TAG, "server lacks UIDPLUS; no other \\Deleted mail present, using safe plain EXPUNGE")
+            imapFolder.expunge()
+        } else {
+            AppLog.w(
+                EXPUNGE_TAG,
+                "server lacks UIDPLUS and $foreignDeleted other \\Deleted message(s) present; " +
+                    "refusing plain EXPUNGE so unrelated mail is not destroyed",
+            )
+            throw MessagingException(
+                "Cannot honor a targeted expunge: the server does not support UIDPLUS and other deleted " +
+                    "messages are present, so a plain EXPUNGE would remove mail that was not selected",
+            )
+        }
+    }
+
+    /**
+     * Counts messages in [mailbox] flagged `\Deleted` that are **not** among [targets] (the ones the
+     * caller just flagged). Used only on the no-UIDPLUS fallback in [expungeTargeted] to decide whether a
+     * plain EXPUNGE is safe — it is safe exactly when this is 0. Fetches FLAGS + UID for the whole folder,
+     * acceptable on this rare legacy-server path.
+     */
+    private fun countForeignDeletedMessages(mailbox: IMAPFolder, targets: Array<Message>): Int {
+        val targetUids = targets.mapTo(HashSet()) { mailbox.getUID(it) }
+        val all = mailbox.messages
+        val profile = FetchProfile().apply {
+            add(FetchProfile.Item.FLAGS)
+            add(UIDFolder.FetchProfileItem.UID)
+        }
+        mailbox.fetch(all, profile)
+        return all.count { it.isSet(Flags.Flag.DELETED) && mailbox.getUID(it) !in targetUids }
     }
 
     /**
@@ -719,6 +774,7 @@ class ImapClient internal constructor(
         const val TIMEOUT_MS = "15000"
         const val TAG = "LibreMailIdle"
         const val PERF_TAG = "ImapPerf"
+        const val EXPUNGE_TAG = "ImapExpunge"
         const val NANOS_PER_MS = 1_000_000L
 
         // A reused connection unused for this long is idle-evicted (issue #357 Part 2): long enough to
@@ -727,6 +783,21 @@ class ImapClient internal constructor(
         const val DEFAULT_REUSE_IDLE_TIMEOUT_MS = 5 * 60_000L
     }
 }
+
+/** The IMAP UIDPLUS extension name (RFC 4315); its presence is what makes a targeted `UID EXPUNGE` legal. */
+private const val CAP_UIDPLUS = "UIDPLUS"
+
+/**
+ * Whether [folder]'s already-open connection advertises the IMAP UIDPLUS extension (RFC 4315) — the
+ * capability a targeted `UID EXPUNGE` requires. Reads it from the folder's own protocol via
+ * [IMAPFolder.doCommand] (the capabilities parsed at LOGIN; no extra round trip), reusing the open
+ * connection rather than borrowing a fresh store protocol — which would open a second connection + LOGIN
+ * mid-batch and defeat the reuse invariant of issue #125. Any read failure degrades to `false`, so the
+ * caller takes the safe plain-EXPUNGE fallback. The production default of [ImapClient.supportsUidPlus].
+ */
+private fun probeUidPlusCapability(folder: IMAPFolder): Boolean = runCatching {
+    folder.doCommand { protocol -> protocol.hasCapability(CAP_UIDPLUS) } as? Boolean
+}.getOrNull() ?: false
 
 /**
  * True when [part] is a user-facing downloadable attachment: its `Content-Disposition` is
