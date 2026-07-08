@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.data.settings
 
+import android.util.Log
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -8,12 +9,18 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.local.entity.SignatureEntity
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.RingLogBuffer
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -24,51 +31,70 @@ class SignatureRepositoryTest {
     private val dao = mockk<SignatureDao>(relaxed = true)
     private val repository = SignatureRepository(dao)
 
+    // delete() breadcrumbs a promotion via AppLog; android.util.Log is an unmocked stub in plain JVM
+    // tests, so mock it class-wide (mirrors MailRepositoryImplTest).
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.i(any(), any()) } returns 0
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
+
     private fun entity(id: String, isDefault: Boolean) =
         SignatureEntity(id, accountId = "acct", name = "N", contentHtml = "<p>x</p>", isDefault = isDefault)
 
     @Test
-    fun `the first signature for an account becomes its default`() = runTest {
-        coEvery { dao.countForAccount("acct") } returns 0
+    fun `create routes through the atomic first-default insert with the given fields`() = runTest {
+        // The first-becomes-default decision now lives in the DAO transaction (issue #313); the repository
+        // just forwards the new row (isDefault a placeholder) and returns its generated id.
         val saved = slot<SignatureEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        coEvery { dao.insertMakingFirstDefault(capture(saved)) } just Runs
 
-        repository.create("acct", "Work", "<p>hi</p>")
+        val id = repository.create("acct", "Work", "<p>hi</p>")
 
-        assertTrue(saved.captured.isDefault)
+        assertEquals("acct", saved.captured.accountId)
+        assertEquals("Work", saved.captured.name)
+        assertEquals("<p>hi</p>", saved.captured.contentHtml)
+        assertEquals(id, saved.captured.id)
+        assertFalse(saved.captured.isDefault, "the DAO decides the default flag, not the repository")
     }
 
     @Test
-    fun `later signatures are not made default`() = runTest {
-        coEvery { dao.countForAccount("acct") } returns 2
-        val saved = slot<SignatureEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
-
-        repository.create("acct", "Personal", "<p>hey</p>")
-
-        assertFalse(saved.captured.isDefault)
-    }
-
-    @Test
-    fun `deleting the default promotes the first remaining signature`() = runTest {
-        coEvery { dao.getById("s1") } returns entity("s1", isDefault = true)
-        coEvery { dao.firstForAccount("acct") } returns entity("s2", isDefault = false)
+    fun `delete routes through the atomic delete-and-promote`() = runTest {
+        coEvery { dao.deletePromotingDefault("s1") } returns null
 
         repository.delete("s1")
 
-        coVerify { dao.delete("s1") }
-        coVerify { dao.markDefault("s2") }
+        coVerify { dao.deletePromotingDefault("s1") }
     }
 
     @Test
-    fun `deleting a non-default signature promotes nothing`() = runTest {
-        coEvery { dao.getById("s2") } returns entity("s2", isDefault = false)
+    fun `deleting a default that promotes a replacement logs a breadcrumb`() = runTest {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        coEvery { dao.deletePromotingDefault("s1") } returns "s2"
+
+        repository.delete("s1")
+
+        assertTrue(
+            buffer.snapshot().any { it.message.contains("promoted a replacement default signature") },
+            "the promotion is recorded for a debug report",
+        )
+    }
+
+    @Test
+    fun `deleting without a promotion logs nothing`() = runTest {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        coEvery { dao.deletePromotingDefault("s2") } returns null
 
         repository.delete("s2")
 
-        coVerify { dao.delete("s2") }
-        coVerify(exactly = 0) { dao.firstForAccount(any()) }
-        coVerify(exactly = 0) { dao.markDefault(any()) }
+        assertFalse(
+            buffer.snapshot().any { it.message.contains("promoted a replacement default") },
+        )
     }
 
     @Test

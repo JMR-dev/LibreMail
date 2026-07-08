@@ -16,7 +16,6 @@ import io.mockk.unmockkAll
 import io.mockk.unmockkObject
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
@@ -137,7 +136,7 @@ class DatabaseProvisionerInstrumentedTest {
 
         // The keyed open the provisioner reported must actually succeed on real SQLCipher (no crash).
         openEncrypted().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }
@@ -164,7 +163,7 @@ class DatabaseProvisionerInstrumentedTest {
         // whatever ABI / page size this device or emulator image uses.
         openEncrypted().apply {
             messageDao().insertNew(listOf(message("acct:1")))
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
         assertTrue("the fresh cache was created in SQLCipher (encrypted) form", DatabaseEncryption.isEncrypted(dbFile))
@@ -182,7 +181,7 @@ class DatabaseProvisionerInstrumentedTest {
         assertEquals(CacheOpenMode.Plaintext, mode)
         assertFalse("the cache must be decrypted so the unkeyed open works", DatabaseEncryption.isEncrypted(dbFile))
         openPlaintext().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }
@@ -198,7 +197,7 @@ class DatabaseProvisionerInstrumentedTest {
         assertEquals(CacheOpenMode.Plaintext, mode)
         assertFalse("a plaintext-with-encryption-off start converts nothing", DatabaseEncryption.isEncrypted(dbFile))
         openPlaintext().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }

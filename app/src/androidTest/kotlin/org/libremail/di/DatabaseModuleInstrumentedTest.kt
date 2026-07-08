@@ -15,7 +15,6 @@ import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -138,7 +137,7 @@ class DatabaseModuleInstrumentedTest {
             // ever opened this genuinely-encrypted file with the plaintext framework helper instead of
             // SQLCipher's, this would throw (a plaintext driver can't parse SQLCipher ciphertext) rather
             // than return the seeded row.
-            assertEquals(listOf("acct:1"), database.messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", database.messageDao().getById("acct:1")?.id)
         } finally {
             database.close()
         }
@@ -157,7 +156,7 @@ class DatabaseModuleInstrumentedTest {
         val database = DatabaseModule.provideDatabase(context, provisioner())
         try {
             database.messageDao().insertNew(listOf(message("acct:1")))
-            assertEquals(listOf("acct:1"), database.messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", database.messageDao().getById("acct:1")?.id)
         } finally {
             database.close()
         }
@@ -182,7 +181,7 @@ class DatabaseModuleInstrumentedTest {
         val database = DatabaseModule.provideDatabase(context, provisioner())
         try {
             assertThrows(Throwable::class.java) {
-                runBlocking { database.messageDao().observeSummaries().first() }
+                runBlocking { database.messageDao().getById("acct:1") }
             }
         } finally {
             runCatching { database.close() }
