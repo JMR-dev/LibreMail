@@ -143,7 +143,14 @@ class WorkerCacheLockDeferralInstrumentedTest {
                 appContext: Context,
                 workerClassName: String,
                 workerParameters: WorkerParameters,
-            ) = BackfillWorker(appContext, workerParameters, lazyBackfiller, cacheGuard)
+            ) = BackfillWorker(
+                appContext,
+                workerParameters,
+                lazyBackfiller,
+                cacheGuard,
+                // A real pacer (#356); never reached here — the run defers on the locked cache first.
+                BackfillPacer(InteractiveImapGate()),
+            )
         }
 
     private companion object {

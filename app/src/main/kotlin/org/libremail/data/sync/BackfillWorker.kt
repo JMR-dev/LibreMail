@@ -29,6 +29,9 @@ class BackfillWorker @AssistedInject constructor(
     // fails fast instead of parking this thread on an unsatisfiable passphrase await (mirrors SyncWorker).
     private val backfiller: Lazy<MailBackfiller>,
     private val cacheGuard: EncryptedCacheGuard,
+    // Proactive pacing (#356): bounds this run's slices and cools down between them. A lightweight
+    // in-process singleton (no DB graph), so it is safe to inject eagerly alongside the cache-lock gate.
+    private val pacer: BackfillPacer,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -49,11 +52,14 @@ class BackfillWorker @AssistedInject constructor(
             return Result.retry()
         }
         return runCatching {
-            // Chain bounded slices back-to-back while history remains, so a large mailbox isn't limited
-            // to one slice per periodic run. runBackfill() returns true while any folder still has pages
-            // left; isStopped lets WorkManager end a long run gracefully (the periodic schedule resumes).
+            // Chain bounded slices while history remains, but PACE them (#356): a large mailbox reports
+            // moreWork=true forever, so an un-paced loop would page flat-out for the whole run and keep the
+            // account's IMAP session saturated (the background load that starves interactive opens, #355).
+            // BackfillPacer cools down between slices and caps the slices per run, then defers to the 30-min
+            // periodic cadence; isStopped ends a long run gracefully (WorkManager stop), and the cooldown is
+            // a cancellable delay so a stop is never blocked. runBackfill() returns true while pages remain.
             val mailBackfiller = backfiller.get()
-            while (mailBackfiller.runBackfill() && !isStopped) { /* page the next slice */ }
+            pacer.runPaced(shouldContinue = { !isStopped }, slice = { mailBackfiller.runBackfill() })
         }.fold(
             onSuccess = {
                 AppLog.i(TAG, "backfill worker: success")

@@ -31,9 +31,11 @@ import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.data.security.PassphraseSession
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
+import org.libremail.data.sync.BackfillPacer
 import org.libremail.data.sync.BackfillWorker
 import org.libremail.data.sync.DebugFetchGate
 import org.libremail.data.sync.FetchScope
+import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailBackfiller
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -173,7 +175,14 @@ class FetchGateReceiverInstrumentedTest {
                 appContext: Context,
                 workerClassName: String,
                 workerParameters: WorkerParameters,
-            ) = BackfillWorker(appContext, workerParameters, lazyBackfiller, cacheGuard)
+            ) = BackfillWorker(
+                appContext,
+                workerParameters,
+                lazyBackfiller,
+                cacheGuard,
+                // A real pacer (#356); the gate-deferral tests never reach it.
+                BackfillPacer(InteractiveImapGate()),
+            )
         }
 
     private companion object {
