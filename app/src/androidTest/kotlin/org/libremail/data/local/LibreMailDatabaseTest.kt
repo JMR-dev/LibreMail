@@ -2,6 +2,7 @@
 package org.libremail.data.local
 
 import android.content.Context
+import androidx.paging.PagingSource
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -16,6 +18,7 @@ import org.junit.runner.RunWith
 import org.libremail.data.local.entity.AttachmentEntity
 import org.libremail.data.local.entity.FolderEntity
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.local.entity.MessageSummary
 
 /**
  * Schema-behavior tests on a fresh in-memory database at the current version. The migration DDL
@@ -51,6 +54,12 @@ class LibreMailDatabaseTest {
         isRead = false,
         isStarred = false,
     )
+
+    /** Refreshes a [PagingSource] and returns the first loaded page's ids in order. */
+    private suspend fun PagingSource<Int, MessageSummary>.refreshIds(loadSize: Int = 20): List<String> {
+        val result = load(PagingSource.LoadParams.Refresh(key = null, loadSize = loadSize, placeholdersEnabled = false))
+        return (result as PagingSource.LoadResult.Page).data.map { it.id }
+    }
 
     @Test
     fun observeUnreadCountsAggregatesUnreadSyncedRowsPerAccountAndFolder() = runBlocking {
@@ -124,17 +133,17 @@ class LibreMailDatabaseTest {
         assertEquals(listOf("acct:1"), messageDao.getSyncedIds("acct", "INBOX"))
 
         messageDao.deleteSearchRows()
-        val remaining = messageDao.observeSummaries().first().map { it.id }
-        assertEquals(listOf("acct:1"), remaining)
+        assertEquals("the synced inbox row survives", "acct:1", messageDao.getById("acct:1")?.id)
+        assertNull("the transient search-only row is cleared", messageDao.getById("acct:2"))
     }
 
     @Test
-    fun observeSummariesReadsRowsWhoseBodiesExceedTheCursorWindow() = runBlocking {
+    fun pagedSummariesReadRowsWhoseBodiesExceedTheCursorWindow() = runBlocking {
         val messageDao = db.messageDao()
-        // Each body is larger than SQLite's shared (~2 MB) CursorWindow. The old list query did
-        // SELECT * and dragged these bodies through the window, overflowing it with
-        // "Couldn't read row … from CursorWindow" (issue #51). observeSummaries omits body, so the
-        // rows stay tiny and read fine.
+        // Each body is larger than SQLite's shared (~2 MB) CursorWindow. A `SELECT *` list query
+        // dragged these bodies through the window, overflowing it with "Couldn't read row … from
+        // CursorWindow" (issue #51). The paged mailbox projection omits body, so the rows stay tiny
+        // and read fine — asserted against the real production query (issue #124/#214).
         val hugeBody = "x".repeat(3 * 1024 * 1024)
         messageDao.insertNew(
             listOf(
@@ -143,7 +152,7 @@ class LibreMailDatabaseTest {
             ),
         )
 
-        val ids = messageDao.observeSummaries().first().map { it.id }.toSet()
+        val ids = messageDao.pagingUnifiedFolderSummaries("INBOX").refreshIds().toSet()
 
         assertEquals(setOf("acct:1", "acct:2"), ids)
     }
@@ -194,9 +203,8 @@ class LibreMailDatabaseTest {
         // Reconciling the inbox must not touch other folders' rows (windowed reconcile; whole-inbox
         // window since these rows have uid 0).
         messageDao.deleteSyncedInWindowNotIn("acct", "INBOX", minWindowUid = 0, keepIds = listOf("acct:INBOX:1"))
-        assertEquals(
-            setOf("acct:INBOX:1", "acct:Archive:1"),
-            messageDao.observeSummaries().first().map { it.id }.toSet(),
-        )
+        assertEquals("the kept inbox row survives", "acct:INBOX:1", messageDao.getById("acct:INBOX:1")?.id)
+        assertNull("the reconciled-away inbox row is deleted", messageDao.getById("acct:INBOX:2"))
+        assertEquals("the other folder is untouched", "acct:Archive:1", messageDao.getById("acct:Archive:1")?.id)
     }
 }

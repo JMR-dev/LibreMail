@@ -98,10 +98,11 @@ class AccountDataMigrator @Inject constructor(
         private val TABLES = listOf("accounts", "credentials", "account_settings", "signatures")
 
         /**
-         * DDL for the account tables in [AccountDatabase] v1, copied verbatim from the exported Room
-         * schema (`schemas/org.libremail.data.local.AccountDatabase/1.json`). It MUST stay byte-for-byte
-         * identical to what Room generates for those entities, or Room silently accepts a subtly wrong
-         * schema (its identity check only compares the hash it writes, not the pre-existing tables).
+         * DDL for the account tables in [AccountDatabase] v2, copied verbatim from the exported Room
+         * schema (`schemas/org.libremail.data.local.AccountDatabase/2.json` — v2 added `accounts.sortOrder`,
+         * issue #164). It MUST stay byte-for-byte identical to what Room generates for those entities, or
+         * Room silently accepts a subtly wrong schema (its identity check only compares the hash it writes,
+         * not the pre-existing tables).
          * `AccountDataMigratorTest.migratorDdlMatchesExportedAccountDatabaseSchema` guards it against the
          * exported schema; `internal` only so that test can read it.
          */

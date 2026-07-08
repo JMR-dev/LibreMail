@@ -36,6 +36,13 @@ class PackageDirTests(unittest.TestCase):
             sdk.package_dir(root, "system-images;android-37.0;google_apis_ps16k;x86_64"),
             os.path.join(root, "system-images", "android-37.0", "google_apis_ps16k", "x86_64"),
         )
+        # The matrix e2e legs (#443) pre-install the google_apis/x86_64 image for their API level
+        # through this same installer, so a corrupt emulator/system-image zip is purged from the
+        # right dir on retry — assert that (non-ps16k) id maps correctly too.
+        self.assertEqual(
+            sdk.package_dir(root, "system-images;android-33;google_apis;x86_64"),
+            os.path.join(root, "system-images", "android-33", "google_apis", "x86_64"),
+        )
 
     def test_flat_ids_map_to_single_dir(self):
         root = os.path.join("opt", "sdk")

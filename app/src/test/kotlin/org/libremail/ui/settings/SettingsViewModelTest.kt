@@ -9,6 +9,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -108,6 +109,26 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `the disable-path reseal is dispatched off the main thread, not run inline on main`() = runTest(dispatcher) {
+        val databaseKeyStore = mockk<DatabaseKeyStore>(relaxed = true)
+        coEvery { databaseKeyStore.hasAuthSealedPassphrase() } returns true
+        val settingsRepository = mockk<SettingsRepository>(relaxed = true)
+        val vm = viewModel(databaseKeyStore = databaseKeyStore, settingsRepository = settingsRepository)
+        // Swap the pinned dispatcher for a queue-and-drain one (sharing the scheduler) so we can see
+        // that the blocking Keystore reseal is DISPATCHED off-main rather than run inline on Main's
+        // unconfined pass — the point of #308: no Keystore crypto on the main dispatcher.
+        vm.defaultDispatcher = StandardTestDispatcher(testScheduler)
+
+        vm.setAppLock(false)
+
+        // Dispatched to defaultDispatcher, so it has not run on the current (unconfined Main) pass...
+        coVerify(exactly = 0) { databaseKeyStore.sealWithMaster() }
+        advanceUntilIdle()
+        // ...only once that off-main dispatcher is drained.
+        coVerify(exactly = 1) { databaseKeyStore.sealWithMaster() }
+    }
+
+    @Test
     fun `disabling app-lock with no auth seal just drops the gate`() = runTest(dispatcher) {
         val databaseKeyStore = mockk<DatabaseKeyStore>(relaxed = true)
         coEvery { databaseKeyStore.hasAuthSealedPassphrase() } returns false
@@ -139,6 +160,10 @@ class SettingsViewModelTest {
             batteryOptimizationManager = mockk(relaxed = true),
             contactsPermissionManager = mockk(relaxed = true),
             syncScheduler = mockk(relaxed = true),
-        )
+        ).apply {
+            // Pin the off-main reseal dispatcher (#308) to the test scheduler so the disable path's
+            // withContext(defaultDispatcher) work is advanced deterministically by advanceUntilIdle().
+            defaultDispatcher = dispatcher
+        }
     }
 }

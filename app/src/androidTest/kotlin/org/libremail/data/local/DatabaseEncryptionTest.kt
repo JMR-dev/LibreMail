@@ -5,7 +5,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
@@ -56,7 +55,7 @@ class DatabaseEncryptionTest {
         DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
         assertTrue("file must not read as plaintext once encrypted", DatabaseEncryption.isEncrypted(dbFile))
         openEncrypted().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
 
@@ -64,7 +63,7 @@ class DatabaseEncryptionTest {
         DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
         assertFalse("file must be plaintext again after decrypt", DatabaseEncryption.isEncrypted(dbFile))
         openPlaintext().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }
@@ -105,7 +104,7 @@ class DatabaseEncryptionTest {
         DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
         assertTrue("the file stays encrypted", DatabaseEncryption.isEncrypted(dbFile))
         openEncrypted().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }
@@ -122,7 +121,29 @@ class DatabaseEncryptionTest {
 
         assertFalse(DatabaseEncryption.isEncrypted(dbFile))
         openPlaintext().apply {
-            assertEquals(listOf("acct:1"), messageDao().observeSummaries().first().map { it.id })
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
+            close()
+        }
+    }
+
+    @Test
+    fun conversionSweepsAStaleRollbackJournalSidecar() = runBlocking<Unit> {
+        openPlaintext().apply {
+            messageDao().insertNew(listOf(message("acct:1")))
+            close()
+        }
+        // A stray `-journal` left next to the file by an interrupted rollback-journal-mode session. The
+        // conversion runs in journal_mode = DELETE, so `-journal` is the sidecar that can actually linger
+        // (the pre-existing sweep only removed `-wal`/`-shm`) — issue #313.
+        val staleJournal = File(dbFile.parentFile, "$dbName-journal")
+        staleJournal.outputStream().use { it.write(0) }
+        assertTrue("precondition: a stale journal exists", staleJournal.exists())
+
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+
+        assertFalse("the conversion must sweep the stale -journal sidecar", staleJournal.exists())
+        openEncrypted().apply {
+            assertEquals("the data still round-trips", "acct:1", messageDao().getById("acct:1")?.id)
             close()
         }
     }

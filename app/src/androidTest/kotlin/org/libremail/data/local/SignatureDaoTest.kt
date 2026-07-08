@@ -150,4 +150,47 @@ class SignatureDaoTest {
         // clearDefault in setDefault only touches the target account; acct2's default is untouched.
         assertEquals("b1", dao.getDefault("acct2")?.id)
     }
+
+    @Test
+    fun insertMakingFirstDefaultMakesOnlyTheAccountsFirstSignatureDefault() = runBlocking {
+        insertAccount()
+        // The passed isDefault is a placeholder; the transaction decides it from the current count (#313).
+        dao.insertMakingFirstDefault(signature("s-1", "First", isDefault = false))
+        dao.insertMakingFirstDefault(signature("s-2", "Second", isDefault = true))
+
+        assertEquals(true, dao.getById("s-1")?.isDefault)
+        assertEquals(false, dao.getById("s-2")?.isDefault)
+        assertEquals("s-1", dao.getDefault("acct")?.id)
+    }
+
+    @Test
+    fun deletePromotingDefaultPromotesTheFirstRemainingWhenTheDefaultIsRemoved() = runBlocking {
+        insertAccount()
+        dao.upsert(signature("s-default", "Zeta", isDefault = true))
+        dao.upsert(signature("s-other", "alpha")) // name-first among the remaining rows
+
+        val promoted = dao.deletePromotingDefault("s-default")
+
+        assertEquals("s-other", promoted)
+        assertNull("the deleted default is gone", dao.getById("s-default"))
+        assertEquals("the first remaining becomes default", "s-other", dao.getDefault("acct")?.id)
+    }
+
+    @Test
+    fun deletePromotingDefaultPromotesNothingForANonDefaultOrTheLastRow() = runBlocking {
+        insertAccount()
+        dao.upsert(signature("s-default", "Default", isDefault = true))
+        dao.upsert(signature("s-plain", "Plain"))
+
+        // Deleting a non-default leaves the account's default untouched — nothing to promote.
+        assertNull(dao.deletePromotingDefault("s-plain"))
+        assertEquals("s-default", dao.getDefault("acct")?.id)
+
+        // Deleting the last (default) signature has no remaining row to promote.
+        assertNull(dao.deletePromotingDefault("s-default"))
+        assertNull(dao.getDefault("acct"))
+
+        // A missing id is a no-op.
+        assertNull(dao.deletePromotingDefault("absent"))
+    }
 }

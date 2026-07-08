@@ -2,9 +2,12 @@
 package org.libremail.ui.settings
 
 import android.content.Intent
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -12,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.libremail.R
 import org.libremail.contacts.ContactsPermissionManager
 import org.libremail.data.security.AppLockManager
@@ -62,6 +66,12 @@ class SettingsViewModel @Inject constructor(
     /** Whether this app is exempt from battery optimization ("Unrestricted"). */
     val batteryUnrestricted: StateFlow<Boolean> = _batteryUnrestricted.asStateFlow()
 
+    // Blocking Keystore/DataStore work on the app-lock disable path runs here — off the main
+    // dispatcher — mirroring AppLockViewModel's threading policy so the reseal never runs Keystore
+    // crypto on the main thread (#308). Injectable so unit tests can pin it to their scheduler.
+    @VisibleForTesting
+    internal var defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
+
     fun toggleAdvanced() = _advancedExpanded.update { !it }
 
     /** Persist the account order the user produced by dragging in Settings (issue #164). */
@@ -110,12 +120,18 @@ class SettingsViewModel @Inject constructor(
             // Reseal under the master key whenever an auth seal actually exists — gate on the seal, not
             // the encryptCache setting (a separate store that can already be off while the on-disk DB is
             // still auth-sealed). Do it BEFORE dropping the gate, or the next launch can't open the
-            // cache. If it fails, keep app-lock on rather than strand the passphrase.
-            if (databaseKeyStore.hasAuthSealedPassphrase()) {
-                if (runCatching { databaseKeyStore.sealWithMaster() }.isFailure) {
-                    _appLockMessage.value = R.string.app_lock_disable_failed
-                    return@update
+            // cache. If it fails, keep app-lock on rather than strand the passphrase. The Keystore/
+            // DataStore reseal is blocking crypto, so it runs off the main thread (#308).
+            val resealed = withContext(defaultDispatcher) {
+                if (databaseKeyStore.hasAuthSealedPassphrase()) {
+                    runCatching { databaseKeyStore.sealWithMaster() }.isSuccess
+                } else {
+                    true
                 }
+            }
+            if (!resealed) {
+                _appLockMessage.value = R.string.app_lock_disable_failed
+                return@update
             }
             settingsRepository.setAppLock(false)
         }

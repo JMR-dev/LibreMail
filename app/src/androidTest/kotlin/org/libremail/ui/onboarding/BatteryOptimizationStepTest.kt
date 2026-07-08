@@ -4,6 +4,7 @@ package org.libremail.ui.onboarding
 import android.app.Activity
 import android.app.Instrumentation
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Text
@@ -11,8 +12,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -26,6 +30,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.hamcrest.CoreMatchers.allOf
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,6 +68,25 @@ class BatteryOptimizationStepTest {
     }
 
     /**
+     * Disable device animations (as CI's emulator-runner does) so [BatteryOptimizationScreen] renders
+     * the reduced-motion static guide illustration (#174): the looping variant's infinite transition
+     * would otherwise never let Compose/Espresso `waitForIdle` settle on a local emulator that boots
+     * with animations on.
+     */
+    @Before
+    fun disableAnimations() {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        listOf(
+            "settings put global animator_duration_scale 0",
+            "settings put global window_animation_scale 0",
+            "settings put global transition_animation_scale 0",
+        ).forEach { command ->
+            ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command))
+                .use { it.readBytes() }
+        }
+    }
+
+    /**
      * Renders the "add another? → battery → inbox" tail with one account already added this session,
      * starting on the add-another prompt. [handled] seeds the persisted "prompt handled" flag so the
      * skip path can be exercised through the real repository.
@@ -75,6 +99,7 @@ class BatteryOptimizationStepTest {
             BatteryOptimizationManager(context),
             ContactsPermissionManager(context),
             settingsRepository,
+            SavedStateHandle(),
         )
         onboarding.onAccountAdded(FIRST_ACCOUNT_ID)
 
@@ -132,12 +157,15 @@ class BatteryOptimizationStepTest {
 
         composeTestRule.onNodeWithText(string(R.string.onboarding_add_another_no)).performClick()
 
-        // The battery opt-in step is shown...
+        // The battery opt-in step is shown, with the illustrated "Battery → Unrestricted" guide...
         waitForText(string(R.string.onboarding_battery_title))
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_title)).assertIsDisplayed()
+        composeTestRule
+            .onNodeWithContentDescription(string(R.string.onboarding_battery_animation_description))
+            .assertIsDisplayed()
 
         // ...and "Not now" continues to the inbox and records the prompt as handled (so it won't nag).
-        composeTestRule.onNodeWithText(string(R.string.onboarding_battery_not_now)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.onboarding_battery_not_now)).performScrollTo().performClick()
         waitForText(INBOX_MARKER)
         composeTestRule.onNodeWithText(INBOX_MARKER).assertIsDisplayed()
         composeTestRule.waitUntil(5_000) { runBlocking { settingsRepository.isBatteryPromptHandled() } }
@@ -157,7 +185,9 @@ class BatteryOptimizationStepTest {
             Intents.intending(hasAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS))
                 .respondWith(Instrumentation.ActivityResult(Activity.RESULT_OK, null))
 
-            composeTestRule.onNodeWithText(string(R.string.onboarding_battery_take_me)).performClick()
+            composeTestRule.onNodeWithText(string(R.string.onboarding_battery_take_me))
+                .performScrollTo()
+                .performClick()
 
             // Deep-links to *this app's* details screen (where Battery → Unrestricted lives).
             Intents.intended(
