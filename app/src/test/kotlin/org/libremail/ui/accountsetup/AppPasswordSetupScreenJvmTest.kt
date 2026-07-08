@@ -232,4 +232,21 @@ class AppPasswordSetupScreenJvmTest {
         assertTrue(openedUrls.contains(MailProvider.GMAIL.appPasswordHelpUrl))
         assertTrue(openedUrls.contains(MailProvider.GMAIL.twoFactorHelpUrl))
     }
+
+    @Test
+    fun imapDisabledPrompt_showsTheDialog_andGotItDismisses() {
+        // A wrong app password and "IMAP is off" both fail auth; the latter surfaces the actionable
+        // dialog (#390) instead of the generic snackbar, and "Got it" clears it via the view-model.
+        val vm = viewModel(
+            MailProvider.GMAIL,
+            AppPasswordForm(imapDisabledPrompt = ImapDisabledPrompt(brand = "Gmail", helpUrl = null)),
+        )
+        setContent(vm)
+
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_message, "Gmail")).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_dismiss)).performClick()
+
+        verify { vm.dismissImapDisabledPrompt() }
+    }
 }

@@ -15,6 +15,8 @@ import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
 import org.libremail.domain.model.normalizeEmailForAccountId
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 
 data class ManualSetupForm(
@@ -31,6 +33,11 @@ data class ManualSetupForm(
     val error: String? = null,
     /** Set alongside [SetupStatus.DONE]: the id of the account that was just added. */
     val addedAccountId: String? = null,
+    /**
+     * Set instead of [error] when the failure was specifically an "IMAP is disabled" rejection (#390):
+     * the screen shows the actionable [ImapDisabledDialog] rather than the generic error snackbar.
+     */
+    val imapDisabledPrompt: ImapDisabledPrompt? = null,
 ) {
     val isValid: Boolean
         get() = email.isNotBlank() && password.isNotBlank() && imapHost.isNotBlank() && smtpHost.isNotBlank()
@@ -41,6 +48,7 @@ class ManualSetupViewModel @Inject constructor(private val accountRepository: Ac
 
     private companion object {
         const val MAX_PORT_DIGITS = 5
+        const val TAG = "ManualSetupVM"
     }
 
     private val _form = MutableStateFlow(ManualSetupForm())
@@ -58,6 +66,9 @@ class ManualSetupViewModel @Inject constructor(private val accountRepository: Ac
     fun onSmtpSecurity(security: MailSecurity) = _form.update { it.copy(smtpSecurity = security) }
     fun toggleAdvanced() = _form.update { it.copy(advancedExpanded = !it.advancedExpanded) }
     fun consumeError() = _form.update { it.copy(error = null) }
+
+    /** Clears the "IMAP is disabled" prompt after the user acknowledges it (issue #390). */
+    fun dismissImapDisabledPrompt() = _form.update { it.copy(imapDisabledPrompt = null) }
 
     fun testAndSave() {
         val f = _form.value
@@ -79,16 +90,24 @@ class ManualSetupViewModel @Inject constructor(private val accountRepository: Ac
             _form.update { it.copy(status = SetupStatus.CONNECTING, error = null) }
             accountRepository.addImapAccount(account, f.password).fold(
                 onSuccess = { _form.update { it.copy(status = SetupStatus.DONE, addedAccountId = account.id) } },
-                onFailure = { e ->
-                    _form.update {
-                        it.copy(
-                            status = SetupStatus.IDLE,
-                            error =
-                            e.message ?: "Could not connect to the server",
-                        )
-                    }
-                },
+                onFailure = { e -> onAddFailure(e, account) },
             )
+        }
+    }
+
+    /**
+     * Routes a failed manual add: an "IMAP is disabled" rejection (recognised by server text; #390)
+     * gets the actionable prompt — provider-aware when the host maps to a known brand, e.g. a
+     * manually-configured Gmail account still links Gmail's enable-IMAP page — otherwise the generic
+     * error is kept.
+     */
+    private fun onAddFailure(e: Throwable, account: Account) {
+        val prompt = imapDisabledPromptFor(e, account, usedOAuth = false)
+        if (prompt != null) {
+            AppLog.i(TAG, "IMAP disabled on manual setup (${accountLogRef(account.id)}); prompting to enable IMAP")
+            _form.update { it.copy(status = SetupStatus.IDLE, imapDisabledPrompt = prompt, error = null) }
+        } else {
+            _form.update { it.copy(status = SetupStatus.IDLE, error = e.message ?: "Could not connect to the server") }
         }
     }
 }

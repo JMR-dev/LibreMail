@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -15,8 +16,11 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.test.espresso.intent.Intents
 import androidx.test.espresso.intent.matcher.IntentMatchers.hasAction
 import androidx.test.espresso.intent.matcher.IntentMatchers.hasData
+import androidx.test.espresso.intent.matcher.UriMatchers.hasHost
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import jakarta.mail.AuthenticationFailedException
 import org.hamcrest.CoreMatchers.allOf
+import org.hamcrest.CoreMatchers.equalTo
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -104,6 +108,44 @@ class AppPasswordSetupScreenTest {
                 .performClick()
 
             Intents.intended(allOf(hasAction(Intent.ACTION_VIEW), hasData(provider.appPasswordHelpUrl)))
+        } finally {
+            Intents.release()
+        }
+    }
+
+    /**
+     * When the connection test fails specifically because IMAP is disabled (Gmail's "not enabled for
+     * IMAP use"), the screen surfaces the actionable "turn on IMAP" dialog instead of a generic error,
+     * and its help link opens the provider's enable-IMAP page (#390). Driving the failure through a
+     * [FakeAccountRepository] exercises the real classification + dialog wiring end to end on device.
+     */
+    @Test
+    fun imapDisabledFailure_showsThePrompt_andHelpLinkOpensTheProviderPage() {
+        setContent(
+            repository = FakeAccountRepository(
+                result = Result.failure(
+                    AuthenticationFailedException("Your account is not enabled for IMAP use"),
+                ),
+            ),
+        )
+
+        composeTestRule.onNodeWithText(string(R.string.app_password_email)).performTextInput("me@gmail.com")
+        composeTestRule.onNodeWithText(string(R.string.app_password_field)).performTextInput("app-pw-1234")
+        composeTestRule.onNodeWithText(string(R.string.app_password_test_and_add)).performScrollTo().performClick()
+
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText(string(R.string.imap_disabled_title)).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_message, provider.displayName)).assertIsDisplayed()
+
+        Intents.init()
+        try {
+            Intents.intending(hasAction(Intent.ACTION_VIEW))
+                .respondWith(Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null))
+
+            composeTestRule.onNodeWithText(string(R.string.imap_disabled_help)).performClick()
+
+            Intents.intended(allOf(hasAction(Intent.ACTION_VIEW), hasData(hasHost(equalTo("support.google.com")))))
         } finally {
             Intents.release()
         }

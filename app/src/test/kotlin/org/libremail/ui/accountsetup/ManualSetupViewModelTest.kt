@@ -3,8 +3,12 @@ package org.libremail.ui.accountsetup
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
+import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -29,10 +33,22 @@ class ManualSetupViewModelTest {
     private val dispatcher = UnconfinedTestDispatcher()
 
     @Before
-    fun setUp() = Dispatchers.setMain(dispatcher)
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+        // The IMAP-disabled branch breadcrumbs via AppLog -> android.util.Log, a throwing stub under
+        // plain JVM tests. Mock it fully-qualified so this file never imports android.util.Log (which
+        // detekt's ForbiddenImport guard would flag).
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.d(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+    }
 
     @After
-    fun tearDown() = Dispatchers.resetMain()
+    fun tearDown() {
+        Dispatchers.resetMain()
+        unmockkAll()
+    }
 
     private fun filled(vm: ManualSetupViewModel) {
         vm.onEmail("  user@example.org  ")
@@ -182,6 +198,28 @@ class ManualSetupViewModelTest {
         assertEquals("Login failed", vm.form.value.error)
         assertEquals(SetupStatus.IDLE, vm.form.value.status)
         assertNull(vm.form.value.addedAccountId)
+    }
+
+    @Test
+    fun `testAndSave surfaces the enable-IMAP prompt for an IMAP-disabled rejection`() = runTest(dispatcher) {
+        val repo = mockk<AccountRepository>()
+        coEvery { repo.addImapAccount(any(), any()) } returns
+            Result.failure(AuthenticationFailedException("IMAP access is disabled for this account"))
+        val vm = ManualSetupViewModel(repo)
+        filled(vm) // imap.example.org: a generic host with no known brand
+
+        vm.testAndSave()
+
+        val prompt = vm.form.value.imapDisabledPrompt
+        assertNotEquals(null, prompt)
+        assertNull(prompt?.brand) // unknown host -> generic message, no help link
+        assertNull(prompt?.helpUrl)
+        assertNull(vm.form.value.error)
+        assertEquals(SetupStatus.IDLE, vm.form.value.status)
+        assertNull(vm.form.value.addedAccountId)
+
+        vm.dismissImapDisabledPrompt()
+        assertNull(vm.form.value.imapDisabledPrompt)
     }
 
     @Test
