@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.libremail.data.local.CacheEncryptionUnavailableException
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.reporting.AppLog
 import org.libremail.reporting.RingLogBuffer
@@ -80,6 +81,24 @@ class SyncWorkerTest {
         coEvery { mailSyncer.syncAll() } returns Result.failure(IllegalStateException("boom"))
 
         assertEquals(ListenableWorker.Result.retry(), worker().doWork())
+    }
+
+    // --- issue #359: headless tolerance when SQLCipher's native library is unavailable ------------
+
+    @Test
+    fun `defers with a retry when the encrypted cache is unavailable, without crashing`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        // The cache is unlocked, so the worker resolves MailSyncer; its first DB access (Room's deferred
+        // cache open) throws because SQLCipher's native library is unavailable on this device (issue #359).
+        // That open is OUTSIDE syncAll's own runCatching, so without the guard it would escape doWork.
+        coEvery { mailSyncer.syncAll() } throws
+            CacheEncryptionUnavailableException(UnsatisfiedLinkError("SQLiteConnection.nativeOpen"))
+
+        assertEquals(ListenableWorker.Result.retry(), worker().doWork())
+
+        val entry = logBuffer.snapshot().single()
+        assertEquals('W', entry.level)
+        assertTrue(entry.message.startsWith("deferred: encrypted cache unavailable"), entry.message)
     }
 
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------

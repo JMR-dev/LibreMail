@@ -320,6 +320,62 @@ class MessageDaoTest {
         assertEquals("cached-2", two.body)
     }
 
+    /**
+     * The batched [MessageDao.updateHeaderContents] must write byte-for-byte the same row as the per-row
+     * [MessageDao.updateHeaderContent] it replaces on the backfill path (issue #322): the same refreshed
+     * fields and casefold columns, and the same untouched flags/body/membership. Two rows seeded
+     * identically and refreshed by the two paths with the same values must end up identical.
+     */
+    @Test
+    fun updateHeaderContentsWritesTheSameResultAsThePerRowUpdate() = runBlocking {
+        dao.insertNew(
+            listOf(
+                message("perRow", isStarred = true, body = "cached"),
+                message("batch", isStarred = true, body = "cached"),
+            ),
+        )
+
+        // Old path: the single-row update. New path: the batch, carrying identical field values.
+        dao.updateHeaderContent(
+            id = "perRow",
+            sender = "Refreshed",
+            senderEmail = "refreshed@example.org",
+            subject = "Fresh",
+            timestampMillis = 9_000L,
+            uid = 7L,
+        )
+        dao.updateHeaderContents(
+            listOf(
+                message(
+                    "batch",
+                    sender = "Refreshed",
+                    senderEmail = "refreshed@example.org",
+                    subject = "Fresh",
+                    timestampMillis = 9_000L,
+                    uid = 7L,
+                ),
+            ),
+        )
+
+        // Every stored column — refreshed and preserved alike — matches between the two paths.
+        val perRow = requireNotNull(dao.getById("perRow"))
+        val batch = requireNotNull(dao.getById("batch"))
+        assertEquals(perRow.copy(id = "id"), batch.copy(id = "id"))
+    }
+
+    /** An empty batch is a no-op — issue #322's empty-batch boundary at the DAO transaction level. */
+    @Test
+    fun updateHeaderContentsWithAnEmptyBatchWritesNothing() = runBlocking {
+        dao.insertNew(listOf(message("acct:1", subject = "Original", isRead = true, uid = 5)))
+
+        dao.updateHeaderContents(emptyList())
+
+        val row = requireNotNull(dao.getById("acct:1"))
+        assertEquals("Original", row.subject)
+        assertEquals(5L, row.uid)
+        assertTrue(row.isRead)
+    }
+
     @Test
     fun markSyncedPromotesSearchOnlyRowsIntoTheFolder() = runBlocking {
         dao.insertNew(

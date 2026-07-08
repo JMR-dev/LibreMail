@@ -80,7 +80,9 @@ class MailConnectionFactoryTest {
     fun `a missing password credential is a hard error`() = runTest {
         coEvery { credentialStore.loadSecret("acct") } returns null
 
-        assertFailsWith<IllegalStateException> { factory().imapParamsFor(passwordAccount) }
+        // A typed MissingCredentialsException (#403), not a bare IllegalStateException, so the IMAP IDLE
+        // watcher can catch it specifically and defer on the account-add write race.
+        assertFailsWith<MissingCredentialsException> { factory().imapParamsFor(passwordAccount) }
     }
 
     @Test
@@ -170,6 +172,6 @@ class MailConnectionFactoryTest {
     fun `a missing OAuth credential is a hard error`() = runTest {
         coEvery { credentialStore.loadSecret(outlookAccount.id) } returns null
 
-        assertFailsWith<IllegalStateException> { factory().graphTokenFor(outlookAccount) }
+        assertFailsWith<MissingCredentialsException> { factory().graphTokenFor(outlookAccount) }
     }
 }

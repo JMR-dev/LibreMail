@@ -24,6 +24,8 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.AccountRepository
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -53,10 +55,17 @@ class AccountRepositoryImpl @Inject constructor(
 
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
         val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
+        // Persist the credential BEFORE inserting the account row (#403). Both LibreMailApplication's
+        // push collector and IdleService.reconcileWatchers react to the *accounts* table; committing the
+        // secret first guarantees any watcher that observes the new row can already resolve it, instead
+        // of firing a transient "No stored credentials" IDLE miss on every account add. The credentials
+        // table has no foreign key to accounts, so it can be written first; account_settings does (FK),
+        // so ensureDefaults must still follow the account row.
+        credentialStore.saveSecret(account.id, password)
         accountDao.insertAtEnd(account.toEntity())
         accountSettingsRepository.ensureDefaults(account.id)
-        credentialStore.saveSecret(account.id, password)
         mailNotifier.ensureAccountChannel(account)
+        AppLog.i(TAG, "IMAP account added ${accountLogRef(account.id)}; credential persisted before account row")
         syncScheduler.syncNow()
         syncScheduler.backfillNow() // start caching this account's full history in the background (#12)
         folders.map { it.fullName }
@@ -69,10 +78,15 @@ class AccountRepositoryImpl @Inject constructor(
     ): Result<List<String>> = runCatching {
         val account = Account.outlook(email)
         val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
+        // Persist the durable AuthState BEFORE the account row (#403) — same ordering rationale as
+        // addImapAccount: the push watchers observe the accounts table, so the secret must be committed
+        // first for the newly-observed account to resolve. account_settings' FK still needs the row, so
+        // ensureDefaults follows the insert.
+        credentialStore.saveSecret(account.id, authStateJson)
         accountDao.insertAtEnd(account.toEntity())
         accountSettingsRepository.ensureDefaults(account.id)
-        credentialStore.saveSecret(account.id, authStateJson)
         mailNotifier.ensureAccountChannel(account)
+        AppLog.i(TAG, "Outlook account added ${accountLogRef(account.id)}; credential persisted before account row")
         syncScheduler.syncNow()
         syncScheduler.backfillNow() // start caching this account's full history in the background (#12)
         folders.map { it.fullName }
@@ -112,5 +126,9 @@ class AccountRepositoryImpl @Inject constructor(
     override suspend fun resetBackfillProgress(accountId: String?) {
         if (accountId != null) backfillProgressDao.deleteForAccount(accountId) else backfillProgressDao.deleteAll()
         syncScheduler.backfillNow()
+    }
+
+    private companion object {
+        const val TAG = "AccountRepository"
     }
 }

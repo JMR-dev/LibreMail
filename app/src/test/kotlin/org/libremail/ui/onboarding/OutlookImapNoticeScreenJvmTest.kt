@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-package org.libremail.ui.accountsetup
+package org.libremail.ui.onboarding
 
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -9,8 +9,11 @@ import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -32,7 +35,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.R
-import org.libremail.domain.model.MailProvider
+import org.libremail.ui.accountsetup.AccountSetupUiState
+import org.libremail.ui.accountsetup.AccountSetupViewModel
+import org.libremail.ui.accountsetup.SetupStatus
 import org.libremail.ui.theme.LibreMailTheme
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -40,23 +45,22 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Robolectric JVM Compose test (#378, umbrella #373) for the account-vendor picker. Mirrors the
- * instrumented [AccountPickerScreenTest] on the JVM via the v2 `createComposeRule()` under
- * [RobolectricTestRunner] — no emulator — so [AccountPickerScreen] counts toward JaCoCo's
- * JVM-testable surface (this file is dropped from `jacocoNonJvmTestableSurface`). The instrumented
- * `AccountPickerScreenTest` stays as the on-device E2E, and it (with Espresso-Intents) remains the
- * coverage for the actual Outlook browser launch the JVM rule cannot safely surface — here the
- * Outlook tap is driven through a mocked [AccountSetupViewModel] so no real activity ever starts.
+ * Robolectric JVM Compose test for the pre-auth Outlook IMAP-enablement notice (#411). Drives the
+ * real [OutlookImapNoticeScreen] on the JVM via the v2 `createComposeRule()` under
+ * [RobolectricTestRunner] — no emulator — so the screen counts toward JaCoCo's JVM-testable surface.
+ * The instrumented [OutlookImapNoticeScreenTest] stays as the on-device E2E (with Espresso-Intents it
+ * owns the real browser/AppAuth launch this JVM rule cannot safely surface).
  *
- * [AccountSetupViewModel] is mocked (its own logic is covered by [AccountSetupViewModelTest]); this
- * exercises the screen's render, routing, and the busy/error/done state branches.
+ * [AccountSetupViewModel] is mocked (its own logic is covered by `AccountSetupViewModelTest`); a
+ * recording [UriHandler] captures the help/settings link launches and a no-op
+ * [ActivityResultRegistry] lets the "Sign in" launcher register/launch without a real activity.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-// A tall display so the whole scrolling provider list fits Robolectric's small default viewport,
-// keeping every row on-screen for assertIsDisplayed / performClick without scrolling.
+// A tall display so the whole scrolling column fits Robolectric's small default viewport, keeping
+// every control on-screen for assertIsDisplayed / performClick without scrolling.
 @Config(sdk = [36], qualifiers = "+w411dp-h2000dp")
-class AccountPickerScreenJvmTest {
+class OutlookImapNoticeScreenJvmTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
@@ -72,10 +76,7 @@ class AccountPickerScreenJvmTest {
         override val lifecycle: Lifecycle get() = registry
     }
 
-    /**
-     * A no-op registry so [AccountPickerScreen]'s `rememberLauncherForActivityResult` (the Outlook
-     * sign-in launcher) can register and launch on the JVM without surfacing a real activity/browser.
-     */
+    /** A no-op registry so the "Sign in" launcher can register/launch without a real activity. */
     private val noopRegistryOwner = object : ActivityResultRegistryOwner {
         override val activityResultRegistry = object : ActivityResultRegistry() {
             override fun <I, O> onLaunch(
@@ -89,6 +90,19 @@ class AccountPickerScreenJvmTest {
         }
     }
 
+    /** Records outbound link launches so the screen's help/settings links are exercised. */
+    private val openedUrls = mutableListOf<String>()
+    private val recordingUriHandler = object : UriHandler {
+        override fun openUri(uri: String) {
+            openedUrls.add(uri)
+        }
+    }
+
+    /** A handler that always fails, to drive the "couldn't open your browser" snackbar path. */
+    private val throwingUriHandler = object : UriHandler {
+        override fun openUri(uri: String): Unit = throw ActivityNotFoundException("no browser")
+    }
+
     private fun viewModel(state: AccountSetupUiState = AccountSetupUiState()): AccountSetupViewModel {
         val vm = mockk<AccountSetupViewModel>(relaxed = true)
         every { vm.state } returns MutableStateFlow(state)
@@ -97,24 +111,20 @@ class AccountPickerScreenJvmTest {
 
     private fun setContent(
         viewModel: AccountSetupViewModel,
+        uriHandler: UriHandler = recordingUriHandler,
         onBack: () -> Unit = {},
         onAccountAdded: (String) -> Unit = {},
-        onPickProvider: (MailProvider) -> Unit = {},
-        onManualSetup: () -> Unit = {},
-        onPickOutlook: (() -> Unit)? = null,
     ) {
         composeTestRule.setContent {
             CompositionLocalProvider(
                 LocalLifecycleOwner provides resumedOwner,
                 LocalActivityResultRegistryOwner provides noopRegistryOwner,
+                LocalUriHandler provides uriHandler,
             ) {
                 LibreMailTheme(darkTheme = false, dynamicColor = false) {
-                    AccountPickerScreen(
+                    OutlookImapNoticeScreen(
                         onBack = onBack,
                         onAccountAdded = onAccountAdded,
-                        onPickProvider = onPickProvider,
-                        onManualSetup = onManualSetup,
-                        onPickOutlook = onPickOutlook,
                         viewModel = viewModel,
                     )
                 }
@@ -123,82 +133,62 @@ class AccountPickerScreenJvmTest {
     }
 
     @Test
-    fun listsOutlook_everyAppPasswordVendor_andOther() {
+    fun rendersImapQuestion_bothLinks_andSignIn() {
         setContent(viewModel())
 
-        composeTestRule.onNodeWithText(string(R.string.account_setup_subtitle)).assertIsDisplayed()
-        composeTestRule.onNodeWithText(string(R.string.account_setup_outlook)).assertIsDisplayed()
-        MailProvider.entries.forEach { provider ->
-            composeTestRule.onNodeWithText(provider.displayName).assertIsDisplayed()
-        }
-        composeTestRule.onNodeWithText(string(R.string.account_setup_other)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_question)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_body)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_help)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_settings)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_sign_in)).assertIsDisplayed()
     }
 
     @Test
-    fun tappingAppPasswordProvider_invokesOnPickProvider() {
-        var picked: MailProvider? = null
-        setContent(viewModel(), onPickProvider = { picked = it })
+    fun tappingHelpLink_opensTheMicrosoftArticle() {
+        setContent(viewModel())
 
-        composeTestRule.onNodeWithText(MailProvider.GMAIL.displayName).performClick()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_help)).performClick()
 
-        assertEquals(MailProvider.GMAIL, picked)
+        assertTrue(
+            "Help link must open a support.microsoft.com article",
+            openedUrls.any { it.startsWith("https://support.microsoft.com/") },
+        )
     }
 
     @Test
-    fun tappingOther_invokesOnManualSetup() {
-        var manualRequested = false
-        setContent(viewModel(), onManualSetup = { manualRequested = true })
+    fun tappingSettingsLink_opensOutlookSettings() {
+        setContent(viewModel())
 
-        composeTestRule.onNodeWithText(string(R.string.account_setup_other)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_settings)).performClick()
 
-        assertTrue(manualRequested)
+        assertTrue(
+            "Settings link must open an outlook.live.com settings page",
+            openedUrls.any { it.startsWith("https://outlook.live.com/") },
+        )
     }
 
     @Test
-    fun tappingBack_invokesOnBack() {
-        var backed = false
-        setContent(viewModel(), onBack = { backed = true })
-
-        composeTestRule.onNodeWithContentDescription(string(R.string.action_back)).performClick()
-
-        assertTrue(backed)
-    }
-
-    @Test
-    fun tappingOutlook_buildsTheAuthIntentAndLaunchesIt() {
+    fun tappingSignIn_buildsTheAuthIntentAndLaunchesIt() {
         val vm = viewModel()
         // A real (empty) Intent is safe here: the no-op registry never actually starts it.
         every { vm.outlookAuthIntent() } returns Result.success(Intent())
         setContent(vm)
 
-        composeTestRule.onNodeWithText(string(R.string.account_setup_outlook)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_sign_in)).performClick()
 
         verify { vm.outlookAuthIntent() }
     }
 
     @Test
-    fun tappingOutlook_whenTheIntentCannotBeBuilt_reportsLaunchFailure() {
+    fun tappingSignIn_whenTheIntentCannotBeBuilt_reportsLaunchFailure() {
         val vm = viewModel()
         every { vm.outlookAuthIntent() } returns Result.failure(ActivityNotFoundException("no browser"))
         setContent(vm)
 
-        composeTestRule.onNodeWithText(string(R.string.account_setup_outlook)).performClick()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_sign_in)).performClick()
 
         verify { vm.onOutlookLaunchFailed(any()) }
-    }
-
-    @Test
-    fun tappingOutlook_whenOnPickOutlookProvided_delegatesInsteadOfLaunching() {
-        // Onboarding passes onPickOutlook to interpose the IMAP-enablement notice (#411): the tap
-        // must route there, NOT build/launch the auth intent inline.
-        val vm = viewModel()
-        var outlookPicked = false
-        setContent(vm, onPickOutlook = { outlookPicked = true })
-
-        composeTestRule.onNodeWithText(string(R.string.account_setup_outlook)).performClick()
-
-        assertTrue("Outlook tap must delegate to onPickOutlook", outlookPicked)
-        verify(exactly = 0) { vm.outlookAuthIntent() }
     }
 
     @Test
@@ -224,22 +214,33 @@ class AccountPickerScreenJvmTest {
     }
 
     @Test
-    fun connectingStatus_showsTheBusyOverlaySpinner() {
+    fun connectingStatus_showsBusySpinner_andDisablesSignIn() {
         setContent(viewModel(AccountSetupUiState(status = SetupStatus.CONNECTING)))
 
         composeTestRule.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_sign_in)).assertIsNotEnabled()
     }
 
     @Test
-    fun imapDisabledPrompt_showsTheDialog_andGotItDismisses() {
-        // Outlook OAuth can succeed while IMAP is off, surfacing the actionable dialog (#390) instead
-        // of the generic error snackbar; "Got it" clears the prompt via the view-model.
-        val vm = viewModel(AccountSetupUiState(imapDisabledPrompt = ImapDisabledPrompt("Outlook", helpUrl = null)))
-        setContent(vm)
+    fun tappingBack_invokesOnBack() {
+        var backed = false
+        setContent(viewModel(), onBack = { backed = true })
 
-        composeTestRule.onNodeWithText(string(R.string.imap_disabled_title)).assertIsDisplayed()
-        composeTestRule.onNodeWithText(string(R.string.imap_disabled_dismiss)).performClick()
+        composeTestRule.onNodeWithContentDescription(string(R.string.action_back)).performClick()
 
-        verify { vm.dismissImapDisabledPrompt() }
+        assertTrue(backed)
+    }
+
+    @Test
+    fun openingALink_whenNoBrowser_surfacesTheOpenFailedSnackbar() {
+        setContent(viewModel(), uriHandler = throwingUriHandler)
+
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_help)).performClick()
+
+        val openFailed = string(R.string.app_password_open_failed)
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText(openFailed).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithText(openFailed).assertIsDisplayed()
     }
 }

@@ -378,10 +378,12 @@ class MailBackfillerTest {
     /**
      * A backfilled page whose ids already exist (e.g. former search-only rows) must be *refreshed*
      * (markSynced + header update), not just IGNORE-inserted — this covers persistBatch's
-     * pre-existing-row branch, which the all-brand-new happy paths above never hit.
+     * pre-existing-row branch, which the all-brand-new happy paths above never hit. The refresh is
+     * routed through the BATCHED [MessageDao.updateHeaderContents] (issue #322), never the per-row
+     * [MessageDao.updateHeaderContent].
      */
     @Test
-    fun `re-inserting a pre-existing header refreshes it rather than only inserting`() = runTest {
+    fun `re-inserting a pre-existing header refreshes it through the batched update`() = runTest {
         appendMessages(60)
         seedForegroundWindow()
         val backfiller = backfiller(AccountSettings("acct"))
@@ -391,9 +393,86 @@ class MailBackfillerTest {
         backfiller.runBackfill()
 
         coVerify(atLeast = 1) { lastMessageDao!!.markSynced(any()) }
-        coVerify(atLeast = 1) {
+        // The whole batch is refreshed in one transaction — the per-row path is never taken (issue #322).
+        coVerify(atLeast = 1) { lastMessageDao!!.updateHeaderContents(any()) }
+        coVerify(exactly = 0) {
             lastMessageDao!!.updateHeaderContent(any(), any(), any(), any(), any(), any())
         }
+    }
+
+    // --- issue #322: batched persist ------------------------------------------------------------
+
+    /**
+     * persistBatch routes its pre-existing-row refreshes through the BATCHED
+     * [MessageDao.updateHeaderContents] — one transaction per page (issue #322) — and refreshes ONLY
+     * the rows that already existed: brand-new rows are written whole by insertNew, so re-updating them
+     * would be redundant. A partial page (some ids already present, some brand-new) exercises exactly
+     * that split, in one batched call, never the per-row [MessageDao.updateHeaderContent].
+     */
+    @Test
+    fun `a partial page refreshes only its pre-existing rows through one batched update`() = runTest {
+        // One cached window row makes INBOX a backfill target with boundary UID 20.
+        cached += fetchedMessage(uid = "20").toEntity("acct", "INBOX")
+        // A single older page (UIDs 10..19); the next fetch (boundary 10) returns empty → folder complete.
+        val page = (10..19).map { fetchedMessage(uid = it.toString()) }
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } answers {
+            if (thirdArg<Long>() > 10L) page else emptyList()
+        }
+        val backfiller = backfiller(AccountSettings("acct"), imapClient = imapClient)
+        // Only UIDs 10..13 are reported as already present — the partial pre-existing subset.
+        val preexistingIds = (10..13).map { "acct:INBOX:$it" }.toSet()
+        coEvery { lastMessageDao!!.existingIds(any()) } answers {
+            firstArg<List<String>>().filter { it in preexistingIds }
+        }
+        val refreshedBatches = mutableListOf<List<MessageEntity>>()
+        coEvery { lastMessageDao!!.updateHeaderContents(any()) } answers {
+            refreshedBatches += firstArg<List<MessageEntity>>()
+        }
+
+        backfiller.runBackfill()
+
+        // Exactly one batched call for the page, carrying exactly the pre-existing subset (not the 6 new rows).
+        assertEquals(1, refreshedBatches.size, "one batched update per page")
+        assertEquals(preexistingIds, refreshedBatches.single().mapTo(HashSet()) { it.id })
+        // markSynced promotes exactly that subset; the per-row update path is never taken (issue #322).
+        coVerify(exactly = 1) { lastMessageDao!!.markSynced(match { it.toSet() == preexistingIds }) }
+        coVerify(exactly = 0) {
+            lastMessageDao!!.updateHeaderContent(any(), any(), any(), any(), any(), any())
+        }
+        // Counts-only persist breadcrumb (PII-free): 10 fetched, 4 refreshed.
+        assertTrue(
+            logBuffer.snapshot().any { it.message == "backfill persist: fetched=10 refreshed=4" },
+            "the persist breadcrumb logs page + refresh counts only",
+        )
+    }
+
+    /**
+     * The empty-refresh boundary: a page whose rows are ALL brand-new must skip the header-refresh
+     * transaction entirely — insertNew writes them whole, so neither markSynced nor the batched
+     * updateHeaderContents runs (issue #322 preserves persistBatch's isNotEmpty guard).
+     */
+    @Test
+    fun `an all-new page skips the batched header update entirely`() = runTest {
+        cached += fetchedMessage(uid = "20").toEntity("acct", "INBOX")
+        val page = (10..19).map { fetchedMessage(uid = it.toString()) }
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } answers {
+            if (thirdArg<Long>() > 10L) page else emptyList()
+        }
+        // existingIds stays at the relaxed default (empty) → every fetched row is brand-new.
+        backfiller(AccountSettings("acct"), imapClient = imapClient).runBackfill()
+
+        coVerify(exactly = 0) { lastMessageDao!!.updateHeaderContents(any()) }
+        coVerify(exactly = 0) { lastMessageDao!!.markSynced(any()) }
+        coVerify(exactly = 0) {
+            lastMessageDao!!.updateHeaderContent(any(), any(), any(), any(), any(), any())
+        }
+        // The persist breadcrumb still records the page, with zero refreshed.
+        assertTrue(
+            logBuffer.snapshot().any { it.message == "backfill persist: fetched=10 refreshed=0" },
+            "an all-new page logs refreshed=0",
+        )
     }
 
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------

@@ -212,4 +212,18 @@ class ManualSetupScreenJvmTest {
         composeTestRule.onAllNodesWithText("STARTTLS")[1].performClick()
         verify { vm.onSmtpSecurity(MailSecurity.STARTTLS) }
     }
+
+    @Test
+    fun imapDisabledPrompt_showsTheGenericDialog_andGotItDismisses() {
+        // A manual account on an unknown host still gets the actionable "IMAP is off" dialog (#390),
+        // with the generic (brandless) message and no help link; "Got it" clears it via the view-model.
+        val vm = viewModel(ManualSetupForm(imapDisabledPrompt = ImapDisabledPrompt(brand = null, helpUrl = null)))
+        setContent(vm)
+
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_message_generic)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_dismiss)).performClick()
+
+        verify { vm.dismissImapDisabledPrompt() }
+    }
 }
