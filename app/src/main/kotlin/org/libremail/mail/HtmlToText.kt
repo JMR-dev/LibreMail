@@ -12,23 +12,29 @@ package org.libremail.mail
  */
 object HtmlToText {
 
+    // Hoisted out of convert() so each pattern is compiled once, not four times per call — convert()
+    // runs once per fetched HTML body during sync, so this is a hot path (#298).
+    private val SCRIPT_STYLE = Regex("(?is)<(script|style)\\b[^>]*>.*?</\\1>")
+    private val LIST_ITEM = Regex("(?i)<li\\b[^>]*>")
     private val BLOCK_BREAK = Regex(
         "(?i)</?(p|div|tr|table|ul|ol|h[1-6]|blockquote)\\b[^>]*>|<br\\s*/?>",
     )
-    private val LIST_ITEM = Regex("(?i)<li\\b[^>]*>")
+    private val TAG = Regex("<[^>]*>")
+    private val SPACES_AND_TABS = Regex("[ \\t]+")
+    private val BLANK_LINES = Regex("\n{3,}")
 
     fun convert(html: String): String {
         var s = html
         // Drop script/style contents outright so their text never leaks into the output.
-        s = s.replace(Regex("(?is)<(script|style)\\b[^>]*>.*?</\\1>"), "")
+        s = SCRIPT_STYLE.replace(s, "")
         s = LIST_ITEM.replace(s, "\n• ")
         s = BLOCK_BREAK.replace(s, "\n")
-        s = s.replace(Regex("<[^>]*>"), "")
+        s = TAG.replace(s, "")
         s = decodeEntities(s)
         // Collapse runs of spaces/tabs, then trim trailing spaces and cap consecutive blank lines.
-        s = s.replace(Regex("[ \\t]+"), " ")
+        s = SPACES_AND_TABS.replace(s, " ")
         s = s.lineSequence().joinToString("\n") { it.trim() }
-        s = s.replace(Regex("\n{3,}"), "\n\n")
+        s = BLANK_LINES.replace(s, "\n\n")
         return s.trim()
     }
 

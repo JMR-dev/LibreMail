@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * File-backed store of pending [DebugReport]s — one JSON file per report under [directory].
@@ -52,7 +55,7 @@ class ReportStore(
         synchronized(lock) {
             val serialized = serializeForDisk(report) ?: return
             directory.mkdirs()
-            File(directory, fileName(report.id)).writeText(serialized)
+            writeAtomically(File(directory, fileName(report.id)), serialized)
             _reports.value = scan()
         }
     }
@@ -69,7 +72,7 @@ class ReportStore(
             val report = _reports.value.firstOrNull { it.id == id } ?: return
             if (report.surfaced) return
             val serialized = serializeForDisk(report.copy(surfaced = true)) ?: return
-            File(directory, fileName(id)).writeText(serialized)
+            writeAtomically(File(directory, fileName(id)), serialized)
             _reports.value = scan()
         }
     }
@@ -135,10 +138,38 @@ class ReportStore(
         return runCatching { DebugReport.fromStorageJson(json) }.getOrNull()
     }
 
+    /**
+     * Writes [content] to [target] via a temp file + atomic rename, so a process death mid-write — the
+     * crash path that saves a report while the app is dying — can never leave a torn `.json` that [scan]
+     * would fail to parse and silently drop (#298). The temp file uses a non-`.json` suffix so [scan]
+     * ignores it (and any orphan left by an interrupted write), and the rename replaces an existing file
+     * (the [markSurfaced] rewrite) atomically. Falls back to a plain replace on the rare filesystem
+     * without atomic rename — still safer than an in-place truncate-then-write.
+     */
+    private fun writeAtomically(target: File, content: String) {
+        val tmp = File(directory, target.name + TMP_SUFFIX)
+        tmp.writeText(content)
+        try {
+            Files.move(
+                tmp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (e: AtomicMoveNotSupportedException) {
+            AppLog.w(TAG, "Atomic report write unsupported here; falling back to a non-atomic replace", e)
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
     private fun fileName(id: String) = "$id$SUFFIX"
 
     private companion object {
         const val SUFFIX = ".json"
+
+        // Suffix for the write-and-rename temp file. Deliberately NOT ending in [SUFFIX] so scan() never
+        // treats a half-written or orphaned temp as a report (#298).
+        const val TMP_SUFFIX = ".tmp"
         const val TAG = "ReportStore"
 
         /**

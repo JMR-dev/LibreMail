@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.reporting.AppLog
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -34,6 +35,14 @@ class GraphSender @Inject constructor() {
         message: OutgoingMessage,
         attachments: List<SendableAttachment> = emptyList(),
     ) = withContext(Dispatchers.IO) {
+        // Guard before any attachment is read into memory: Graph sendMail carries attachment bytes inline
+        // (base64) in a single ~4 MB request, so an oversized file would blow that request limit and risk
+        // an OOM from readBytes(). Fail with mayHaveSent=false so the outbox falls back to SMTP, which
+        // streams attachments and handles far larger files (#298).
+        attachments.firstOrNull { it.file.length() > MAX_ATTACHMENT_BYTES }?.let {
+            AppLog.w(TAG, "Attachment over Graph sendMail size limit; not sending via Graph")
+            throw GraphSendException("Attachment exceeds the Graph sendMail size limit", mayHaveSent = false)
+        }
         val payload = buildSendMailPayload(message, attachments)
         val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -76,8 +85,13 @@ class GraphSender @Inject constructor() {
     }
 
     private companion object {
+        const val TAG = "GraphSender"
         const val SEND_MAIL_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
         const val TIMEOUT_MS = 15_000
+
+        // Per-file ceiling kept below Graph sendMail's ~4 MB whole-request cap, so one attachment can never
+        // exceed the request limit or OOM when read into the base64 payload; larger files fall back to SMTP.
+        const val MAX_ATTACHMENT_BYTES = 3L * 1024 * 1024
         const val HTTP_OK_MIN = 200
         const val HTTP_OK_MAX = 299
         const val ERROR_BODY_LIMIT = 500
