@@ -36,7 +36,13 @@ class BackfillWorkerTest {
     private val cacheGuard = mockk<EncryptedCacheGuard>()
     private val logBuffer = RingLogBuffer()
 
-    private fun worker() = BackfillWorker(mockk(relaxed = true), mockk(relaxed = true), lazyBackfiller, cacheGuard)
+    // A real pacer (#356) with a real, idle InteractiveImapGate: the worker's slice-chaining loop runs
+    // through it, so these tests exercise the actual cooldown/cap wiring. Cooldowns are virtual under
+    // runTest, so they cost the tests no wall-clock time.
+    private val pacer = BackfillPacer(InteractiveImapGate())
+
+    private fun worker() =
+        BackfillWorker(mockk(relaxed = true), mockk(relaxed = true), lazyBackfiller, cacheGuard, pacer)
 
     @Before
     fun setUp() {
@@ -77,6 +83,25 @@ class BackfillWorkerTest {
         assertEquals(Result.success(), worker().doWork())
 
         coVerify(exactly = 2) { backfiller.runBackfill(any()) }
+    }
+
+    @Test
+    fun `paces the run by capping its slices instead of paging flat-out forever (issue #356)`() = runTest {
+        coEvery { cacheGuard.isCacheLocked() } returns false
+        // A large mailbox reports moreWork forever; the pacer's per-run cap must stop the run anyway so it
+        // can't monopolise the account for the whole session (the flat-out storm #356 fixes).
+        coEvery { backfiller.runBackfill(any()) } returns true
+
+        assertEquals(Result.success(), worker().doWork())
+
+        val cap = BackfillPacer.MAX_SLICES_PER_RUN
+        coVerify(exactly = cap) { backfiller.runBackfill(any()) }
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message == "backfill run capped at $cap slice(s); deferring to periodic cadence"
+            },
+            "the capped run logs a PII-free breadcrumb",
+        )
     }
 
     @Test
@@ -123,9 +148,10 @@ class BackfillWorkerTest {
 
         worker().doWork()
 
-        val entry = logBuffer.snapshot().single()
+        // The pacer logs one inter-slice cooldown breadcrumb between the two slices (#356), so the run's
+        // final line — not the only line — is the success breadcrumb.
+        val entry = logBuffer.snapshot().single { it.message == "backfill worker: success" }
         assertEquals('I', entry.level)
-        assertEquals("backfill worker: success", entry.message)
     }
 
     @Test
