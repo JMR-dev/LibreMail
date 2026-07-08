@@ -301,15 +301,50 @@ class RichTextEditingTest {
     }
 
     @Test
-    fun `applyLink keeps links wholly outside the range and replaces overlapping ones`() {
+    fun `applyLink keeps links outside the range and splits partial overlaps, keeping the remainder`() {
         val content = RichTextContent(
             "0123456789",
             links = listOf(RichLink(0, 2, "a"), RichLink(3, 6, "b"), RichLink(7, 9, "c")),
         )
         val result = RichTextEditing.applyLink(content, 4, 7, "http://new")
         assertEquals(
-            listOf(RichLink(0, 2, "a"), RichLink(4, 7, "http://new"), RichLink(7, 9, "c")),
+            // "a" is wholly outside; "b" (3,6) overlaps [4,7) so only its (3,4) remainder survives (it is
+            // no longer dropped whole); the new link takes [4,7); "c" starts at the range end, kept whole.
+            listOf(RichLink(0, 2, "a"), RichLink(3, 4, "b"), RichLink(4, 7, "http://new"), RichLink(7, 9, "c")),
             result.links.sortedBy { it.start },
+        )
+    }
+
+    @Test
+    fun `applyLink over the middle of a link relinks the middle and keeps both surrounding remainders`() {
+        val content = RichTextContent("0123456789", links = listOf(RichLink(0, 8, "old")))
+        val result = RichTextEditing.applyLink(content, 3, 5, "new")
+        assertEquals(
+            listOf(RichLink(0, 3, "old"), RichLink(3, 5, "new"), RichLink(5, 8, "old")),
+            result.links.sortedBy { it.start },
+        )
+    }
+
+    // --- mergeSameValueSpans (shared merge used by toggleStyle and the HTML parser) ---
+
+    @Test
+    fun `mergeSameValueSpans coalesces touching and overlapping runs of the same value only`() {
+        val merged = mergeSameValueSpans(
+            listOf(
+                RichSpan(5, 8, RichStyle.Bold), // out of order, and overlaps the (3,6) run below
+                RichSpan(0, 3, RichStyle.Bold),
+                RichSpan(3, 6, RichStyle.Bold), // touches (0,3) and overlaps (5,8) → one 0..8 run
+                RichSpan(0, 4, RichStyle.Italic), // a different value never folds into the Bold run
+                RichSpan(10, 12, RichStyle.Bold), // a gap breaks the run into a fresh one
+            ),
+        )
+        assertEquals(
+            listOf(
+                RichSpan(0, 8, RichStyle.Bold),
+                RichSpan(0, 4, RichStyle.Italic),
+                RichSpan(10, 12, RichStyle.Bold),
+            ),
+            merged,
         )
     }
 

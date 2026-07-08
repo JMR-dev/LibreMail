@@ -169,6 +169,26 @@ class DiagnosticsCollectorTest {
         )
     }
 
+    @Test
+    fun `provider label matches brand tokens at label boundaries, not as substrings`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        // Each custom host merely CONTAINS a brand name inside a longer DNS label; the old substring match
+        // mislabeled them (notgmail→Gmail, yahooligans→Yahoo, me.company→iCloud, kaolin→AOL). They must all
+        // bucket to "Other" now (#298).
+        every { accountRepository.observeAccounts() } returns flowOf(
+            listOf(
+                account("1@x", AuthType.PASSWORD_IMAP, "mail.notgmail.example"),
+                account("2@x", AuthType.PASSWORD_IMAP, "imap.yahooligans.example"),
+                account("3@x", AuthType.PASSWORD_IMAP, "me.company.example"),
+                account("4@x", AuthType.PASSWORD_IMAP, "kaolin.example"),
+            ),
+        )
+
+        val report = collector.collectManual()
+
+        assertEquals(List(4) { "Other (PASSWORD_IMAP)" }, report.accounts)
+    }
+
     private fun account(email: String, authType: AuthType, imapHost: String) = Account(
         id = "id:$email",
         email = email,

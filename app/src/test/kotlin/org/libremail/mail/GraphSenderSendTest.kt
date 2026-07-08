@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.domain.model.OutgoingMessage
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLConnection
@@ -18,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -30,8 +37,19 @@ import kotlin.test.assertTrue
  */
 class GraphSenderSendTest {
 
+    @Before
+    fun setUp() {
+        // send() now breadcrumbs through AppLog on the oversized-attachment guard; android.util.Log is a
+        // no-op stub under plain JVM tests, so mock it (fully qualified, so this file never imports it).
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+    }
+
     @After
-    fun tearDown() = armed.set(null)
+    fun tearDown() {
+        armed.set(null)
+        unmockkAll()
+    }
 
     private val message =
         OutgoingMessage(accountId = "outlook:me@x.com", to = "bob@example.org", subject = "Hi", body = "Body")
@@ -82,6 +100,26 @@ class GraphSenderSendTest {
         val ex = assertFailsWith<GraphSendException> { GraphSender().send("token", message) }
 
         assertFalse(ex.mayHaveSent, "the request never reached Graph, so a retry is safe")
+    }
+
+    @Test
+    fun `an oversized attachment fails safe-to-fall-back before opening a connection`() = runTest {
+        val last = arm() // armed, but the guard must trip before any connection is opened
+        val big = File.createTempFile("graph-big", ".bin")
+        try {
+            // 4 MiB, over the 3 MiB per-file cap. setLength allocates the size without writing the bytes,
+            // so the guard (which reads file.length()) trips without the test materializing 4 MiB.
+            RandomAccessFile(big, "rw").use { it.setLength(4L * 1024 * 1024) }
+
+            val ex = assertFailsWith<GraphSendException> {
+                GraphSender().send("token", message, listOf(SendableAttachment(big)))
+            }
+
+            assertFalse(ex.mayHaveSent, "oversized never reached Graph, so SMTP fallback is safe")
+            assertNull(last.get(), "the guard must trip before any connection is opened")
+        } finally {
+            big.delete()
+        }
     }
 
     @Test

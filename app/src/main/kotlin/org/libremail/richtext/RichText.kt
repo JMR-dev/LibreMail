@@ -109,11 +109,17 @@ internal fun lineMarker(line: String): String? = when {
  */
 internal fun mergeSameValueSpans(spans: List<RichSpan>): List<RichSpan> {
     val merged = ArrayList<RichSpan>()
+    // Index of the right-most merged run for each style value. Spans are processed in ascending start
+    // order, and runs of one value stay non-overlapping with strictly increasing ends, so only that
+    // value's last run can touch the next span — track it directly instead of re-scanning `merged` for
+    // every span (the old O(n^2) indexOfLast). The produced list is byte-for-byte identical (#298).
+    val lastRunByStyle = HashMap<RichStyle, Int>()
     for (span in spans.sortedWith(compareBy({ it.start }, { it.end }))) {
-        val i = merged.indexOfLast { it.style == span.style && span.start <= it.end }
-        if (i >= 0) {
+        val i = lastRunByStyle[span.style]
+        if (i != null && span.start <= merged[i].end) {
             merged[i] = merged[i].copy(end = maxOf(merged[i].end, span.end))
         } else {
+            lastRunByStyle[span.style] = merged.size
             merged.add(span)
         }
     }
