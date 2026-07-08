@@ -110,7 +110,8 @@ UNIFIED folder-only : SCAN TABLE messages USING INDEX index_messages_timestampMi
   search (`matchesSearch`) over the small folder-scoped set — never the whole cache. `StateFlow`'s
   built-in equality de-dup means an unrelated write now costs one cheap scoped re-query and no
   recomposition.
-- `observeSummaries()` is retained as the #51 CursorWindow regression-guard target in the DB tests.
+- The #51 CursorWindow regression guard now targets the paged `pagingUnifiedFolderSummaries()`
+  projection in the DB tests; the superseded whole-table `observeSummaries()` was removed (issue #313).
 
 ## Deferred follow-ups
 

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.map
 import org.libremail.data.local.dao.SignatureDao
 import org.libremail.data.local.entity.SignatureEntity
 import org.libremail.domain.model.Signature
+import org.libremail.reporting.AppLog
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -28,8 +29,9 @@ class SignatureRepository @Inject constructor(private val dao: SignatureDao) {
     /** Creates a signature; makes it the default when it is the account's first. Returns its id. */
     suspend fun create(accountId: String, name: String, html: String): String {
         val id = UUID.randomUUID().toString()
-        val isFirst = dao.countForAccount(accountId) == 0
-        dao.upsert(SignatureEntity(id, accountId, name, html, isDefault = isFirst))
+        // The count-then-default decision runs atomically in the DAO so two concurrent first-creates
+        // can't both become default (issue #313); the isDefault passed here is a placeholder.
+        dao.insertMakingFirstDefault(SignatureEntity(id, accountId, name, html, isDefault = false))
         return id
     }
 
@@ -39,15 +41,20 @@ class SignatureRepository @Inject constructor(private val dao: SignatureDao) {
     }
 
     suspend fun delete(id: String) {
-        val existing = dao.getById(id) ?: return
-        dao.delete(id)
-        // If we removed the default, promote the account's first remaining signature.
-        if (existing.isDefault) {
-            dao.firstForAccount(existing.accountId)?.let { dao.markDefault(it.id) }
+        // Delete + promote-a-new-default run in one DAO transaction so a crash between them can't strand
+        // the account with signatures but no default (issue #313).
+        val promotedId = dao.deletePromotingDefault(id)
+        if (promotedId != null) {
+            // PII-free: no signature content, name, or account address — just the state transition.
+            AppLog.i(TAG, "promoted a replacement default signature after deleting the previous default")
         }
     }
 
     suspend fun setDefault(accountId: String, id: String) = dao.setDefault(accountId, id)
 
     private fun SignatureEntity.toDomain() = Signature(id, accountId, name, contentHtml, isDefault)
+
+    private companion object {
+        const val TAG = "LibreMailSignatures"
+    }
 }
