@@ -428,8 +428,9 @@ jobs:
           # green run doesn't re-download (and risk re-corrupting) them. Restore-only
           # here + the success-gated save below == "integrity gates the cache": a
           # corrupt/failed SDK is never saved (#389). Shared key (identical contents).
-          # The emulator + system image stay with android-emulator-runner (boot logic
-          # is out of scope for #389).
+          # The emulator + this leg's system image are NOT cached here; they are
+          # pre-installed via the same #389-hardened installer in a dedicated step below
+          # (#443), so re-installing is a fast sdkmanager no-op when already present.
           path: |
             /usr/local/lib/android/sdk/cmdline-tools/20.0
             /usr/local/lib/android/sdk/platforms
@@ -485,6 +486,20 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
+      # Pre-install the Android Emulator + this leg's google_apis/x86_64 system image through the
+      # #389-hardened installer (SHA-verify -> reject corrupt -> purge -> re-download) BEFORE the
+      # android-emulator-runner steps below. The runner's un-guarded "Create AVD and generate
+      # snapshot" fetch died on a corrupt emulator zip ("Error on ZipFile unknown archive") and
+      # wedged the merge queue for ~2h (#443); routing the install through this hardened path
+      # self-heals a corrupt zip here, and the emulator-runner then finds both packages already
+      # installed and skips its fragile fetch. Runs unconditionally (both AVD-cache hit and miss):
+      # the emulator binary + system image live under the SDK root, not the ~/.android AVD-snapshot
+      # cache, so they must be present for even a cached AVD to boot. Intentionally NOT added to the
+      # android-sdk-v1 cache (kept small) — re-install is a fast sdkmanager no-op when already
+      # present. Keep target (google_apis) / arch (x86_64) in lockstep with the emulator-runner steps.
+      - name: Pre-install emulator + system image (hardened)
+        run: python3 .github/scripts/setup_android_sdk.py install "emulator" "system-images;android-${{ matrix.api-level }};google_apis;x86_64"
 
       - name: Cache AVD snapshot
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
