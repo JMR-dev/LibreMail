@@ -22,3 +22,19 @@ class CacheEncryptionUnavailableException(cause: Throwable) :
         "Encrypted cache unavailable: the SQLCipher native library failed to load on this device",
         cause,
     )
+
+/**
+ * True when this throwable (or anything in its cause chain) signals that SQLCipher's native library is
+ * unavailable on this device (issue #359): a [CacheEncryptionUnavailableException] the provisioner raised
+ * when it failed closed, or — defensively — a bare [LinkageError] (an open-time `UnsatisfiedLinkError` at
+ * `SQLiteConnection.nativeOpen` that reached a headless entry point before the provisioner wrapped it).
+ *
+ * Headless entry points that inject the Room cache directly — the WorkManager workers and `IdleService` —
+ * have no UI gate (that is `CacheEncryptionGate`'s job), so they consult this to treat such a failure as a
+ * soft defer/skip (a worker retries; the push service stops) instead of crashing. A later launch may load
+ * the library and recover, so deferring rather than failing hard is correct. The whole cause chain is
+ * walked because coroutine stack-trace recovery can re-wrap the throwable as it crosses the database-open
+ * boundary (the same reason [DatabaseProvisioner]'s own tests assert on the cause chain, not the instance).
+ */
+fun Throwable.isCacheEncryptionUnavailable(): Boolean = generateSequence(this) { it.cause }
+    .any { it is CacheEncryptionUnavailableException || it is LinkageError }

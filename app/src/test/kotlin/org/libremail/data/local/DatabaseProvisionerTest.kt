@@ -71,6 +71,7 @@ class DatabaseProvisionerTest {
         every { DatabaseEncryption.ensureEncrypted(any(), any()) } just Runs
         every { DatabaseEncryption.ensurePlaintext(any(), any()) } just Runs
         every { DatabaseEncryption.ensureNativeLibraryLoaded() } just Runs
+        every { DatabaseEncryption.probeKeyedOpen(any(), any()) } just Runs
         every { settingsRepository.settings } returns flowOf(AppSettings())
 
         coEvery { keyStore.isClearPending() } returns false
@@ -104,6 +105,10 @@ class DatabaseProvisionerTest {
         // load only rode on that conversion, Room's keyed open would hit nativeOpen with no .so loaded
         // and throw UnsatisfiedLinkError on every cold start.
         verify(exactly = 1) { DatabaseEncryption.ensureNativeLibraryLoaded() }
+        // Issue #359 gap 2: the encrypted branch also probes a REAL keyed open (nativeOpen) inside the
+        // fail-closed handler, so an open-time UnsatisfiedLinkError is caught here rather than escaping
+        // Room's later deferred open.
+        verify(exactly = 1) { DatabaseEncryption.probeKeyedOpen(any(), PASSPHRASE) }
     }
 
     @Test
@@ -145,6 +150,53 @@ class DatabaseProvisionerTest {
         verify(exactly = 0) { DatabaseFiles.clear(any()) }
         coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
         coVerify(exactly = 0) { settingsRepository.setEncryptCache(any()) }
+    }
+
+    @Test
+    fun `a native-library load failure in the account migrator fails closed`() = runTest {
+        // Issue #359 gap 1 (PRIMARY): AccountDataMigrator.copyAccountTables loads SQLCipher and does a
+        // keyed openOrCreateDatabase + ATTACH … KEY (a real nativeOpen) even when encryption is OFF, so a
+        // LinkageError there must fail closed too. It used to ESCAPE the handler because migrateIfNeeded()
+        // ran OUTSIDE the try/catch (crash-loop). Un-mock the `just Runs` default (which hid the gap) and
+        // make the migrator throw the exact #359 error — encryption stays at its default OFF here to prove
+        // the migrator drags EVERY upgrader through the native library regardless of the setting.
+        coEvery { accountDataMigrator.migrateIfNeeded() } throws
+            UnsatisfiedLinkError("dlopen failed: libsqlcipher.so is not 16 KB aligned")
+
+        val error = assertFailsWith<CacheEncryptionUnavailableException> { provisioner().prepareCache() }
+
+        assertTrue(
+            generateSequence(error.cause) { it.cause }.any { it is LinkageError },
+            "the native-load LinkageError must be preserved as the cause, not surface as a raw LinkageError",
+        )
+        // Fail CLOSED, not open: nothing wiped, no seal reset, the setting untouched.
+        verify(exactly = 0) { DatabaseFiles.clear(any()) }
+        coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
+        coVerify(exactly = 0) { settingsRepository.setEncryptCache(any()) }
+    }
+
+    @Test
+    fun `a nativeOpen failure while probing the encrypted open fails closed`() = runTest {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = true, appLock = false))
+        // Issue #359 gap 2 (SECONDARY): loadLibrary succeeds, but the REAL keyed open throws an
+        // UnsatisfiedLinkError at SQLiteConnection.nativeOpen — the exact #359 signature. The provisioner
+        // probes that open INSIDE the fail-closed handler, so it converts here rather than letting Room's
+        // later deferred open (DatabaseModule) crash uncaught.
+        every { DatabaseEncryption.probeKeyedOpen(any(), any()) } throws
+            UnsatisfiedLinkError("SQLiteConnection.nativeOpen")
+
+        val error = assertFailsWith<CacheEncryptionUnavailableException> { provisioner().prepareCache() }
+
+        assertTrue(
+            generateSequence(error.cause) { it.cause }.any { it is LinkageError },
+            "the nativeOpen LinkageError must be preserved as the cause",
+        )
+        // The library loaded fine (loadLibrary was not the failure); it was the keyed nativeOpen probe.
+        verify(exactly = 1) { DatabaseEncryption.ensureNativeLibraryLoaded() }
+        verify(exactly = 1) { DatabaseEncryption.probeKeyedOpen(any(), PASSPHRASE) }
+        // No fail-open side effects.
+        verify(exactly = 0) { DatabaseFiles.clear(any()) }
+        coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
     }
 
     @Test
@@ -237,8 +289,10 @@ class DatabaseProvisionerTest {
         verify(exactly = 0) { DatabaseEncryption.ensureEncrypted(any(), any()) }
         verify(exactly = 0) { DatabaseEncryption.ensurePlaintext(any(), any()) }
         // A plaintext cache opens with the framework helper, never SQLCipher, so it must not touch the
-        // native library — the counterpart to the encrypted path's mandatory load above.
+        // native library — the counterpart to the encrypted path's mandatory load above — nor probe a
+        // keyed open (issue #359: the probe belongs to the encrypted branch only).
         verify(exactly = 0) { DatabaseEncryption.ensureNativeLibraryLoaded() }
+        verify(exactly = 0) { DatabaseEncryption.probeKeyedOpen(any(), any()) }
     }
 
     @Test

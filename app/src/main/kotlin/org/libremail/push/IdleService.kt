@@ -27,6 +27,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.isCacheEncryptionUnavailable
 import org.libremail.data.local.toDomain
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.data.sync.MailConnectionFactory
@@ -111,7 +112,20 @@ class IdleService : Service() {
                 stopSelf()
                 return@launch
             }
-            reconcileWatchers()
+            // Headless tolerance for issue #359: this service injects the Room cache with NO UI gate
+            // (CacheEncryptionGate wraps only MainActivity), so if SQLCipher's native library is unavailable
+            // on this device reconcileWatchers()'s first DB access throws — a CacheEncryptionUnavailableException
+            // from the provisioner, or defensively a bare LinkageError at nativeOpen. Left uncaught, a child of
+            // this SupervisorJob would route it to the app's default handler and crash the process. Treat it
+            // like the cache-locked case: log PII-free and stop. The app's CacheEncryptionGate surfaces the
+            // error to the user, and a later restart re-probes and recovers if the library loads.
+            try {
+                reconcileWatchers()
+            } catch (unavailable: Throwable) {
+                if (!unavailable.isCacheEncryptionUnavailable()) throw unavailable
+                AppLog.w(TAG, "encrypted cache unavailable (SQLCipher native lib); deferring IDLE push", unavailable)
+                stopSelf()
+            }
         }
         // The reuse cache (issue #357 Part 2) keeps interactive/sync IMAP connections warm; sweep
         // them so a socket that has gone idle past the reuse timeout is closed rather than left

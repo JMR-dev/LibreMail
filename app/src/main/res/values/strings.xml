@@ -205,6 +205,14 @@
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose your email provider to get started.</string>
 
+    <!-- Onboarding: pre-auth Outlook IMAP-enablement notice, shown before Microsoft sign-in (#411) -->
+    <string name="outlook_imap_title">Turn on IMAP for Outlook</string>
+    <string name="outlook_imap_question">Have you enabled IMAP for your Outlook account?</string>
+    <string name="outlook_imap_body">New Outlook.com accounts often have IMAP switched off. LibreMail needs IMAP turned on to receive your mail — please enable it before signing in.</string>
+    <string name="outlook_imap_help">How to enable IMAP for Outlook</string>
+    <string name="outlook_imap_settings">Open Outlook IMAP settings</string>
+    <string name="outlook_imap_sign_in">Sign in</string>
+
     <!-- App-password guided setup (Gmail/Yahoo/iCloud/AOL) -->
     <string name="app_password_title">Connect %1$s</string>
     <string name="app_password_unknown_provider">Unknown email provider.</string>
