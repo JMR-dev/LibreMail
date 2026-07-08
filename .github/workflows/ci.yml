@@ -489,82 +489,127 @@ jobs:
 
       # Pre-install the Android Emulator + this leg's google_apis/x86_64 system image through the
       # #389-hardened installer (SHA-verify -> reject corrupt -> purge -> re-download) BEFORE the
-      # android-emulator-runner steps below. The runner's un-guarded "Create AVD and generate
-      # snapshot" fetch died on a corrupt emulator zip ("Error on ZipFile unknown archive") and
-      # wedged the merge queue for ~2h (#443); routing the install through this hardened path
-      # self-heals a corrupt zip here, and the emulator-runner then finds both packages already
-      # installed and skips its fragile fetch. Runs unconditionally (both AVD-cache hit and miss):
-      # the emulator binary + system image live under the SDK root, not the ~/.android AVD-snapshot
-      # cache, so they must be present for even a cached AVD to boot. Intentionally NOT added to the
-      # android-sdk-v1 cache (kept small) — re-install is a fast sdkmanager no-op when already
-      # present. Keep target (google_apis) / arch (x86_64) in lockstep with the emulator-runner steps.
+      # Create AVD + Boot steps below. Historically the android-emulator-runner's un-guarded "Create
+      # AVD and generate snapshot" fetch died on a corrupt emulator zip ("Error on ZipFile unknown
+      # archive") and wedged the merge queue for ~2h (#443); routing the install through this hardened
+      # path self-heals a corrupt zip here, and the manual boot below then finds both packages already
+      # installed. The emulator binary + system image live under the SDK root; they are intentionally
+      # NOT added to the android-sdk-v1 cache (kept small) — re-install is a fast sdkmanager no-op when
+      # already present. Keep target (google_apis) / arch (x86_64) in lockstep with the Create AVD +
+      # boot steps below and testOptions.managedDevices in app/build.gradle.kts.
       - name: Pre-install emulator + system image (hardened)
         run: python3 .github/scripts/setup_android_sdk.py install "emulator" "system-images;android-${{ matrix.api-level }};google_apis;x86_64"
 
-      - name: Cache AVD snapshot
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: avd-cache
-        with:
-          path: |
-            ~/.android/avd/*
-            ~/.android/adb*
-          key: avd-${{ matrix.api-level }}-google_apis-x86_64
+      # Hand-provision the AVD with avdmanager so the emulator is COLD-booted below (parity with the
+      # e2e-preview / api37_e2e.py manual boot) instead of resumed from a cached snapshot — snapshot
+      # resume is exactly what raced system_server's binder republish (#448). Pin ANDROID_AVD_HOME so
+      # avdmanager and the emulator agree on the AVD dir (they disagree when ANDROID_SDK_HOME is set on
+      # the runner, which else reports "Unknown AVD name") and carry it to the boot step via $GITHUB_ENV.
+      # Device profile (pixel_2) + image (google_apis / x86_64) stay in lockstep with
+      # testOptions.managedDevices in app/build.gradle.kts.
+      - name: Create AVD
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "no" | avdmanager create avd -n test -k "system-images;android-${{ matrix.api-level }};google_apis;x86_64" -d pixel_2 --force
+          echo "AVDs visible to the emulator:"; "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds
 
-      # On a cache miss, cold-boot the emulator once so its snapshot can be cached,
-      # making subsequent runs start from a warm snapshot.
-      - name: Create AVD and generate snapshot for caching
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
-        with:
-          api-level: ${{ matrix.api-level }}
-          target: google_apis
-          arch: x86_64
-          force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: false
-          script: echo "Generated AVD snapshot for caching."
+      # Boot the emulator with the e2e-preview job's proven hand-provisioned manual-boot pattern
+      # instead of reactivecircus/android-emulator-runner's default boot wait (#448). The action runs
+      # an un-guarded, fatal `adb shell input keyevent 82` right after sys.boot_completed=1; on a
+      # snapshot resume that raced the `input` binder service's republish and aborted the job with
+      # "No service published for: input" — an intermittent boot race that flaked the merge queue and
+      # hit BOTH the run and its retry once #446 finally let runs reach boot on API 33. The manual
+      # boot fixes it with: a 2-attempt COLD-boot loop; ONE bounded
+      # `timeout 300 adb wait-for-device shell 'wait sys.boot_completed'` per attempt (a stuck
+      # emulator fails fast instead of hanging to the 50-min job cap); a NON-FATAL
+      # `adb shell input keyevent 82 || true` unlock (killing the race); and a readiness gate
+      # (boot_completed==1) BEFORE connectedDebugAndroidTest runs. Emulator flags mirror e2e-preview
+      # (cold `-no-snapshot -accel on -gpu swiftshader_indirect`, plus `-verbose -debug ...` for boot
+      # diagnosability). NO #404 wedge-capture wrapper here — it was reverted from this matrix job for
+      # hanging all 8 legs (90dfb18); only the API-37 e2e-preview job keeps it. The gradle run retries
+      # ONCE on a TEST failure (parity with the replaced retry step); boot flakes are covered by the
+      # 2-attempt boot loop above.
+      - name: Boot emulator and run E2E
+        run: |
+          set -euo pipefail
+          EMU_LOG="${RUNNER_TEMP:-/tmp}/emulator-api${{ matrix.api-level }}.log"
+          LOGCAT_LOG="${RUNNER_TEMP:-/tmp}/logcat-api${{ matrix.api-level }}.txt"
+          DIAG_LOG="${RUNNER_TEMP:-/tmp}/boot-diagnostics-api${{ matrix.api-level }}.txt"
+          GPU_MODE="swiftshader_indirect"
 
-      # reactivecircus/android-emulator-runner runs an un-guarded, fatal `adb shell input keyevent 82`
-      # after boot. On snapshot resume that can race system_server (sys.boot_completed=1 before the
-      # `input` binder service is republished), aborting the job before Gradle runs with
-      # "No service published for: input" — an ~2%, API-29-only infra flake, not a test failure. Make
-      # the step non-fatal and retry once: two independent boots drop the race to ~0.04%. The definitive
-      # fix (adopt the e2e-preview job's manual-boot + `keyevent 82 || true`) is tracked separately.
-      - name: Run E2E tests
-        id: e2e
-        continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
-        with:
-          api-level: ${{ matrix.api-level }}
-          target: google_apis
-          arch: x86_64
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          # Stream logcat to a per-api-level file (the emulator is booted here) before the tests,
-          # so a test failure or emulator flake is diagnosable from the uploaded artifact.
-          # Backgrounded; gradle stays the last foreground command so the step's exit status is
-          # still the test result (a real failure still trips continue-on-error -> the retry).
-          script: |
-            adb logcat -v time > "$RUNNER_TEMP/logcat-api${{ matrix.api-level }}.txt" 2>&1 &
-            ./gradlew connectedDebugAndroidTest --stacktrace
+          # On a boot timeout, dump full system state into $DIAG_LOG for the artifact upload, then a
+          # concise summary to the step log so the cause is visible without downloading artifacts.
+          # Every probe is guarded (|| true) so a missing tool can't abort the retry under `set -e`.
+          dump_diagnostics() {
+            local attempt="$1" accel kvm
+            accel=$("$ANDROID_SDK_ROOT/emulator/emulator" -accel-check 2>&1) || true
+            kvm=$(ls -l /dev/kvm 2>&1) || true
+            {
+              echo "===== API ${{ matrix.api-level }} boot diagnostics (attempt $attempt) ====="
+              echo "--- adb devices ---";              adb devices 2>&1 || true
+              echo "--- emulator -accel-check ---";     echo "$accel"
+              echo "--- /dev/kvm ---";                  echo "$kvm"
+              echo "--- GPU mode ---";                  echo "$GPU_MODE"
+              echo "--- free memory ---";               free -h 2>&1 || true
+              echo "--- free disk ---";                 df -h 2>&1 || true
+              echo "--- AVD config.ini ---";            cat "${ANDROID_AVD_HOME:-$HOME/.android/avd}/test.avd/config.ini" 2>&1 || true
+              echo "--- emulator.log (tail 200) ---";   tail -200 "$EMU_LOG" 2>&1 || true
+            } >> "$DIAG_LOG" 2>&1 || true
+            echo "----- BOOT FAILURE SUMMARY (attempt $attempt) -----"
+            echo "accel-check: $accel"
+            echo "/dev/kvm:    $kvm"
+            echo "--- emulator.log (tail 50) ---"; tail -50 "$EMU_LOG" 2>&1 || true
+          }
 
-      - name: Run E2E tests (retry after emulator boot race)
-        if: steps.e2e.outcome == 'failure'
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
-        with:
-          api-level: ${{ matrix.api-level }}
-          target: google_apis
-          arch: x86_64
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          # Retry runs a fresh emulator boot; stream its logcat the same way. `>` overwrites
-          # attempt 1's file so the artifact holds the FINAL attempt's logs, matching the
-          # failure-time dump below (which reflects this last attempt's state).
-          script: |
-            adb logcat -v time > "$RUNNER_TEMP/logcat-api${{ matrix.api-level }}.txt" 2>&1 &
-            ./gradlew connectedDebugAndroidTest --stacktrace
+          boot_emulator() {
+            echo "::group::Start API ${{ matrix.api-level }} emulator (attempt $1)"
+            # Cold boot (-no-snapshot); capture the emulator's own output so a boot flake is
+            # diagnosable. -verbose -debug ... is DIAGNOSTICS ONLY — no boot-affecting flag changes.
+            "$ANDROID_SDK_ROOT/emulator/emulator" -avd test \
+              -no-window -no-audio -no-boot-anim -no-snapshot -accel on \
+              -gpu "$GPU_MODE" -camera-back none -camera-front none \
+              -verbose -debug init,avd_config,kernel > "$EMU_LOG" 2>&1 &
+            # Stream logcat from the moment the device registers into a file that survives to the
+            # artifact upload. Appended (with a header) per attempt.
+            echo "===== logcat (attempt $1) =====" >> "$LOGCAT_LOG"
+            adb wait-for-device logcat -v time >> "$LOGCAT_LOG" 2>&1 &
+            logcat_pid=$!
+            # ONE bounded wait covering both device registration and full boot, so a stuck emulator
+            # fails fast instead of hanging the whole job until the 50-min cap.
+            if timeout 300 adb wait-for-device shell \
+                'while [ "$(getprop sys.boot_completed | tr -d "\r")" != "1" ]; do sleep 2; done'; then
+              echo "::endgroup::"; return 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::API ${{ matrix.api-level }} emulator did not boot within 300s (attempt $1)"
+            dump_diagnostics "$1"
+            kill "$logcat_pid" 2>/dev/null || true
+            adb emu kill 2>/dev/null || true
+            sleep 5
+            return 1
+          }
+
+          # Start the adb daemon up-front (mirrors api37_e2e.py) so attempt 1 can't lose the
+          # adb-server "Address already in use" bind race.
+          adb start-server || true
+
+          booted=0
+          for attempt in 1 2; do boot_emulator "$attempt" && { booted=1; break; }; done
+          [ "$booted" = "1" ] || { echo "::error::API ${{ matrix.api-level }} emulator failed to boot after 2 attempts"; exit 1; }
+
+          # NON-FATAL unlock (the boot-race fix) + disable animations for deterministic UI tests
+          # (parity with the replaced android-emulator-runner `disable-animations: true`).
+          adb shell input keyevent 82 || true
+          adb shell settings put global window_animation_scale 0.0 || true
+          adb shell settings put global transition_animation_scale 0.0 || true
+          adb shell settings put global animator_duration_scale 0.0 || true
+
+          # Retry the test run ONCE on failure (parity with the replaced retry step). A retried-but-
+          # passed run is flagged as a ::warning:: because a blanket retry can mask a real regression.
+          run_e2e() { ./gradlew connectedDebugAndroidTest --stacktrace; }
+          run_e2e || { echo "::warning::API ${{ matrix.api-level }} E2E run failed — retrying once"; run_e2e; }
 
       # On any E2E failure (both boot attempts failed, a hung emulator, or an earlier setup/SDK
       # step), snapshot device + runner state to the step log AND a file for the artifact upload —
@@ -605,6 +650,8 @@ jobs:
           path: |
             ${{ runner.temp }}/logcat-api${{ matrix.api-level }}.txt
             ${{ runner.temp }}/diagnostics-api${{ matrix.api-level }}.txt
+            ${{ runner.temp }}/emulator-api${{ matrix.api-level }}.log
+            ${{ runner.temp }}/boot-diagnostics-api${{ matrix.api-level }}.txt
           if-no-files-found: warn
 
   # API 37 (Android 17, preview) E2E. Its only system image is the nonstandard
