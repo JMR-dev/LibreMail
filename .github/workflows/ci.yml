@@ -65,32 +65,55 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
-          # predicate-quantifier: 'every' makes the `skippable` filter true ONLY when EVERY changed
-          # file matches one of these safe patterns. We invert it below (e2e_needed = NOT skippable),
-          # so ANY file outside this small allow-list — app/src/main, app/src/androidTest,
-          # app/build.gradle.kts, root build.gradle*/settings.gradle*, gradle/** (incl. the version
-          # catalog & wrapper), gradle.properties, app/schemas, app/proguard-rules.pro, another
-          # workflow, .github/scripts, … — forces the E2E matrix to run. That is the conservative
-          # "err toward running E2E / default to true if unsure" rule: the skip list is an explicit
-          # allow-list of things that provably cannot affect app runtime or instrumented tests,
-          # never a guess about what is unsafe.
+          # HOW THIS WORKS -- and why it is written "inside-out" with NEGATED globs.
+          # dorny/paths-filter sets a filter's boolean output to true when AT LEAST ONE changed
+          # file matches that filter's per-file predicate. `predicate-quantifier: 'every'` makes
+          # the per-file predicate "this file matches EVERY pattern in the list". So to say
+          # "run E2E iff SOME changed file is E2E-relevant", `non_skippable` lists the safe
+          # allow-globs each NEGATED: a file is non-skippable when it matches NONE of the safe
+          # globs (it matches every '!'-pattern), and e2e_needed = non_skippable. Thus ANY file
+          # outside the allow-list -- app/src/main, app/src/androidTest, app/build.gradle.kts,
+          # root build.gradle*/settings.gradle*, gradle/** (wrapper + libs.versions.toml),
+          # gradle.properties, app/schemas, app/proguard-rules.pro, .github/workflows/**,
+          # .github/scripts/** -- forces the whole matrix. That is the conservative "err toward
+          # running E2E / default to true if unsure" rule: the skip set is an explicit allow-list
+          # of paths that provably cannot affect the app build or instrumented tests, never a
+          # guess about what is unsafe.
+          #
+          # This replaces #399's original form, which listed the same safe paths as POSITIVE
+          # globs under `predicate-quantifier: 'every'`. That could NEVER match: 'every' needs a
+          # single file to be under app/src/test AND docs AND scripts AND .claude AND be *.md at
+          # once (impossible), so `skippable` was always false and the matrix always ran -- even
+          # for the docs/scripts-only PRs it meant to skip (issue #420; e.g. scripts-only #419).
+          # Negated allow-globs are the form dorny documents for `predicate-quantifier: 'every'`.
           predicate-quantifier: 'every'
           filters: |
-            skippable:
-              - 'app/src/test/**'
-              - '**/*.md'
-              - 'docs/**'
-              - 'scripts/**'
-              - '.claude/**'
+            non_skippable:
+              - '!app/src/test/**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!scripts/**'
+              - '!.claude/**'
+            # Safety override (issue #420 HAZARD): the LOCAL E2E harness lives under .claude/,
+            # so '!.claude/**' above would let a preflight-only change skip E2E. Force the matrix
+            # when the instrumented-test harness itself changes. Everything else under .claude/
+            # (agents, hooks, settings, other skills) is dev-only config that CI's build/E2E
+            # never runs, so it stays skippable. Output is true iff a preflight file changed.
+            e2e_harness:
+              - '.claude/skills/preflight/**'
       - name: Decide whether the E2E matrix is needed
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ steps.filter.outputs.skippable }}" = "true" ]; then
+          # e2e_needed is false ONLY for a pull_request where every changed file is in the safe
+          # allow-list (non_skippable == 'false') AND none touch the harness override
+          # (e2e_harness == 'false'). Any other event leaves both outputs empty, so we fall
+          # through to the conservative default of running the E2E matrix.
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ steps.filter.outputs.non_skippable }}" = "false" ] && [ "${{ steps.filter.outputs.e2e_harness }}" = "false" ]; then
             echo "e2e_needed=false" >> "$GITHUB_OUTPUT"
-            echo "E2E matrix SKIPPED: every changed file is under a test-only / docs / script / .claude path."
+            echo "E2E matrix SKIPPED: every changed file is a docs / unit-test / dev-script / .claude path that cannot affect the app build or instrumented tests."
           else
             echo "e2e_needed=true" >> "$GITHUB_OUTPUT"
-            echo "E2E matrix NEEDED: build/runtime/instrumented paths changed, or this is not a pull_request (conservative default)."
+            echo "E2E matrix NEEDED: a build/runtime/harness path changed, or this is not a pull_request (conservative default)."
           fi
 
   # Runner-priority orchestration (traffic-control) has been EXTRACTED from this file.
