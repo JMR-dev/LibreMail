@@ -10,7 +10,6 @@ import android.os.Bundle
 import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.libremail.data.local.DatabaseEncryption
@@ -112,8 +111,8 @@ class ColdOpenCacheProbe : ContentProvider() {
                 )
                 .build()
             try {
-                val ids = runBlocking { database.messageDao().observeSummaries().first().map { it.id } }
-                if (ids == listOf(EXPECTED_ROW_ID)) OPEN_OK else "$OPEN_ROWS$ids"
+                val id = runBlocking { database.messageDao().getById(EXPECTED_ROW_ID)?.id }
+                if (id == EXPECTED_ROW_ID) OPEN_OK else "$OPEN_ROWS$id"
             } finally {
                 database.close()
             }

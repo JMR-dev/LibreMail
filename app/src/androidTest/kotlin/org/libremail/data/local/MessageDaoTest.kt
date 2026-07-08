@@ -6,7 +6,6 @@ import androidx.paging.PagingSource
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -422,7 +421,9 @@ class MessageDaoTest {
 
         dao.deleteByIds(listOf("a", "c"))
 
-        assertEquals(listOf("b"), dao.observeSummaries().first().map { it.id })
+        assertNull("a is deleted", dao.getById("a"))
+        assertNull("c is deleted", dao.getById("c"))
+        assertEquals("b survives", "b", dao.getById("b")?.id)
     }
 
     @Test
@@ -437,7 +438,9 @@ class MessageDaoTest {
 
         dao.deleteByAccount("acct")
 
-        assertEquals(listOf("acct2:1"), dao.observeSummaries().first().map { it.id })
+        assertNull("the account's INBOX row is deleted", dao.getById("acct:1"))
+        assertNull("the account's other-folder row is deleted", dao.getById("acct:Archive:1"))
+        assertEquals("the other account survives", "acct2:1", dao.getById("acct2:1")?.id)
     }
 
     @Test

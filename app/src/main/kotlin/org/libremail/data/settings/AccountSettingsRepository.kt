@@ -49,7 +49,14 @@ class AccountSettingsRepository @Inject constructor(private val dao: AccountSett
         it.copy(retentionMonths = months?.coerceAtLeast(0))
     }
 
-    private suspend inline fun update(accountId: String, transform: (AccountSettings) -> AccountSettings) {
-        dao.upsert(transform(get(accountId)).toEntity())
+    /**
+     * Read-modify-writes an account's settings row through the DAO's single-transaction helper so a
+     * concurrent per-field setter can't clobber the read-modify-write (issue #313). A missing row is
+     * transformed from the account's defaults, preserving the "not configured yet = defaults" contract.
+     */
+    private suspend fun update(accountId: String, transform: (AccountSettings) -> AccountSettings) {
+        dao.readModifyWrite(accountId) { stored ->
+            transform(stored?.toDomain() ?: AccountSettings(accountId)).toEntity()
+        }
     }
 }

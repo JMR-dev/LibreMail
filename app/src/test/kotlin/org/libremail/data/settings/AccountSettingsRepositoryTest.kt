@@ -2,6 +2,7 @@
 package org.libremail.data.settings
 
 import app.cash.turbine.test
+import io.mockk.CapturingSlot
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -24,6 +25,20 @@ class AccountSettingsRepositoryTest {
     private val dao = mockk<AccountSettingsDao>()
     private val repository = AccountSettingsRepository(dao)
 
+    /**
+     * Stubs the DAO's single-transaction read-modify-write (issue #313) to apply the repository's
+     * transform against [current] (the stored row, or null) and capture the entity it would persist — so
+     * these setter tests still assert the transformed row directly, while AccountSettingsDaoTest covers
+     * the real transaction.
+     */
+    private fun captureUpdate(current: AccountSettingsEntity?): CapturingSlot<AccountSettingsEntity> {
+        val saved = slot<AccountSettingsEntity>()
+        coEvery { dao.readModifyWrite(any(), any()) } coAnswers {
+            saved.captured = secondArg<(AccountSettingsEntity?) -> AccountSettingsEntity>().invoke(current)
+        }
+        return saved
+    }
+
     @Test
     fun `get returns defaults when no row exists`() = runTest {
         coEvery { dao.get("acct") } returns null
@@ -38,10 +53,9 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setSignature reads, modifies, and writes the row`() = runTest {
-        coEvery { dao.get("acct") } returns
-            AccountSettingsEntity("acct", signature = "old", signatureEnabled = true, notificationsEnabled = false)
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(
+            AccountSettingsEntity("acct", signature = "old", signatureEnabled = true, notificationsEnabled = false),
+        )
 
         repository.setSignature("acct", "new")
 
@@ -101,10 +115,9 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setSignatureEnabled reads, modifies, and writes the row`() = runTest {
-        coEvery { dao.get("acct") } returns
-            AccountSettingsEntity("acct", signature = "keep", signatureEnabled = true, notificationsEnabled = true)
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(
+            AccountSettingsEntity("acct", signature = "keep", signatureEnabled = true, notificationsEnabled = true),
+        )
 
         repository.setSignatureEnabled("acct", false)
 
@@ -115,9 +128,7 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setNotificationsEnabled reads, modifies, and writes the row`() = runTest {
-        coEvery { dao.get("acct") } returns AccountSettingsEntity("acct", notificationsEnabled = true)
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(AccountSettingsEntity("acct", notificationsEnabled = true))
 
         repository.setNotificationsEnabled("acct", false)
 
@@ -126,9 +137,7 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setRetentionCount clamps a negative override to zero`() = runTest {
-        coEvery { dao.get("acct") } returns AccountSettingsEntity("acct")
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(AccountSettingsEntity("acct"))
 
         repository.setRetentionCount("acct", -5)
 
@@ -137,9 +146,7 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setRetentionCount preserves null as inherit-the-global-default`() = runTest {
-        coEvery { dao.get("acct") } returns AccountSettingsEntity("acct", retentionCount = 10)
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(AccountSettingsEntity("acct", retentionCount = 10))
 
         repository.setRetentionCount("acct", null)
 
@@ -148,9 +155,7 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setRetentionMonths clamps a negative override to zero`() = runTest {
-        coEvery { dao.get("acct") } returns AccountSettingsEntity("acct")
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(AccountSettingsEntity("acct"))
 
         repository.setRetentionMonths("acct", -3)
 
@@ -159,12 +164,23 @@ class AccountSettingsRepositoryTest {
 
     @Test
     fun `setRetentionMonths keeps a positive override as given`() = runTest {
-        coEvery { dao.get("acct") } returns AccountSettingsEntity("acct")
-        val saved = slot<AccountSettingsEntity>()
-        coEvery { dao.upsert(capture(saved)) } just Runs
+        val saved = captureUpdate(AccountSettingsEntity("acct"))
 
         repository.setRetentionMonths("acct", 6)
 
         assertEquals(6, saved.captured.retentionMonths)
+    }
+
+    @Test
+    fun `a setter transforms the account defaults when no row exists yet`() = runTest {
+        // The DAO hands the transform a null stored row for a never-configured account; the repository
+        // must transform from the account's defaults so the "not configured = defaults" contract holds.
+        val saved = captureUpdate(current = null)
+
+        repository.setSignature("acct", "first")
+
+        assertEquals("acct", saved.captured.accountId)
+        assertEquals("first", saved.captured.signature)
+        assertTrue(saved.captured.signatureEnabled, "defaults carry through the transform")
     }
 }

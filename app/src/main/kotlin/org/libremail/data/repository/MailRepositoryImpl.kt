@@ -337,16 +337,16 @@ class MailRepositoryImpl @Inject constructor(
         moveByRole(ids, FolderRole.TRASH, fallbackExpunge = true)
 
     override suspend fun expunge(ids: List<String>): Result<Unit> = runCatching {
-        val routings = messageDao.getRoutingByIds(ids)
-        messageDao.deleteByIds(ids) // optimistic
+        val routings = messageDao.getRoutingByIdsChunked(ids)
+        messageDao.deleteByIdsChunked(ids) // optimistic
         forEachAccountFolder(routings) { params, folder, group ->
             imapClient.deleteMessages(params, folder, group.map { uidOf(it.id) })
         }
     }
 
     override suspend fun moveToFolder(ids: List<String>, destFolderFullName: String): Result<Unit> = runCatching {
-        val routings = messageDao.getRoutingByIds(ids)
-        messageDao.deleteByIds(ids) // optimistic
+        val routings = messageDao.getRoutingByIdsChunked(ids)
+        messageDao.deleteByIdsChunked(ids) // optimistic
         forEachAccountFolder(routings) { params, folder, group ->
             if (folder != destFolderFullName) {
                 imapClient.moveMessages(params, folder, group.map { uidOf(it.id) }, destFolderFullName)
@@ -393,8 +393,8 @@ class MailRepositoryImpl @Inject constructor(
      */
     private suspend fun moveByRole(ids: List<String>, role: FolderRole, fallbackExpunge: Boolean): Result<Unit> =
         runCatching {
-            val routings = messageDao.getRoutingByIds(ids)
-            messageDao.deleteByIds(ids) // optimistic
+            val routings = messageDao.getRoutingByIdsChunked(ids)
+            messageDao.deleteByIdsChunked(ids) // optimistic
             val destByAccount = routings.map { it.accountId }.distinct()
                 .associateWith { resolveRoleFolder(it, role) }
             forEachAccountFolder(routings) { params, folder, group ->
@@ -556,6 +556,12 @@ private const val NANOS_PER_MS = 1_000_000L
 /** Rows per page for the unified inbox (issue #124) — a page is a few screenfuls of message rows. */
 private const val MAILBOX_PAGE_SIZE = 40
 
+/**
+ * Ids per `IN (:ids)` query in the batch move/delete/expunge paths, kept under SQLite's 999
+ * host-parameter limit on older Android (matches [org.libremail.data.sync.MailPruner]'s DELETE chunk).
+ */
+private const val SQL_IN_CHUNK = 500
+
 /** Attempts for the background best-effort SEEN-flag push before giving up silently (issue #148). */
 private const val SEEN_FLAG_PUSH_MAX_ATTEMPTS = 3
 
@@ -564,6 +570,20 @@ private const val SEEN_FLAG_RETRY_BACKOFF_MS = 2_000L
 
 /** Message id is "<accountId>:<uid>"; the uid is the trailing segment. */
 private fun uidOf(id: String): String = id.substringAfterLast(':')
+
+/**
+ * [MessageDao.getRoutingByIds] over an arbitrarily large [ids] list, chunked so the expanded `IN (:ids)`
+ * never exceeds SQLite's host-parameter limit (999 on older Android). The batch move/delete/expunge
+ * callers are bounded by the multi-select cap today, but chunking removes the latent
+ * `SQLITE_MAX_VARIABLE_NUMBER` crash the same way [org.libremail.data.sync.MailPruner] does (issue #313).
+ */
+private suspend fun MessageDao.getRoutingByIdsChunked(ids: List<String>): List<MessageRouting> =
+    ids.chunked(SQL_IN_CHUNK).flatMap { getRoutingByIds(it) }
+
+/** [MessageDao.deleteByIds] chunked under SQLite's host-parameter limit (see [getRoutingByIdsChunked]). */
+private suspend fun MessageDao.deleteByIdsChunked(ids: List<String>) {
+    ids.chunked(SQL_IN_CHUNK).forEach { deleteByIds(it) }
+}
 
 /**
  * Builds the SQL `LIKE` pattern the paged-search DAO queries take (issue #214), preserving the old
