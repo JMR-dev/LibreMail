@@ -73,6 +73,9 @@ style:
       # Reader-path perf logging (issue #358): the repository's openMessage and the reader ViewModel
       # log via AppLog, so their unit tests mockkStatic(Log) too.
       - '**/data/repository/MailRepositoryImplTest.kt'
+      # SignatureRepository.delete breadcrumbs a default-promotion via AppLog (issue #313), so its unit
+      # test mockkStatic(Log) — it does not bypass the facade.
+      - '**/data/settings/SignatureRepositoryTest.kt'
       - '**/data/repository/MailRepositoryImplCoverageTest.kt'
       # Account-add breadcrumb (issue #403): addImapAccount/addOutlookAccount log via AppLog, so this
       # suite mockkStatic(Log) so the calls don't crash on the throwing JVM stub.

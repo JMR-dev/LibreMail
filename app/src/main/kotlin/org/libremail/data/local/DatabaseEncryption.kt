@@ -80,10 +80,14 @@ object DatabaseEncryption {
             target.close()
         }
 
-        // Swap the converted file into place; drop any stale WAL/SHM sidecars from either file first.
+        // Swap the converted file into place; drop any stale sidecars from either file first. Both files
+        // are in rollback-journal mode (journal_mode = DELETE), so the sidecar that can actually linger
+        // after an interrupted attempt is the `-journal`; the `-wal`/`-shm` deletes are belt-and-suspenders
+        // for a file left in WAL mode by an older build (mirrors AccountDataMigrator's sweep).
         listOf(dbFile.name, tmp.name).forEach { base ->
             File(dir, "$base-wal").delete()
             File(dir, "$base-shm").delete()
+            File(dir, "$base-journal").delete()
         }
         if (!tmp.renameTo(dbFile)) {
             tmp.copyTo(dbFile, overwrite = true)

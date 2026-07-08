@@ -16,18 +16,6 @@ import org.libremail.data.local.entity.MessageSummary
 @Dao
 interface MessageDao {
     /**
-     * Mailbox-list projection ordered newest-first. Deliberately omits the large `body`/`isHtml`
-     * columns: the list observes every cached message at once, and pulling full bodies through
-     * SQLite's shared ~2 MB CursorWindow overflows it once enough large bodies are cached
-     * (issue #51). Bodies are loaded lazily per-message via [getById] when a message is opened.
-     */
-    @Query(
-        "SELECT id, accountId, sender, senderEmail, subject, snippet, timestampMillis, " +
-            "isRead, isStarred, folder, inInbox, bodyFetched FROM messages ORDER BY timestampMillis DESC",
-    )
-    fun observeSummaries(): Flow<List<MessageSummary>>
-
-    /**
      * Paged unified-inbox projection: folder-synced rows of [folder] across every account,
      * newest-first, as a Paging 3 [PagingSource] (issue #124). Room loads only the requested window
      * (LIMIT/OFFSET), so the mailbox list's query, mapping, and recomposition cost scale with what's on
