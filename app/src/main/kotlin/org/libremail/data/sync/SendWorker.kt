@@ -52,6 +52,13 @@ class SendWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         if (cacheGuard.isCacheLocked()) return Result.retry()
+        // Resolving the Lazy DB deps below opens the Room cache; if SQLCipher's native library is
+        // unavailable on this device (issue #359) that open throws — with no UI gate here, treat it as a
+        // soft retry rather than letting it crash the worker.
+        return retryIfEncryptedCacheUnavailable(TAG) { drainOutbox() }
+    }
+
+    private suspend fun drainOutbox(): Result {
         val outboxDao = this.outboxDao.get()
         val accountDao = this.accountDao.get()
         val connectionFactory = this.connectionFactory.get()

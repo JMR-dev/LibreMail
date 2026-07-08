@@ -28,16 +28,21 @@ class SyncWorker @AssistedInject constructor(
             AppLog.i(TAG, "sync deferred: cache locked")
             return Result.retry()
         }
-        return mailSyncer.get().syncAll().fold(
-            onSuccess = {
-                AppLog.i(TAG, "sync worker: success")
-                Result.success()
-            },
-            onFailure = { error ->
-                AppLog.w(TAG, "sync worker: retry", error)
-                Result.retry()
-            },
-        )
+        // syncAll()'s first DB access (and thus Room's deferred cache open) can throw if SQLCipher's
+        // native library is unavailable on this device (issue #359) — that open fires OUTSIDE syncAll's own
+        // runCatching, so without this guard it would escape doWork. Treat it as a soft retry, not a crash.
+        return retryIfEncryptedCacheUnavailable(TAG) {
+            mailSyncer.get().syncAll().fold(
+                onSuccess = {
+                    AppLog.i(TAG, "sync worker: success")
+                    Result.success()
+                },
+                onFailure = { error ->
+                    AppLog.w(TAG, "sync worker: retry", error)
+                    Result.retry()
+                },
+            )
+        }
     }
 
     private companion object {

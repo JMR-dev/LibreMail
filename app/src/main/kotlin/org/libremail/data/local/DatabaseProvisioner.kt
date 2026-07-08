@@ -104,35 +104,45 @@ class DatabaseProvisioner internal constructor(
             keyStore.clearClearPending()
         }
 
-        // One-time move of accounts/credentials/settings/signatures into the non-auth AccountDatabase
-        // (issue #111). MUST run before the cache opens: opening it applies MIGRATION_15_16, which drops
-        // the moved tables. Runs AFTER the wipe above so an unrecoverable-key cache is gone first
-        // (nothing left to move) and we never block waiting on a passphrase we can't get.
-        accountDataMigrator.migrateIfNeeded()
-
-        // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
-        // before the database is opened — so it never races an open connection; toggling the setting
-        // therefore takes effect on the next app start. The passphrase source is resolved from which
-        // seal actually exists (DatabaseKeyStore.resolvePassphrase), NOT from the app-lock setting (a
-        // separate DataStore that can disagree). When app-lock is ON the sealing key is auth-bound, so
-        // resolvePassphrase waits on PassphraseSession until the user authenticates — which is why this
-        // must never run on the main thread while the cache is locked (issue #93).
-        val settings = settingsRepository.settings.first()
+        // FAIL CLOSED (issue #359, security rework of #367). SQLCipher's native library can fail to LOAD
+        // (UnsatisfiedLinkError from ensureNativeLibraryLoaded) OR to LINK (the library loads, but the
+        // JNI-bound SQLiteConnection.nativeOpen is unresolved and throws only when a keyed database is
+        // actually opened — the exact #359 signature). EVERY startup step that touches that library must
+        // therefore run inside this ONE handler, so any such LinkageError becomes a single fail-closed
+        // signal rather than escaping as a raw crash. On that signal we deliberately do NOT silently
+        // degrade to an unencrypted cache (that would defeat the user's opt-in encryption): we never open
+        // plaintext, wipe the on-disk ciphertext, or write the encryptCache setting — we raise a distinct
+        // exception the startup UI (CacheEncryptionGate) catches to show the encryption error gate. It is
+        // NOT memoized (a throw skips prepareCache's `.also { prepared = it }`), so the next launch
+        // re-attempts and recovers automatically if the library later loads.
+        //
+        // The catch stays typed LinkageError ONLY. It must NOT be broadened to Exception/Throwable: the
+        // migrator below deliberately throws a NON-linkage error ("crash-loop rather than lose data") on
+        // an unexpected copy failure, and that — like any other non-linkage error — must still propagate
+        // uncaught so we never drop the not-yet-copied source tables.
         return try {
+            // One-time move of accounts/credentials/settings/signatures into the non-auth AccountDatabase
+            // (issue #111). MUST run before the cache opens: opening it applies MIGRATION_15_16, which drops
+            // the moved tables. Runs AFTER the wipe above so an unrecoverable-key cache is gone first
+            // (nothing left to move) and we never block waiting on a passphrase we can't get. Runs INSIDE
+            // this handler (issue #359 gap 1): its copyAccountTables loads SQLCipher and does a keyed
+            // openOrCreateDatabase + ATTACH … KEY (a real nativeOpen) even when encryption is OFF, so a
+            // LinkageError there used to escape this handler entirely and crash-loop.
+            accountDataMigrator.migrateIfNeeded()
+
+            // Opt-in at-rest encryption of the local cache (off by default). The conversion runs here —
+            // before the database is opened — so it never races an open connection; toggling the setting
+            // therefore takes effect on the next app start. The passphrase source is resolved from which
+            // seal actually exists (DatabaseKeyStore.resolvePassphrase), NOT from the app-lock setting (a
+            // separate DataStore that can disagree). When app-lock is ON the sealing key is auth-bound, so
+            // resolvePassphrase waits on PassphraseSession until the user authenticates — which is why this
+            // must never run on the main thread while the cache is locked (issue #93).
+            val settings = settingsRepository.settings.first()
             resolveOpenMode(settings, dbFile)
         } catch (nativeLoadFailure: LinkageError) {
-            // FAIL CLOSED (issue #359, security rework of #367). SQLCipher's native library could not be
-            // loaded/linked (e.g. UnsatisfiedLinkError at SQLiteConnection.nativeOpen or from
-            // ensureNativeLibraryLoaded), so the encrypted cache cannot be opened OR converted. We must
-            // NOT silently degrade to an unencrypted cache (that would defeat the user's opt-in
-            // encryption), so we deliberately do NOT: open plaintext, wipe the on-disk ciphertext, or
-            // write the encryptCache setting. Instead raise a distinct signal the startup UI catches to
-            // show the encryption error gate. This throw is NOT memoized (it skips prepareCache's
-            // `.also { prepared = it }`), so the next launch re-attempts and recovers automatically if
-            // the library later loads.
             AppLog.w(
                 TAG,
-                "SQLCipher native library failed to load; failing closed (encrypted cache unavailable)",
+                "SQLCipher native library failed to load or link; failing closed (encrypted cache unavailable)",
                 nativeLoadFailure,
             )
             throw CacheEncryptionUnavailableException(nativeLoadFailure)
@@ -159,6 +169,13 @@ class DatabaseProvisioner internal constructor(
                 // load the keyed open reaches SQLiteConnection.nativeOpen with no library loaded and
                 // crashes with UnsatisfiedLinkError on every cold start once encryption is enabled.
                 DatabaseEncryption.ensureNativeLibraryLoaded()
+                // Probe the REAL keyed open HERE (issue #359 gap 2), inside the fail-closed handler.
+                // ensureNativeLibraryLoaded() above only loads the .so; the keyed nativeOpen that can still
+                // throw on an incompatible device fires LATER, in DatabaseModule's DeferredOpenHelperFactory
+                // AFTER prepareCache() returns — outside any handler — so an open-time UnsatisfiedLinkError
+                // there would escape uncaught. Reaching a keyed nativeOpen now converts that LinkageError to
+                // CacheEncryptionUnavailableException before Room's deferred open can crash on it.
+                DatabaseEncryption.probeKeyedOpen(dbFile, passphrase)
                 CacheOpenMode.Encrypted(passphrase)
             }
 
