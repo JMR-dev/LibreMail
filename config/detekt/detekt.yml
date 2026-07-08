@@ -82,6 +82,9 @@ style:
       - '**/data/repository/AccountRepositoryImplTest.kt'
       - '**/ui/reader/ReaderViewModelTest.kt'
       - '**/ui/reader/ReaderViewModelActionsTest.kt'
+      # First-account onboarding breadcrumb (issue #308): onAccountAdded logs via AppLog, so this
+      # suite mockkStatic(Log) so the call doesn't crash on the throwing JVM stub.
+      - '**/ui/onboarding/OnboardingViewModelTest.kt'
   MagicNumber:
     # dp / sp / duration literals are idiomatic inline in Compose.
     ignoreAnnotated: ['Composable']

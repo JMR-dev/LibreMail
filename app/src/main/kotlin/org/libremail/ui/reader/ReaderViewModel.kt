@@ -50,6 +50,9 @@ sealed interface ReaderEvent {
 
     /** Building the reply/forward draft failed; the screen surfaces [message] (or a generic fallback). */
     data class ComposeFailed(val message: String?) : ReaderEvent
+
+    /** Persisting a star toggle failed; the optimistic flip was rolled back and the screen notifies. */
+    data object StarFailed : ReaderEvent
 }
 
 @HiltViewModel
@@ -140,7 +143,19 @@ class ReaderViewModel @Inject constructor(
         val message = _state.value.message ?: return
         val starred = !message.isStarred
         _state.update { it.copy(message = message.copy(isStarred = starred)) }
-        viewModelScope.launch { repository.setStarred(messageId, starred) }
+        viewModelScope.launch {
+            repository.setStarred(messageId, starred).onFailure { e ->
+                // The optimistic flip already updated the UI; the persist failed, so reconcile by rolling
+                // it back (the star would otherwise stay stuck in a state the store never accepted) and
+                // notify the screen. Revert to the pre-toggle value (!starred) of the current message.
+                AppLog.w(READER_TAG, "toggleStar persist failed; rolling back optimistic star", e)
+                _state.update { current ->
+                    val shown = current.message ?: return@update current
+                    current.copy(message = shown.copy(isStarred = !starred))
+                }
+                _events.send(ReaderEvent.StarFailed)
+            }
+        }
     }
 
     fun loadRemoteImages() = _state.update { it.copy(loadRemoteImages = true) }
