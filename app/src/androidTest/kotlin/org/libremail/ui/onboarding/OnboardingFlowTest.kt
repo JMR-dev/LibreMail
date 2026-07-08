@@ -134,6 +134,20 @@ class OnboardingFlowTest {
                                 navController.navigate(Routes.onboardingAppPassword(provider.key))
                             },
                             onManualSetup = {},
+                            onPickOutlook = { navController.navigate(Routes.ONBOARDING_OUTLOOK_IMAP) },
+                            viewModel = viewModel,
+                        )
+                    }
+                    composable(Routes.ONBOARDING_OUTLOOK_IMAP) {
+                        val viewModel = remember { AccountSetupViewModel(outlookAuthManager, accountRepo) }
+                        OutlookImapNoticeScreen(
+                            onBack = { navController.popBackStack() },
+                            onAccountAdded = { id ->
+                                onboarding.onAccountAdded(id)
+                                navController.navigate(Routes.ONBOARDING_ADD_ANOTHER) {
+                                    popUpTo(Routes.ONBOARDING_PICKER)
+                                }
+                            },
                             viewModel = viewModel,
                         )
                     }
@@ -250,6 +264,23 @@ class OnboardingFlowTest {
         // Landed on the first (and only) account's inbox.
         waitForText("E2E first message")
         composeTestRule.onNodeWithText("E2E first message").assertIsDisplayed()
+    }
+
+    @Test
+    fun outlookPick_showsImapNoticeBeforeAuth() {
+        setOnboardingContent(FakeAccountRepository(), FakeMailRepository())
+
+        // Welcome → picker → tap Outlook.
+        composeTestRule.onNodeWithText(string(R.string.onboarding_add_account)).performClick()
+        waitForText(string(R.string.account_setup_outlook))
+        composeTestRule.onNodeWithText(string(R.string.account_setup_outlook)).performClick()
+
+        // Picking Outlook lands on the IMAP-enablement notice BEFORE any OAuth browser opens (#411):
+        // the interstitial's question is shown and its bottom "Sign in" button (which would continue
+        // the existing Outlook auth flow) is present.
+        waitForText(string(R.string.outlook_imap_question))
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_question)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.outlook_imap_sign_in)).performScrollTo().assertIsDisplayed()
     }
 
     @Test

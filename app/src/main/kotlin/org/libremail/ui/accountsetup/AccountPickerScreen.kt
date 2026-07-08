@@ -57,6 +57,9 @@ import org.libremail.domain.model.MailProvider
  *
  * @param onAccountAdded invoked with the new account id when the *inline* Outlook flow completes.
  *   The app-password and manual paths report their own completion from their own screens.
+ * @param onPickOutlook when non-null, tapping Outlook delegates here instead of launching auth
+ *   inline — onboarding uses it to first show the pre-auth IMAP-enablement notice (#411). Left null
+ *   for the standalone "Add account" entry, which keeps launching Microsoft sign-in directly.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +68,7 @@ fun AccountPickerScreen(
     onAccountAdded: (String) -> Unit,
     onPickProvider: (MailProvider) -> Unit,
     onManualSetup: () -> Unit,
+    onPickOutlook: (() -> Unit)? = null,
     viewModel: AccountSetupViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -73,6 +77,19 @@ fun AccountPickerScreen(
     val outlookLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result -> viewModel.onOutlookResult(result.data) }
+
+    // Launches Microsoft sign-in in place (the standalone "Add account" behaviour). Onboarding
+    // overrides the Outlook tap with [onPickOutlook] to interpose the IMAP-enablement notice (#411),
+    // which then runs this exact same flow from its "Sign in" button.
+    val launchOutlookInline: () -> Unit = {
+        viewModel.outlookAuthIntent().fold(
+            onSuccess = { intent ->
+                runCatching { outlookLauncher.launch(intent) }
+                    .onFailure { viewModel.onOutlookLaunchFailed(it) }
+            },
+            onFailure = { viewModel.onOutlookLaunchFailed(it) },
+        )
+    }
 
     LaunchedEffect(state.status, state.addedAccountId) {
         if (state.status == SetupStatus.DONE) {
@@ -124,15 +141,7 @@ fun AccountPickerScreen(
                     icon = Icons.Filled.Email,
                     label = stringResource(R.string.account_setup_outlook),
                     enabled = !busy,
-                    onClick = {
-                        viewModel.outlookAuthIntent().fold(
-                            onSuccess = { intent ->
-                                runCatching { outlookLauncher.launch(intent) }
-                                    .onFailure { viewModel.onOutlookLaunchFailed(it) }
-                            },
-                            onFailure = { viewModel.onOutlookLaunchFailed(it) },
-                        )
-                    },
+                    onClick = onPickOutlook ?: launchOutlookInline,
                 )
                 MailProvider.entries.forEach { provider ->
                     ProviderRow(

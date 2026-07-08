@@ -42,6 +42,7 @@ import org.libremail.ui.onboarding.ContactsAccessScreen
 import org.libremail.ui.onboarding.LicenseScreen
 import org.libremail.ui.onboarding.OnboardingViewModel
 import org.libremail.ui.onboarding.OnboardingWelcomeScreen
+import org.libremail.ui.onboarding.OutlookImapNoticeScreen
 import org.libremail.ui.outbox.OutboxScreen
 import org.libremail.ui.reader.ReaderScreen
 import org.libremail.ui.reporting.ProblemReportsScreen
@@ -344,26 +345,47 @@ private fun NavGraphBuilder.onboardingGraph(navController: NavHostController, li
                     navController.navigate(Routes.onboardingAppPassword(provider.key))
                 },
                 onManualSetup = { navController.navigate(Routes.ONBOARDING_MANUAL) },
+                // Onboarding interposes the IMAP-enablement notice before Microsoft sign-in (#411);
+                // the notice screen then runs the same Outlook OAuth flow the picker would inline.
+                onPickOutlook = { navController.navigate(Routes.ONBOARDING_OUTLOOK_IMAP) },
             )
         }
-        composable(
-            route = Routes.ONBOARDING_APP_PASSWORD_PATTERN,
-            arguments = listOf(navArgument(Routes.APP_PASSWORD_ARG_PROVIDER) { type = NavType.StringType }),
-        ) { entry ->
-            val onboarding = onboardingViewModel(navController, entry)
-            AppPasswordSetupScreen(
-                onBack = navController::popBackStack,
-                onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
-            )
-        }
-        composable(Routes.ONBOARDING_MANUAL) { entry ->
-            val onboarding = onboardingViewModel(navController, entry)
-            ManualSetupScreen(
-                onBack = navController::popBackStack,
-                onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
-            )
-        }
+        onboardingSetupDestinations(navController)
         onboardingFinishDestinations(navController)
+    }
+}
+
+/**
+ * The account-setup destinations reached from the vendor picker: the pre-auth Outlook IMAP-enablement
+ * notice (#411), the guided app-password form, and manual IMAP/SMTP setup. Split out of
+ * [onboardingGraph] so each stays a readable length; all share the graph-scoped [OnboardingViewModel]
+ * and report a completed add through [completeAdd], which drops the setup screen and advances to the
+ * "add another?" prompt.
+ */
+private fun NavGraphBuilder.onboardingSetupDestinations(navController: NavHostController) {
+    composable(Routes.ONBOARDING_OUTLOOK_IMAP) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        OutlookImapNoticeScreen(
+            onBack = navController::popBackStack,
+            onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
+        )
+    }
+    composable(
+        route = Routes.ONBOARDING_APP_PASSWORD_PATTERN,
+        arguments = listOf(navArgument(Routes.APP_PASSWORD_ARG_PROVIDER) { type = NavType.StringType }),
+    ) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        AppPasswordSetupScreen(
+            onBack = navController::popBackStack,
+            onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
+        )
+    }
+    composable(Routes.ONBOARDING_MANUAL) { entry ->
+        val onboarding = onboardingViewModel(navController, entry)
+        ManualSetupScreen(
+            onBack = navController::popBackStack,
+            onAccountAdded = { id -> onboarding.completeAdd(navController, id) },
+        )
     }
 }
 
