@@ -124,13 +124,18 @@ class AccountSetupViewModelTest {
     }
 
     @Test
-    fun `a cancelled sign-in (null result) surfaces a cancellation message`() {
+    fun `a cancelled sign-in (null result) is a no-op, not an error`() {
         val vm = viewModel()
 
         vm.onOutlookResult(null)
 
-        assertEquals("Microsoft sign-in was cancelled", vm.state.value.error)
+        // #308: a normal cancel (backing out of the sign-in tab → RESULT_CANCELED, null data) must not
+        // raise an error snackbar; it leaves the screen untouched (idle, no error) and only breadcrumbs.
+        assertNull(vm.state.value.error)
         assertEquals(SetupStatus.IDLE, vm.state.value.status)
+        val entry = logBuffer.snapshot().single()
+        assertEquals('D', entry.level)
+        assertTrue(entry.message.contains("cancelled"), entry.message)
     }
 
     @Test
@@ -263,7 +268,9 @@ class AccountSetupViewModelTest {
     @Test
     fun `consumeError clears a surfaced error`() {
         val vm = viewModel()
-        vm.onOutlookResult(null)
+        // Surface a real error first (a cancel is now a no-op), then confirm consumeError clears it.
+        vm.onOutlookLaunchFailed(IllegalStateException("appauth exploded"))
+        assertEquals("appauth exploded", vm.state.value.error)
 
         vm.consumeError()
 

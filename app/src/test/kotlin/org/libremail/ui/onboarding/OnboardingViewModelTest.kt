@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.ui.onboarding
 
+import android.util.Log
+import androidx.lifecycle.SavedStateHandle
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -30,10 +34,19 @@ class OnboardingViewModelTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
-    fun setUp() = Dispatchers.setMain(testDispatcher)
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        // onAccountAdded now breadcrumbs the first account via AppLog (#308); android.util.Log is a
+        // no-op stub that throws "not mocked" under plain JVM tests, so stub it so the call can't crash.
+        mockkStatic(Log::class)
+        every { Log.i(any(), any()) } returns 0
+    }
 
     @After
-    fun tearDown() = Dispatchers.resetMain()
+    fun tearDown() {
+        Dispatchers.resetMain()
+        unmockkAll()
+    }
 
     private fun batteryManager(supported: Boolean = true, unrestricted: Boolean = false) =
         mockk<BatteryOptimizationManager> {
@@ -55,7 +68,8 @@ class OnboardingViewModelTest {
         battery: BatteryOptimizationManager = batteryManager(),
         contacts: ContactsPermissionManager = contactsManager(),
         settings: SettingsRepository = settingsRepository(),
-    ) = OnboardingViewModel(battery, contacts, settings)
+        savedStateHandle: SavedStateHandle = SavedStateHandle(),
+    ) = OnboardingViewModel(battery, contacts, settings, savedStateHandle)
 
     @Test
     fun `battery prompt is needed when not unrestricted and not handled`() = runTest(testDispatcher) {
@@ -122,6 +136,21 @@ class OnboardingViewModelTest {
 
         assertEquals("imap:first@example.com", vm.firstAddedAccountId)
     }
+
+    @Test
+    fun `the first added account id survives a process-death recreation via SavedStateHandle`() =
+        runTest(testDispatcher) {
+            // #308: onboarding can be process-killed mid-flow (e.g. the excursion to system battery
+            // settings). The first-account id lives in SavedStateHandle, so a recreated ViewModel over
+            // the restored state must still finish onto that account's inbox rather than the unified one.
+            val handle = SavedStateHandle()
+            viewModel(savedStateHandle = handle).onAccountAdded("imap:first@example.com")
+
+            // Simulate restoration after a kill: a brand-new handle seeded from the saved state, then a
+            // fresh ViewModel over it (a plain field would have been lost — this is exactly #30's guard).
+            val restored = SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) })
+            assertEquals("imap:first@example.com", viewModel(savedStateHandle = restored).firstAddedAccountId)
+        }
 
     @Test
     fun `marking the battery prompt handled persists the flag`() = runTest(testDispatcher) {

@@ -110,6 +110,7 @@ class OnboardingFlowTest {
             BatteryOptimizationManager(appContext),
             ContactsPermissionManager(appContext),
             SettingsRepository(appContext),
+            SavedStateHandle(),
         )
         composeTestRule.setContent {
             LibreMailTheme(darkTheme = false, dynamicColor = false) {

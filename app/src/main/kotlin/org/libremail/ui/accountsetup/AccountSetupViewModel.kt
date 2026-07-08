@@ -63,7 +63,10 @@ class AccountSetupViewModel @Inject constructor(
 
     fun onOutlookResult(data: Intent?) {
         if (data == null) {
-            _state.update { it.copy(error = "Microsoft sign-in was cancelled") }
+            // A null result Intent is a normal user cancel: backing out of the Microsoft sign-in tab
+            // returns RESULT_CANCELED with no data. That is expected, not a failure, so it is a no-op —
+            // surfacing an error snackbar for a deliberate cancel is just noise (#308).
+            AppLog.d(TAG, "Outlook sign-in cancelled by the user; no-op")
             return
         }
         viewModelScope.launch {
