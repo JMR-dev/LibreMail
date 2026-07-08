@@ -201,6 +201,7 @@ class MailMaintenanceGateTest {
             mailRepository = mockk(relaxed = true),
             maintenanceGate = gate,
             throttleGate = AccountThrottleGate(),
+            interactiveGate = InteractiveImapGate(),
         )
     }
 

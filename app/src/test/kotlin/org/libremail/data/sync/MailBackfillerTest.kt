@@ -17,8 +17,14 @@ import jakarta.mail.MessagingException
 import jakarta.mail.Session
 import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeMessage
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -524,6 +530,82 @@ class MailBackfillerTest {
         assertTrue(logBuffer.snapshot().any { it.message.startsWith("backfill skip acct:") })
     }
 
+    // --- issue #355: interactive-fetch priority -------------------------------------------------
+
+    /**
+     * The core of #355: while an interactive fetch (a message open, an attachment download, …) holds the
+     * [InteractiveImapGate], backfill must PARK at its per-page yield point instead of stealing the
+     * account's IMAP throughput, and resume the instant the interactive fetch clears. The backfiller and
+     * the interactive holder share ONLY the gate, so a pass is attributable solely to it. Mirrors
+     * [MailMaintenanceGateTest]'s real-dispatcher hand-off idiom (runBlocking + Dispatchers.Default).
+     */
+    @Test
+    fun `backfill parks before its next page while an interactive fetch holds the gate, then resumes`() =
+        runBlocking<Unit> {
+            cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+            val gate = InteractiveImapGate()
+            val fetched = CompletableDeferred<Unit>()
+            val imapClient = mockk<ImapClient>()
+            coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } coAnswers {
+                fetched.complete(Unit)
+                emptyList() // one page, then the folder completes and the slice ends
+            }
+
+            // An interactive fetch is in flight: it holds the gate until we release it.
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val interactive = launch(Dispatchers.Default) {
+                gate.withInteractive {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            entered.await()
+
+            val backfillJob = launch(Dispatchers.Default) {
+                backfiller(AccountSettings("acct"), imapClient = imapClient, interactiveGate = gate).runBackfill()
+            }
+            delay(PARK_PROBE_MS)
+            assertFalse(fetched.isCompleted, "backfill must not page while an interactive fetch is active")
+            assertTrue(
+                logBuffer.snapshot().any { it.message.startsWith("backfill parking acct:") },
+                "a PII-free park breadcrumb is recorded",
+            )
+
+            release.complete(Unit)
+            withTimeout(HAND_OFF_TIMEOUT_MS) { backfillJob.join() }
+            assertTrue(fetched.isCompleted, "backfill resumes and pages once the interactive fetch clears")
+            assertTrue(
+                logBuffer.snapshot().any { it.message.startsWith("backfill resumed acct:") },
+                "a PII-free resume breadcrumb is recorded",
+            )
+            interactive.join()
+        }
+
+    /**
+     * No-deadlock guarantee: an interactive fetch that ERRORS still releases the gate (withInteractive's
+     * `finally`), so backfill is never stranded parked behind a failed open. The failing fetch has already
+     * released the gate here, and backfill then runs to completion without hanging.
+     */
+    @Test
+    fun `an interactive fetch that errors does not strand backfill parked`() = runBlocking<Unit> {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val gate = InteractiveImapGate()
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } returns emptyList()
+
+        val failed = runCatching { gate.withInteractive { throw MessagingException("open failed") } }
+        assertTrue(failed.isFailure, "the interactive fetch failed")
+        assertFalse(gate.isInteractiveActive(), "the errored fetch still released the gate")
+
+        val moreWork = withTimeout(HAND_OFF_TIMEOUT_MS) {
+            backfiller(AccountSettings("acct"), imapClient = imapClient, interactiveGate = gate).runBackfill()
+        }
+
+        assertFalse(moreWork)
+        coVerify(atLeast = 1) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+    }
+
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
 
     @Test
@@ -603,6 +685,7 @@ class MailBackfillerTest {
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
         imapClient: ImapClient = client,
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
+        interactiveGate: InteractiveImapGate = InteractiveImapGate(),
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(accountEntity)
@@ -659,6 +742,7 @@ class MailBackfillerTest {
             mailRepository = mailRepository,
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = throttleGate,
+            interactiveGate = interactiveGate,
         ).also {
             lastMessageDao = messageDao
             lastMailRepository = mailRepository
@@ -723,5 +807,11 @@ class MailBackfillerTest {
         const val WINDOW = 50
         private const val DAY_MILLIS = 24L * 60 * 60 * 1000
         private const val MONTH_MILLIS = 30L * DAY_MILLIS
+
+        /** Slack given to a parked backfill to (wrongly) page before we assert it is still parked (#355). */
+        private const val PARK_PROBE_MS = 300L
+
+        /** Generous bound for the gate hand-off; only a real park/resume regression approaches it (#355). */
+        private const val HAND_OFF_TIMEOUT_MS = 5_000L
     }
 }

@@ -58,6 +58,7 @@ class MailBackfiller @Inject constructor(
     private val mailRepository: MailRepository,
     private val maintenanceGate: MailMaintenanceGate,
     private val throttleGate: AccountThrottleGate,
+    private val interactiveGate: InteractiveImapGate,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
     private data class FolderResult(val batches: Int, val moreWork: Boolean)
@@ -167,6 +168,13 @@ class MailBackfiller @Inject constructor(
         var stalled = false
         while (batches < maxBatches) {
             currentCoroutineContext().ensureActive()
+            // Yield to any in-flight interactive fetch (#355) BEFORE starting the next page: opening a
+            // message must win the account's IMAP throughput, so park here while a user fetch holds the
+            // gate and resume the instant it clears. A page already fetched (if any) finished above; the
+            // interactive fetch simply wins the next server round-trip. This is also the slice's first
+            // yield point — iteration 0 runs it before the very first page — so a slice never begins a
+            // page while the user is waiting on a body.
+            yieldToInteractive(account)
             // Count floor (#13 precedence): once the folder holds as many messages as retention keeps,
             // stop before fetching another page. Unlike the age floor below, this can be decided from
             // the cache alone: the count pruner keeps the newest-N by UID — exactly the order paging
@@ -214,6 +222,21 @@ class MailBackfiller @Inject constructor(
         val folderLabel = logSafeFolderLabel(folder)
         AppLog.d(TAG, "backfill ${accountLogRef(account.id)} folder=$folderLabel pages=$batches complete=$complete")
         return FolderResult(batches, moreWork = !complete && !stalled)
+    }
+
+    /**
+     * Parks the backfill (suspends) while an interactive, user-facing IMAP fetch is in flight (#355), so
+     * the reader's on-demand body fetch wins the account's throughput instead of queuing behind the
+     * background storm. Checks first so the common idle case adds no cost and logs nothing; only an actual
+     * yield brackets a PII-free park/resume breadcrumb (hashed account ref only — see #358). The gate's
+     * counter is released by [InteractiveImapGate.withInteractive]'s `finally` even when the interactive
+     * fetch errors, so this can never deadlock.
+     */
+    private suspend fun yieldToInteractive(account: Account) {
+        if (!interactiveGate.isInteractiveActive()) return
+        AppLog.i(TAG, "backfill parking ${accountLogRef(account.id)}: interactive fetch in flight")
+        interactiveGate.awaitInteractiveIdle()
+        AppLog.i(TAG, "backfill resumed ${accountLogRef(account.id)}: interactive fetch cleared")
     }
 
     /** True once the folder already holds as many messages as the count retention keeps (or more). */
