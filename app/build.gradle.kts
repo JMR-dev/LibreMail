@@ -40,10 +40,16 @@ val outlookOAuthClientId: String = secrets.getProperty(
 // OUTLOOK_OAUTH_REDIRECT_URI and the redirect URI registered in the Azure app registration.
 val outlookRedirectScheme = "org.libremail.outlook"
 
-// Debug-report ingest endpoint (issue #34, out of scope for this repo). Empty by default: the debug
-// reporting client is strictly opt-in and never sends anything unless the user taps Submit AND an
-// endpoint is configured here (overridable via git-ignored secrets.properties).
+// Debug-report ingest endpoint (issue #34; the ingest server is separate infrastructure). Empty by
+// default: the debug reporting client is strictly opt-in and never sends anything unless the user taps
+// Submit AND an endpoint is configured here (overridable via git-ignored secrets.properties).
 val debugReportEndpoint: String = secrets.getProperty("DEBUG_REPORT_ENDPOINT", "")
+
+// Debug-report payload public key (issue #34): a single-line Base64 X.509/SPKI RSA public key. The app
+// seals every report to this key before upload, so only the maintainer holding the matching PRIVATE
+// key (never shipped in the app — F-Droid-safe) can read it. Empty by default; without it the client
+// fails closed and uploads nothing. Overridable via git-ignored secrets.properties.
+val debugReportPublicKey: String = secrets.getProperty("DEBUG_REPORT_PUBLIC_KEY", "")
 
 // Optional release signing, configured via git-ignored secrets.properties. When absent, release
 // builds fall back to the debug key (installable for testing, but not publishable).
@@ -66,6 +72,7 @@ android {
         buildConfigField("String", "OUTLOOK_OAUTH_CLIENT_ID", "\"$outlookOAuthClientId\"")
         buildConfigField("String", "OUTLOOK_OAUTH_REDIRECT_URI", "\"$outlookRedirectScheme://oauth2redirect\"")
         buildConfigField("String", "DEBUG_REPORT_ENDPOINT", "\"$debugReportEndpoint\"")
+        buildConfigField("String", "DEBUG_REPORT_PUBLIC_KEY", "\"$debugReportPublicKey\"")
         // IMAP connection reuse (issue #357 Part 2, wiring the #125 spike): keep one authenticated
         // IMAP connection warm per account instead of paying a cold CONNECT+TLS+LOGIN on every
         // operation — the fix for Gmail throttling LibreMail's connect-per-operation traffic. ON by

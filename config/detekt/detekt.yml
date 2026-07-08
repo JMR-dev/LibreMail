@@ -79,6 +79,10 @@ style:
       - '**/data/repository/AccountRepositoryImplTest.kt'
       - '**/ui/reader/ReaderViewModelTest.kt'
       - '**/ui/reader/ReaderViewModelActionsTest.kt'
+      # Debug-report ingest (issue #34): ReportUploadWorker logs its anonymize/encrypt/upload lifecycle
+      # via AppLog, so its unit tests mockkStatic(Log) to keep the throwing JVM stub quiet.
+      - '**/reporting/ReportUploadWorkerTest.kt'
+      - '**/reporting/ReportUploadWorkerHttpTest.kt'
   MagicNumber:
     # dp / sp / duration literals are idiomatic inline in Compose.
     ignoreAnnotated: ['Composable']
