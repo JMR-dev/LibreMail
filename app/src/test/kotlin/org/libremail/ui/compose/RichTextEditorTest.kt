@@ -348,6 +348,37 @@ class RichTextEditorTest {
         assertTrue(isBulletActive(bothLines.copy(selection = fullText)))
     }
 
+    @Test
+    fun `toolbarStateOf derives every button's state from the field value in a single pass`() {
+        // A run carrying bold + color + size, centered, on a bullet line. applyBlock inserts "• " and
+        // lands the selection back on the styled text, so every scan sees the same run the user is on.
+        var value = field("hello", TextRange(0, 5))
+        value = applyStyle(value, RichStyle.Bold, linkColor)
+        value = applyStyle(value, RichStyle.FontColor(0xFF112233.toInt()), linkColor)
+        value = applyStyle(value, RichStyle.FontSize(18), linkColor)
+        value = applyAlignment(value, RichAlign.CENTER, linkColor, noFont)
+        value = applyBlock(value, BlockMarker.BULLET, linkColor, noFont)
+
+        val state = toolbarStateOf(value)
+
+        assertTrue(state.bold)
+        assertFalse(state.italic)
+        assertFalse(state.underline)
+        assertFalse(state.strikethrough)
+        assertEquals(0xFF112233.toInt(), state.fontColorArgb)
+        assertEquals(null, state.highlightArgb)
+        assertEquals(18, state.fontSizePt)
+        assertEquals(null, state.fontCss)
+        assertTrue(state.bullet)
+        assertFalse(state.ordered)
+        assertFalse(state.quote)
+        assertEquals(RichAlign.CENTER, state.alignment)
+        // Each field equals reading the same predicate directly off the value: the memoization the
+        // toolbar wraps this in (remember(value)) is behaviour-preserving, just computed once (#308).
+        assertEquals(isBoldActive(value), state.bold)
+        assertEquals(isBulletActive(value), state.bullet)
+    }
+
     /** Mirrors exactly what FormattingToolbar reads to decide a style button's active/inactive tint. */
     private fun isBoldActive(value: TextFieldValue): Boolean = RichTextEditing.isStyled(
         value.annotatedString.toRichContent(),

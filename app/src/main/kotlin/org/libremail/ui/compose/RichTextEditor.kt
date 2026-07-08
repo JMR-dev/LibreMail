@@ -262,9 +262,10 @@ private fun FormattingToolbar(
     onFont: (String?) -> Unit,
     onInsertImage: (() -> Unit)?,
 ) {
-    val content = value.annotatedString.toRichContent()
-    val start = value.selection.min
-    val end = value.selection.max
+    // Parsing the field into RichTextContent and the dozen selection scans that light up the buttons is
+    // a per-keystroke hot path; memoize the whole derivation on the field value so a recomposition that
+    // doesn't change it reuses the result instead of re-parsing + re-scanning (#308).
+    val toolbar = remember(value) { toolbarStateOf(value) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -276,63 +277,61 @@ private fun FormattingToolbar(
         FormatButton(
             label = "B",
             description = stringResource(R.string.format_bold),
-            active = RichTextEditing.isStyled(content, start, end, RichStyle.Bold),
+            active = toolbar.bold,
             fontWeight = FontWeight.Bold,
             onClick = { onToggleStyle(RichStyle.Bold) },
         )
         FormatButton(
             label = "I",
             description = stringResource(R.string.format_italic),
-            active = RichTextEditing.isStyled(content, start, end, RichStyle.Italic),
+            active = toolbar.italic,
             fontStyle = FontStyle.Italic,
             onClick = { onToggleStyle(RichStyle.Italic) },
         )
         FormatButton(
             label = "U",
             description = stringResource(R.string.format_underline),
-            active = RichTextEditing.isStyled(content, start, end, RichStyle.Underline),
+            active = toolbar.underline,
             underline = true,
             onClick = { onToggleStyle(RichStyle.Underline) },
         )
         FormatButton(
             label = "S",
             description = stringResource(R.string.format_strikethrough),
-            active = RichTextEditing.isStyled(content, start, end, RichStyle.Strikethrough),
+            active = toolbar.strikethrough,
             strikethrough = true,
             onClick = { onToggleStyle(RichStyle.Strikethrough) },
         )
-        val fontColorArgb = RichTextEditing.styleAt(content, start, end, RichStyle.FontColor::class.java)?.argb
         FormatButton(
             label = "A",
             description = stringResource(R.string.format_color),
-            active = fontColorArgb != null,
-            tint = fontColorArgb?.let { Color(it) },
+            active = toolbar.fontColorArgb != null,
+            tint = toolbar.fontColorArgb?.let { Color(it) },
             onClick = onFontColor,
         )
-        val highlightArgb = RichTextEditing.styleAt(content, start, end, RichStyle.Highlight::class.java)?.argb
         FormatButton(
             label = "H",
             description = stringResource(R.string.format_highlight),
             active = false,
-            swatchColor = highlightArgb?.let { Color(it) },
+            swatchColor = toolbar.highlightArgb?.let { Color(it) },
             onClick = onHighlight,
         )
         FormatButton(
             label = "•",
             description = stringResource(R.string.format_bullet_list),
-            active = RichTextEditing.hasBlock(content, start, end, BlockMarker.BULLET),
+            active = toolbar.bullet,
             onClick = { onToggleBlock(BlockMarker.BULLET) },
         )
         FormatButton(
             label = "1.",
             description = stringResource(R.string.format_numbered_list),
-            active = RichTextEditing.hasBlock(content, start, end, BlockMarker.ORDERED),
+            active = toolbar.ordered,
             onClick = { onToggleBlock(BlockMarker.ORDERED) },
         )
         FormatButton(
             label = "❝",
             description = stringResource(R.string.format_quote),
-            active = RichTextEditing.hasBlock(content, start, end, BlockMarker.QUOTE),
+            active = toolbar.quote,
             onClick = { onToggleBlock(BlockMarker.QUOTE) },
         )
         FormatButton(
@@ -347,12 +346,10 @@ private fun FormattingToolbar(
         // so its click lands on the button's on-screen center. Any control inserted *before* the block
         // buttons shifts them right and can push the bullet past the viewport, making that tap miss —
         // so these wider controls are appended last, leaving every pre-existing button in its tested spot.
-        val fontCss = RichTextEditing.styleAt(content, start, end, RichStyle.FontFamily::class.java)?.css
-        FontPicker(selectedCss = fontCss, onSelect = onFont)
-        val fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt
-        FontSizePicker(selectedPt = fontSizePt, onSelect = onFontSize)
+        FontPicker(selectedCss = toolbar.fontCss, onSelect = onFont)
+        FontSizePicker(selectedPt = toolbar.fontSizePt, onSelect = onFontSize)
         ParagraphAlignmentControl(
-            selected = RichTextEditing.alignmentAt(content, start, end),
+            selected = toolbar.alignment,
             onSelect = onAlignment,
         )
         // The image button is appended last (like the other trailing controls) so it never shifts the
@@ -366,6 +363,53 @@ private fun FormattingToolbar(
             )
         }
     }
+}
+
+/**
+ * The [FormattingToolbar]'s button state derived from the field's current [TextFieldValue]: the
+ * active/inactive toggles plus the currently-applied color/font/size/alignment the pickers read back.
+ * Bundled so the parse + selection scans that produce them can be computed once per field value and
+ * memoized, keeping the per-keystroke toolbar off the re-parse-everything path (#308).
+ */
+internal data class ToolbarState(
+    val bold: Boolean,
+    val italic: Boolean,
+    val underline: Boolean,
+    val strikethrough: Boolean,
+    val fontColorArgb: Int?,
+    val highlightArgb: Int?,
+    val bullet: Boolean,
+    val ordered: Boolean,
+    val quote: Boolean,
+    val fontCss: String?,
+    val fontSizePt: Int?,
+    val alignment: RichAlign?,
+)
+
+/**
+ * Parses [value] into [RichTextContent] once and runs every toolbar selection scan over that single
+ * parse, so [FormattingToolbar] derives all its button state in one pass instead of re-parsing the
+ * whole body and re-scanning per button on each recomposition (#308). Pure over plain
+ * [TextFieldValue] so it is JVM-unit-testable.
+ */
+internal fun toolbarStateOf(value: TextFieldValue): ToolbarState {
+    val content = value.annotatedString.toRichContent()
+    val start = value.selection.min
+    val end = value.selection.max
+    return ToolbarState(
+        bold = RichTextEditing.isStyled(content, start, end, RichStyle.Bold),
+        italic = RichTextEditing.isStyled(content, start, end, RichStyle.Italic),
+        underline = RichTextEditing.isStyled(content, start, end, RichStyle.Underline),
+        strikethrough = RichTextEditing.isStyled(content, start, end, RichStyle.Strikethrough),
+        fontColorArgb = RichTextEditing.styleAt(content, start, end, RichStyle.FontColor::class.java)?.argb,
+        highlightArgb = RichTextEditing.styleAt(content, start, end, RichStyle.Highlight::class.java)?.argb,
+        bullet = RichTextEditing.hasBlock(content, start, end, BlockMarker.BULLET),
+        ordered = RichTextEditing.hasBlock(content, start, end, BlockMarker.ORDERED),
+        quote = RichTextEditing.hasBlock(content, start, end, BlockMarker.QUOTE),
+        fontCss = RichTextEditing.styleAt(content, start, end, RichStyle.FontFamily::class.java)?.css,
+        fontSizePt = RichTextEditing.styleAt(content, start, end, RichStyle.FontSize::class.java)?.pt,
+        alignment = RichTextEditing.alignmentAt(content, start, end),
+    )
 }
 
 @Composable

@@ -4,6 +4,7 @@ package org.libremail.ui.lock
 import android.content.Context
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -24,6 +25,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import kotlin.test.assertEquals
 
 /**
  * Robolectric JVM Compose test (#384, umbrella #373) for [AppLockGateHost], the gate that wraps the
@@ -109,26 +111,50 @@ class AppLockGateHostJvmTest {
     }
 
     @Test
-    fun reLockAfterUnlock_drawsLockScreenButKeepsContentComposed() {
+    fun reLockAfterUnlock_keepsContentComposedButGatesItOutOfTheAccessibilityTree() {
         val state = MutableStateFlow<AppLockUiState>(AppLockUiState.Unlocked)
         val vm = mockk<AppLockViewModel>(relaxed = true)
         every { vm.uiState } returns state
+        // Track the content's composition lifecycle directly: entered once and never disposed proves the
+        // content composable is RETAINED across a re-lock (its nav/scroll/draft state survives) rather
+        // than torn down — independently of whether its semantics are currently in the tree.
+        var entered = 0
+        var disposed = 0
         composeTestRule.setContent {
             CompositionLocalProvider(LocalLifecycleOwner provides resumedOwner) {
                 LibreMailTheme(darkTheme = false, dynamicColor = false) {
-                    AppLockGateHost(viewModel = vm) { Text(CONTENT) }
+                    AppLockGateHost(viewModel = vm) {
+                        DisposableEffect(Unit) {
+                            entered++
+                            onDispose { disposed++ }
+                        }
+                        Text(CONTENT)
+                    }
                 }
             }
         }
         composeTestRule.onNodeWithText(CONTENT).assertIsDisplayed()
+        assertEquals(1, entered)
 
-        // Re-lock: once ever unlocked, the content stays composed (its nav/scroll/draft state survives)
-        // and the lock screen is drawn OVER it rather than replacing it.
+        // Re-lock: the lock screen is drawn OVER the content. The content stays composed (entered==1,
+        // never disposed), but #308 clears it out of the semantics/accessibility tree so TalkBack can't
+        // traverse the occluded mailbox nodes behind the opaque cover — assertDoesNotExist confirms the
+        // content's text is no longer reachable in the (a11y-facing) semantics tree.
         state.value = AppLockUiState.Locked()
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText(string(R.string.app_lock_title)).assertIsDisplayed()
-        composeTestRule.onNodeWithText(CONTENT).assertExists()
+        composeTestRule.onNodeWithText(CONTENT).assertDoesNotExist()
+        assertEquals(1, entered)
+        assertEquals(0, disposed)
+
+        // Unlocking again restores the content's semantics (same retained composition — still one entry).
+        state.value = AppLockUiState.Unlocked
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText(CONTENT).assertIsDisplayed()
+        assertEquals(1, entered)
+        assertEquals(0, disposed)
     }
 
     private companion object {

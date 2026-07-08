@@ -55,6 +55,9 @@ class ReaderViewModelActionsTest {
         every { Log.d(any(), any()) } returns 0
         every { Log.i(any(), any()) } returns 0
         every { Log.w(any<String>(), any<String>()) } returns 0
+        // toggleStar's rollback path logs via AppLog.w(tag, msg, throwable) -> Log.w(String, String,
+        // Throwable); stub that overload too so the failing-write test's coroutine doesn't crash on it.
+        every { Log.w(any<String>(), any<String>(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
     }
 
@@ -78,6 +81,7 @@ class ReaderViewModelActionsTest {
         coEvery { repo.openMessage(messageId) } returns Result.success(message)
         every { repo.observeAttachments(messageId) } returns flowOf(listOf(attachment(0)))
         coEvery { repo.downloadedAttachmentParts(messageId) } returns emptySet()
+        coEvery { repo.setStarred(any(), any()) } returns Result.success(Unit)
         return repo
     }
 
@@ -179,6 +183,28 @@ class ReaderViewModelActionsTest {
 
         assertTrue(vm.state.value.message!!.isStarred)
         coVerify { repo.setStarred(messageId, true) }
+    }
+
+    @Test
+    fun `toggleStar rolls the optimistic star back and emits StarFailed when the write fails`() = runTest(dispatcher) {
+        val repo = loadedRepo()
+        coEvery { repo.setStarred(messageId, true) } returns Result.failure(RuntimeException("db locked"))
+        val vm = viewModel(repo)
+        advanceUntilIdle()
+        assertFalse(vm.state.value.message!!.isStarred)
+
+        vm.events.test {
+            vm.toggleStar()
+            // The optimistic flip lands immediately, before the (failing) persist runs.
+            assertTrue(vm.state.value.message!!.isStarred)
+            advanceUntilIdle()
+
+            assertEquals(ReaderEvent.StarFailed, awaitItem())
+            // The failed write is reconciled: the star is rolled back to its pre-toggle value so the
+            // UI never stays stuck in a state the store rejected.
+            assertFalse(vm.state.value.message!!.isStarred)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test
