@@ -115,7 +115,44 @@ object DatabaseEncryption {
         }
     }
 
+    /**
+     * Opens a throwaway keyed SQLCipher database next to [cacheFile] and immediately closes it, purely to
+     * reach `SQLiteConnection.nativeOpen` — the exact call site of the #359 crash — from inside
+     * [DatabaseProvisioner]'s fail-closed handler. [ensureNativeLibraryLoaded]
+     * (`System.loadLibrary("sqlcipher")`) can succeed on a device whose bundled `.so` is otherwise
+     * incompatible, yet the JNI-bound `nativeOpen` still be unresolved; that only surfaces when a keyed
+     * database is actually opened, which Room does LATER via its deferred open helper
+     * ([org.libremail.di.DatabaseModule]) — outside any handler. Probing the real open here lets the
+     * provisioner catch that [LinkageError] and fail closed BEFORE Room reaches it.
+     *
+     * Deliberately opens a sibling throwaway file (never the real cache) so it can never create, mutate,
+     * or leave `-wal`/`-shm` sidecars on the cache, then deletes the probe and its sidecars in a `finally`.
+     * Mirrors `SqlCipherOpenSpikeTest`'s stage-B keyed-open probe (issue #359).
+     *
+     * PRECONDITION: the caller must have already loaded the native library (via [ensureNativeLibraryLoaded]).
+     * The sole production caller — [DatabaseProvisioner]'s encrypted branch — does so on the line above its
+     * probe call. Kept out of here on purpose so the provisioner loads the library exactly ONCE per open
+     * (the `ensureNativeLibraryLoaded()`-exactly-once invariant its instrumented tests pin), not twice.
+     */
+    fun probeKeyedOpen(cacheFile: File, passphrase: String) {
+        val dir = cacheFile.parentFile ?: error("cache database file has no parent directory")
+        val probe = File(dir, cacheFile.name + PROBE_SUFFIX)
+        try {
+            SQLiteDatabase.openOrCreateDatabase(
+                probe.absolutePath,
+                passphrase.toByteArray(Charsets.US_ASCII),
+                null, // no CursorFactory
+                null, // no DatabaseErrorHandler
+            ).close()
+        } finally {
+            listOf("", "-wal", "-shm", "-journal").forEach { File(dir, probe.name + it).delete() }
+        }
+    }
+
     private const val TAG = "LibreMailDbCrypto"
+
+    // Suffix of the throwaway file [probeKeyedOpen] opens to reach nativeOpen without touching the cache.
+    private const val PROBE_SUFFIX = ".openprobe"
 
     // The 16-byte magic that opens every plaintext SQLite file: "SQLite format 3" + a NUL terminator.
     // Spelled out as bytes to keep the trailing NUL unambiguous.
