@@ -5,6 +5,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import org.libremail.data.local.entity.AccountSettingsEntity
 
@@ -18,4 +19,15 @@ interface AccountSettingsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(settings: AccountSettingsEntity)
+
+    /**
+     * Reads [accountId]'s row (or null when absent), applies [transform], and writes the result — all in
+     * one transaction so a per-field setter's read-modify-write can't interleave with a concurrent
+     * setter and clobber the other field (issue #313). [transform] receives the stored entity, or null
+     * when no row exists yet.
+     */
+    @Transaction
+    suspend fun readModifyWrite(accountId: String, transform: (AccountSettingsEntity?) -> AccountSettingsEntity) {
+        upsert(transform(get(accountId)))
+    }
 }

@@ -88,4 +88,29 @@ class AccountSettingsDaoTest {
         assertEquals(500, stored?.retentionCount)
         assertEquals(6, stored?.retentionMonths)
     }
+
+    @Test
+    fun readModifyWriteAppliesTheTransformToTheStoredRow() = runBlocking {
+        insertAccount()
+        dao.upsert(AccountSettingsEntity("acct", signature = "old", notificationsEnabled = false))
+
+        // The read + transform + write run in one transaction (issue #313); the transform gets the stored
+        // row and changes one field, so the un-touched fields are carried forward.
+        dao.readModifyWrite("acct") { stored -> stored!!.copy(signature = "new") }
+
+        val result = dao.get("acct")
+        assertEquals("new", result?.signature)
+        assertEquals(false, result?.notificationsEnabled)
+    }
+
+    @Test
+    fun readModifyWriteTransformsANullRowForAnUnconfiguredAccount() = runBlocking {
+        insertAccount()
+        // No settings row yet: the transform receives null and builds the first row.
+        dao.readModifyWrite("acct") { stored ->
+            stored?.copy(signature = "x") ?: AccountSettingsEntity("acct", signature = "seeded")
+        }
+
+        assertEquals("seeded", dao.get("acct")?.signature)
+    }
 }

@@ -446,6 +446,30 @@ class MailRepositoryImplTest {
     }
 
     @Test
+    fun `expunge chunks the id queries under SQLite's host-parameter limit`() = runTest {
+        // 501 ids force a split: an unchunked IN (:ids) would bind 501 host parameters, latent-crashing
+        // near SQLite's 999 limit on older Android (issue #313). Chunked at 500 -> a 500 + 1 split.
+        val ids = (1..501).map { "acct:INBOX:$it" }
+        coEvery { messageDao.getRoutingByIds(any()) } coAnswers {
+            firstArg<List<String>>().map { messageRouting(it, "INBOX") }
+        }
+        coEvery { messageDao.deleteByIds(any()) } just Runs
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+
+        val result = repository.expunge(ids)
+
+        assertTrue(result.isSuccess)
+        // Both the routing read and the optimistic delete run one query per <=500-id chunk.
+        coVerify(exactly = 1) { messageDao.getRoutingByIds(match { it.size == 500 }) }
+        coVerify(exactly = 1) { messageDao.getRoutingByIds(match { it.size == 1 }) }
+        coVerify(exactly = 1) { messageDao.deleteByIds(match { it.size == 500 }) }
+        coVerify(exactly = 1) { messageDao.deleteByIds(match { it.size == 1 }) }
+        // Chunking is only a DB concern: all 501 UIDs still reach the server EXPUNGE in one grouped call.
+        coVerify { imapClient.deleteMessages(any(), "INBOX", match { it.size == 501 }) }
+    }
+
+    @Test
     fun `moveToFolder moves messages to the chosen destination`() = runTest {
         val id = "acct:INBOX:11"
         coEvery { messageDao.getRoutingByIds(listOf(id)) } returns listOf(messageRouting(id, "INBOX"))

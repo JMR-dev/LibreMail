@@ -44,4 +44,32 @@ interface SignatureDao {
         clearDefault(accountId)
         markDefault(id)
     }
+
+    /**
+     * Inserts [signature], making it the account's default when it is the account's first — the count
+     * and the insert run in one transaction so two concurrent first-creates can't both read "count 0"
+     * and both become default (issue #313). [signature]'s own `isDefault` is ignored: this method
+     * decides it from the current count.
+     */
+    @Transaction
+    suspend fun insertMakingFirstDefault(signature: SignatureEntity) {
+        upsert(signature.copy(isDefault = countForAccount(signature.accountId) == 0))
+    }
+
+    /**
+     * Deletes [id] and, when it was the account's default, promotes the account's first remaining
+     * signature — both in one transaction so a crash between the delete and the promote can't leave an
+     * account with signatures but no default (issue #313). No-op when [id] is absent. Returns the id of
+     * the signature promoted to default, or null when nothing was promoted (id absent, the deleted row
+     * wasn't the default, or no signatures remain).
+     */
+    @Transaction
+    suspend fun deletePromotingDefault(id: String): String? {
+        val existing = getById(id) ?: return null
+        delete(id)
+        if (!existing.isDefault) return null
+        val promoted = firstForAccount(existing.accountId) ?: return null
+        markDefault(promoted.id)
+        return promoted.id
+    }
 }
