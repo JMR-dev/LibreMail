@@ -10,6 +10,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
 import org.libremail.BuildConfig
+import org.libremail.data.local.isCacheEncryptionUnavailable
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.reporting.AppLog
 
@@ -60,7 +61,14 @@ class BackfillWorker @AssistedInject constructor(
             },
             onFailure = { error ->
                 if (error is CancellationException) throw error
-                AppLog.w(TAG, "backfill worker: retry", error)
+                // A DB open that fails because SQLCipher's native library is unavailable (issue #359) lands
+                // here (thrown inside the runCatching above); log it distinctly but still defer softly — a
+                // later launch may load the library and recover — instead of a generic retry.
+                if (error.isCacheEncryptionUnavailable()) {
+                    AppLog.w(TAG, "backfill deferred: encrypted cache unavailable (SQLCipher native library)", error)
+                } else {
+                    AppLog.w(TAG, "backfill worker: retry", error)
+                }
                 Result.retry()
             },
         )

@@ -27,10 +27,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.libremail.data.local.dao.AccountDao
+import org.libremail.data.local.isCacheEncryptionUnavailable
 import org.libremail.data.local.toDomain
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.MailSyncer
+import org.libremail.data.sync.MissingCredentialsException
 import org.libremail.data.sync.PushMode
 import org.libremail.data.sync.SyncResourcePolicy
 import org.libremail.data.sync.SyncScheduler
@@ -110,7 +112,20 @@ class IdleService : Service() {
                 stopSelf()
                 return@launch
             }
-            reconcileWatchers()
+            // Headless tolerance for issue #359: this service injects the Room cache with NO UI gate
+            // (CacheEncryptionGate wraps only MainActivity), so if SQLCipher's native library is unavailable
+            // on this device reconcileWatchers()'s first DB access throws — a CacheEncryptionUnavailableException
+            // from the provisioner, or defensively a bare LinkageError at nativeOpen. Left uncaught, a child of
+            // this SupervisorJob would route it to the app's default handler and crash the process. Treat it
+            // like the cache-locked case: log PII-free and stop. The app's CacheEncryptionGate surfaces the
+            // error to the user, and a later restart re-probes and recovers if the library loads.
+            try {
+                reconcileWatchers()
+            } catch (unavailable: Throwable) {
+                if (!unavailable.isCacheEncryptionUnavailable()) throw unavailable
+                AppLog.w(TAG, "encrypted cache unavailable (SQLCipher native lib); deferring IDLE push", unavailable)
+                stopSelf()
+            }
         }
         // The reuse cache (issue #357 Part 2) keeps interactive/sync IMAP connections warm; sweep
         // them so a socket that has gone idle past the reuse timeout is closed rather than left
@@ -301,6 +316,16 @@ class IdleService : Service() {
                 backoffMs = INITIAL_BACKOFF_MS
             } catch (e: CancellationException) {
                 throw e
+            } catch (ignored: MissingCredentialsException) {
+                // #403: a just-added account can be observed here a beat before its secret finishes
+                // persisting. AccountRepository now commits the secret before the account row, so this is
+                // rare — but tolerate any residual race as a transient miss: defer quietly and re-check
+                // soon, WITHOUT the warn + exponential backoff a real connection drop gets. A genuinely
+                // absent credential simply keeps deferring (no mail, but no error noise) until it appears
+                // or the account is removed. The sentinel exception carries no diagnostic value beyond the
+                // message below, so it is intentionally not re-logged with its (empty) trace.
+                AppLog.i(TAG, "IDLE deferred ${accountLogRef(account.id)}: credentials not yet persisted")
+                delay(CREDENTIALS_DEFER_RETRY_MS)
             } catch (e: Exception) {
                 AppLog.w(TAG, "IDLE for ${accountLogRef(account.id)} dropped; retrying in ${backoffMs}ms", e)
                 delay(backoffMs)
@@ -331,6 +356,12 @@ class IdleService : Service() {
         const val TAG = "IdleService"
         const val INITIAL_BACKOFF_MS = 5_000L
         const val MAX_BACKOFF_MS = 5 * 60_000L
+
+        // #403: how long to wait before re-checking after a transient missing-credential miss on a
+        // just-added account. Short — the account-add write race resolves in milliseconds once the
+        // secret commit lands — and deliberately flat (no exponential escalation) because this is an
+        // expected persist-ordering blip, not a connection failure.
+        const val CREDENTIALS_DEFER_RETRY_MS = 1_000L
 
         // Cadence of the reuse-cache idle-eviction sweep (issue #357 Part 2). Tighter than the reuse
         // idle timeout so an idle socket is closed shortly after it crosses it.

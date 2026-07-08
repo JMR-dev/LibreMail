@@ -2,17 +2,23 @@
 package org.libremail.data.repository
 
 import android.content.Context
+import android.util.Log
 import app.cash.turbine.test
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.libremail.data.attachment.AttachmentUriGrants
 import org.libremail.data.attachmentCacheDir
@@ -76,6 +82,17 @@ class AccountRepositoryImplTest {
         attachmentUriGrants = attachmentUriGrants,
     )
 
+    // addImapAccount/addOutlookAccount now breadcrumb via AppLog (#403); android.util.Log is a no-op
+    // stub under plain JVM tests, so mock it class-wide so no test crashes on the unmocked method.
+    @Before
+    fun setUp() {
+        mockkStatic(Log::class)
+        every { Log.i(any(), any()) } returns 0
+    }
+
+    @After
+    fun tearDown() = unmockkAll()
+
     @Test
     fun `observeAccounts maps the stored account rows to domain models`() = runTest {
         every { accountDao.observeAll() } returns flowOf(listOf(accountEntity()))
@@ -132,6 +149,40 @@ class AccountRepositoryImplTest {
         verify { mailNotifier.ensureAccountChannel(account) }
         verify { syncScheduler.syncNow() }
         verify { syncScheduler.backfillNow() }
+    }
+
+    @Test
+    fun `addImapAccount persists the credential before the account row (issue 403)`() = runTest {
+        val account = account()
+        coEvery { imapClient.listFolders(any()) } returns listOf(
+            FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true),
+        )
+        coEvery { accountDao.insertAtEnd(any()) } just Runs
+
+        repository.addImapAccount(account, "app-password").getOrThrow()
+
+        // The push collector (LibreMailApplication) and IdleService.reconcileWatchers both react to the
+        // accounts table; the secret must be committed FIRST so a watcher observing the new row can
+        // resolve it, rather than logging a transient "No stored credentials" IDLE miss on every add.
+        coVerifyOrder {
+            credentialStore.saveSecret(account.id, "app-password")
+            accountDao.insertAtEnd(any())
+        }
+    }
+
+    @Test
+    fun `addOutlookAccount persists the credential before the account row (issue 403)`() = runTest {
+        coEvery { imapClient.listFolders(any()) } returns listOf(
+            FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true),
+        )
+        coEvery { accountDao.insertAtEnd(any()) } just Runs
+
+        repository.addOutlookAccount("me@outlook.com", "access-token", "{authstate}").getOrThrow()
+
+        coVerifyOrder {
+            credentialStore.saveSecret("outlook:me@outlook.com", "{authstate}")
+            accountDao.insertAtEnd(any())
+        }
     }
 
     @Test
