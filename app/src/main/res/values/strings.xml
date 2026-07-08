@@ -190,6 +190,12 @@
     <string name="onboarding_battery_done_title">You\'re all set</string>
     <string name="onboarding_battery_done_body">Background usage is unrestricted — new mail will arrive instantly.</string>
     <string name="onboarding_battery_continue">Continue to inbox</string>
+    <!-- Battery opt-in "Battery → Unrestricted" guide illustration (#174). The description mirrors
+         onboarding_battery_guidance so TalkBack users get the same steps; the row labels below are
+         decorative (the illustration exposes only the single description to screen readers). -->
+    <string name="onboarding_battery_animation_description">Animation showing how to enable unrestricted battery use: in your device settings, open Battery, then choose Unrestricted.</string>
+    <string name="onboarding_battery_anim_battery">Battery</string>
+    <string name="onboarding_battery_anim_unrestricted">Unrestricted</string>
 
     <!-- Onboarding: optional contacts-access opt-in for recipient autocomplete (#127, #128) -->
     <string name="onboarding_contacts_title">Suggest recipients as you type</string>
