@@ -7,6 +7,7 @@ import android.provider.Settings
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.Lifecycle
@@ -19,6 +20,7 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,6 +56,14 @@ class BatteryOptimizationScreenJvmTest {
 
     private fun string(resId: Int): String = context.getString(resId)
 
+    // Force the reduced-motion (static) illustration so the looping guide animation never spins the
+    // Robolectric clock (which would hang waitForIdle); the animated path is covered by
+    // BatteryGuideAnimationJvmTest. Also exercises the screen's default rememberReducedMotion argument.
+    @Before
+    fun forceReducedMotion() {
+        Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    }
+
     /** RESUMED owner so `collectAsStateWithLifecycle` collects and the ON_RESUME effect fires. */
     private val resumedOwner = object : LifecycleOwner {
         private val registry =
@@ -79,9 +89,11 @@ class BatteryOptimizationScreenJvmTest {
         setContent(vm, onFinish = { finished = true })
 
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_done_title)).assertIsDisplayed()
-        // The request/skip affordances are gone in the "done" state.
+        // The request/skip affordances — and the how-to guide illustration — are gone in the "done" state.
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_take_me)).assertDoesNotExist()
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_not_now)).assertDoesNotExist()
+        composeTestRule.onNodeWithContentDescription(string(R.string.onboarding_battery_animation_description))
+            .assertDoesNotExist()
 
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_continue)).performClick()
         assertTrue(finished)
@@ -99,6 +111,9 @@ class BatteryOptimizationScreenJvmTest {
 
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_title)).assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_guidance)).assertIsDisplayed()
+        // The illustrated "Battery → Unrestricted" guide is shown (as one TalkBack-friendly node).
+        composeTestRule.onNodeWithContentDescription(string(R.string.onboarding_battery_animation_description))
+            .assertIsDisplayed()
         composeTestRule.onNodeWithText(string(R.string.onboarding_battery_take_me)).performClick()
 
         // Take me there marks the prompt handled up front, then launches the resolved settings intent.
