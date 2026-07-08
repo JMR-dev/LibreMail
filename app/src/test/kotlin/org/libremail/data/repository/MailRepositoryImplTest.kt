@@ -40,6 +40,7 @@ import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.FolderRole
@@ -74,6 +75,9 @@ class MailRepositoryImplTest {
     private val context = mockk<Context>(relaxed = true)
     private val accountSettingsRepository = mockk<AccountSettingsRepository>()
     private val signatureRepository = mockk<SignatureRepository>()
+
+    // A real gate (cheap, no deps) so tests can observe the interactive-fetch counter it raises (#355).
+    private val interactiveGate = InteractiveImapGate()
     private val repository = MailRepositoryImpl(
         context = context,
         messageDao = messageDao,
@@ -89,6 +93,7 @@ class MailRepositoryImplTest {
         signatureRepository = signatureRepository,
         // Grant-release wiring (deleteDraft / cancelOutboxMessage) is covered by MailRepositoryGrantsTest.
         attachmentUriGrants = mockk(relaxed = true),
+        interactiveGate = interactiveGate,
     )
 
     // openMessage now breadcrumbs via AppLog (issue #358); android.util.Log is a no-op stub under plain
@@ -258,6 +263,30 @@ class MailRepositoryImplTest {
         assertTrue(breadcrumb.contains("folder=INBOX"), breadcrumb)
         assertTrue(breadcrumb.contains("fetchedBody=true"), breadcrumb)
         assertTrue(breadcrumb.contains("took="), breadcrumb)
+    }
+
+    @Test
+    fun `openMessage holds the interactive gate for the whole body fetch, then releases it (issue 355)`() = runTest {
+        val id = "acct:INBOX:9"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
+        coEvery { messageDao.getById(id) } returns messageEntity(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { messageDao.updateBody(id, any(), any(), any()) } just Runs
+        coEvery { messageDao.setRead(id, true) } just Runs
+        // The gate must be RAISED while the on-demand body fetch runs, so a concurrent backfill parks
+        // (#355). Sample the counter from inside the fetch itself — the only point it can be observed.
+        var countDuringFetch = -1
+        coEvery { imapClient.fetchBodyMarkingSeen(any(), "INBOX", "9") } coAnswers {
+            countDuringFetch = interactiveGate.activeInteractiveCount.value
+            MessageContent("Body text", isHtml = false)
+        }
+
+        assertTrue(repository.openMessage(id).isSuccess)
+
+        assertEquals(1, countDuringFetch, "the body fetch must run inside withInteractive")
+        // …and the gate is released once the open returns, so backfill can resume.
+        assertEquals(0, interactiveGate.activeInteractiveCount.value, "the gate clears when the open returns")
     }
 
     @Test

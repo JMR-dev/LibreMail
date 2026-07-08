@@ -16,6 +16,7 @@ import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.OutboxEntity
+import org.libremail.data.sync.InteractiveImapGate
 import java.nio.file.Files
 
 /**
@@ -45,6 +46,7 @@ class MailRepositoryGrantsTest {
         accountSettingsRepository = mockk(relaxed = true),
         signatureRepository = mockk(relaxed = true),
         attachmentUriGrants = attachmentUriGrants,
+        interactiveGate = InteractiveImapGate(),
     )
 
     @Test

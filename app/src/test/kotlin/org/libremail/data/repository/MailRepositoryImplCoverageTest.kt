@@ -40,6 +40,7 @@ import org.libremail.data.local.entity.OutboxEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
 import org.libremail.domain.model.Account
@@ -97,6 +98,7 @@ class MailRepositoryImplCoverageTest {
         accountSettingsRepository = accountSettingsRepository,
         signatureRepository = signatureRepository,
         attachmentUriGrants = mockk<AttachmentUriGrants>(relaxed = true),
+        interactiveGate = InteractiveImapGate(),
     )
 
     // openMessage now breadcrumbs via AppLog (issue #358); android.util.Log is a no-op stub under plain

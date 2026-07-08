@@ -39,6 +39,7 @@ import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
 import org.libremail.data.sync.logSafeFolderLabel
@@ -79,6 +80,7 @@ class MailRepositoryImpl @Inject constructor(
     private val accountSettingsRepository: AccountSettingsRepository,
     private val signatureRepository: SignatureRepository,
     private val attachmentUriGrants: AttachmentUriGrants,
+    private val interactiveGate: InteractiveImapGate,
 ) : MailRepository {
 
     // Application-lifetime scope for fire-and-forget server pushes that must outlive the caller — e.g.
@@ -156,42 +158,54 @@ class MailRepositoryImpl @Inject constructor(
 
     override suspend fun openMessage(id: String): Result<Message> = withContext(Dispatchers.IO) {
         runCatching {
-            // Time the whole open so a debug report shows what the reader's spinner is waiting on — a
-            // cached open is a local read; a first open blocks on the IMAP body fetch below (issue #358).
-            val startNanos = System.nanoTime()
-            // Route on the body-less projection: a cached, already-read message needs no account, no
-            // credentials, and no network, so it skips the Keystore decrypt + DataStore read that
-            // resolving connection params costs (issue #186). Only the fetch / SEEN-push branches below
-            // pull the account and resolve params, and each does so lazily right where it is needed.
-            val routing = messageDao.getRouting(id) ?: error("Message not found")
-            val fetchedBody = !routing.bodyFetched
-            if (!routing.bodyFetched || !routing.isRead) {
-                val account = accountDao.getById(routing.accountId)?.toDomain()
-                if (account != null && !routing.bodyFetched) {
-                    val params = connectionFactory.imapParamsFor(account)
-                    val content = imapClient.fetchBodyMarkingSeen(params, routing.folder, uidOf(id))
-                    messageDao.updateBody(id, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
-                    attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
-                    messageDao.setRead(id, true)
-                } else if (account != null) {
-                    // Optimistic, local-only: the reader can render as soon as this returns. The SEEN flag
-                    // still needs to reach the server, but that IMAP round trip (connection + STORE) must not
-                    // sit on this path (#148/#186) — the body/attachments are already fully local. Pushed on
-                    // backgroundScope, which outlives this call.
-                    val params = connectionFactory.imapParamsFor(account)
-                    messageDao.setRead(id, true)
-                    pushSeenFlagInBackground(params, routing.folder, id)
+            // Signal an interactive fetch for the whole open (#355) so the continuous background backfill
+            // parks at its next page boundary and this body fetch wins the account's IMAP throughput
+            // instead of queuing behind the backfill storm (the reader's ~48s uncached-open stall). The
+            // counter is released even if the fetch throws, and a purely-cached open holds it only for the
+            // brief local read.
+            interactiveGate.withInteractive {
+                // Time the whole open so a debug report shows what the reader's spinner is waiting on — a
+                // cached open is a local read; a first open blocks on the IMAP body fetch below (issue #358).
+                val startNanos = System.nanoTime()
+                // Route on the body-less projection: a cached, already-read message needs no account, no
+                // credentials, and no network, so it skips the Keystore decrypt + DataStore read that
+                // resolving connection params costs (issue #186). Only the fetch / SEEN-push branches below
+                // pull the account and resolve params, and each does so lazily right where it is needed.
+                val routing = messageDao.getRouting(id) ?: error("Message not found")
+                val fetchedBody = !routing.bodyFetched
+                if (!routing.bodyFetched || !routing.isRead) {
+                    val account = accountDao.getById(routing.accountId)?.toDomain()
+                    if (account != null && !routing.bodyFetched) {
+                        val params = connectionFactory.imapParamsFor(account)
+                        val content = imapClient.fetchBodyMarkingSeen(params, routing.folder, uidOf(id))
+                        messageDao.updateBody(
+                            id,
+                            content.body,
+                            content.isHtml,
+                            Snippet.of(content.body, content.isHtml),
+                        )
+                        attachmentDao.replaceForMessage(id, content.attachments.map { it.toEntity(id) })
+                        messageDao.setRead(id, true)
+                    } else if (account != null) {
+                        // Optimistic, local-only: the reader can render as soon as this returns. The SEEN
+                        // flag still needs to reach the server, but that IMAP round trip (connection +
+                        // STORE) must not sit on this path (#148/#186) — the body/attachments are already
+                        // fully local. Pushed on backgroundScope, which outlives this call.
+                        val params = connectionFactory.imapParamsFor(account)
+                        messageDao.setRead(id, true)
+                        pushSeenFlagInBackground(params, routing.folder, id)
+                    }
                 }
+                // The single full-body read, reserved for the value the reader actually renders (issue #186).
+                val message = messageDao.getById(id)?.toDomain() ?: error("Message not found")
+                // PII-free: hashed account ref, system-folder label only, plus the branch taken and ms.
+                AppLog.i(
+                    READER_TAG,
+                    "openMessage ${accountLogRef(routing.accountId)} folder=${logSafeFolderLabel(routing.folder)} " +
+                        "fetchedBody=$fetchedBody took=${(System.nanoTime() - startNanos) / NANOS_PER_MS}ms",
+                )
+                message
             }
-            // The single full-body read, reserved for the value the reader actually renders (issue #186).
-            val message = messageDao.getById(id)?.toDomain() ?: error("Message not found")
-            // PII-free: hashed account ref, system-folder label only, plus the branch taken and elapsed ms.
-            AppLog.i(
-                READER_TAG,
-                "openMessage ${accountLogRef(routing.accountId)} folder=${logSafeFolderLabel(routing.folder)} " +
-                    "fetchedBody=$fetchedBody took=${(System.nanoTime() - startNanos) / NANOS_PER_MS}ms",
-            )
-            message
         }
     }
 
@@ -224,32 +238,45 @@ class MailRepositoryImpl @Inject constructor(
         }
 
     override suspend fun inlineImages(messageId: String): List<InlineImage> = withContext(Dispatchers.IO) {
-        // Resolve the message's account/folder once (body-less), then reuse the on-disk cache per cid:
-        // image — no per-image message re-read or attachment re-query (the old downloadAttachment N+1, #186).
-        val routing = messageDao.getRouting(messageId) ?: return@withContext emptyList()
-        val parts = attachmentDao.getForMessage(messageId)
-        parts.filter { it.contentId != null }.mapNotNull { row ->
-            // Reuse the on-disk attachment cache (download once, then instant + offline). A failed
-            // fetch just omits that image, leaving a broken <img> rather than failing the open.
-            val file = runCatching {
-                ensureAttachmentFile(messageId, routing.accountId, routing.folder, row.partIndex, row.filename)
-            }.getOrNull() ?: return@mapNotNull null
-            InlineImage(contentId = row.contentId!!, mimeType = row.mimeType, bytes = file.readBytes())
+        // Inline-image loads are an interactive fetch too (#355): the reader is showing them, so backfill
+        // must yield while they download. Released even if a per-image fetch throws (via withInteractive).
+        interactiveGate.withInteractive {
+            // Resolve the message's account/folder once (body-less), then reuse the on-disk cache per cid:
+            // image — no per-image message re-read or attachment re-query (the old downloadAttachment N+1, #186).
+            val routing = messageDao.getRouting(messageId)
+            if (routing == null) {
+                emptyList()
+            } else {
+                val parts = attachmentDao.getForMessage(messageId)
+                parts.filter { it.contentId != null }.mapNotNull { row ->
+                    // Reuse the on-disk attachment cache (download once, then instant + offline). A failed
+                    // fetch just omits that image, leaving a broken <img> rather than failing the open.
+                    val file = runCatching {
+                        ensureAttachmentFile(messageId, routing.accountId, routing.folder, row.partIndex, row.filename)
+                    }.getOrNull() ?: return@mapNotNull null
+                    InlineImage(contentId = row.contentId!!, mimeType = row.mimeType, bytes = file.readBytes())
+                }
+            }
         }
     }
 
     override suspend fun downloadAttachment(messageId: String, partIndex: Int): Result<File> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val routing = messageDao.getRouting(messageId) ?: error("Message not found")
-                val meta = attachmentDao.getForMessage(messageId).firstOrNull { it.partIndex == partIndex }
-                ensureAttachmentFile(
-                    messageId,
-                    routing.accountId,
-                    routing.folder,
-                    partIndex,
-                    meta?.filename ?: "attachment",
-                )
+                // A user tapped an attachment (#355) — an interactive fetch backfill must yield to. Backfill's
+                // own content prefetch deliberately does NOT come through here (it calls ensureAttachmentFile
+                // directly), so background prefetch never raises the interactive gate against backfill itself.
+                interactiveGate.withInteractive {
+                    val routing = messageDao.getRouting(messageId) ?: error("Message not found")
+                    val meta = attachmentDao.getForMessage(messageId).firstOrNull { it.partIndex == partIndex }
+                    ensureAttachmentFile(
+                        messageId,
+                        routing.accountId,
+                        routing.folder,
+                        partIndex,
+                        meta?.filename ?: "attachment",
+                    )
+                }
             }
         }
 
@@ -298,8 +325,20 @@ class MailRepositoryImpl @Inject constructor(
             attachmentDao.replaceForMessage(messageId, content.attachments.map { it.toEntity(messageId) })
         }
         // Auto-download every attachment's bytes into the persistent per-part cache (skips ones present).
+        // This is BACKGROUND work driven by the backfill, so it goes straight to ensureAttachmentFile and
+        // deliberately bypasses downloadAttachment's interactive gate (#355): prefetch must not signal an
+        // interactive fetch, or backfill would park behind (yield to) its own prefetch. The routing is
+        // already resolved here, so this also skips re-reading it per part.
         attachmentDao.getForMessage(messageId).forEach { attachment ->
-            downloadAttachment(messageId, attachment.partIndex)
+            runCatching {
+                ensureAttachmentFile(
+                    messageId,
+                    routing.accountId,
+                    routing.folder,
+                    attachment.partIndex,
+                    attachment.filename,
+                )
+            }
         }
     }
 
@@ -355,35 +394,39 @@ class MailRepositoryImpl @Inject constructor(
     }
 
     override suspend fun buildReplyDraft(messageId: String, mode: ReplyMode): Result<String> = runCatching {
-        val routing = messageDao.getRouting(messageId) ?: error("Message not found")
-        val account = accountDao.getById(routing.accountId)?.toDomain() ?: error("Account not found")
-        val params = connectionFactory.imapParamsFor(account)
-        val context = imapClient.fetchForReply(params, routing.folder, uidOf(messageId))
-        val content = ReplyBuilder.build(context, mode, account.email)
-        // Bake the sending account's default signature into the reply/forward body — above the quoted
-        // original — so it round-trips as part of the draft (compose won't re-append for drafts). Both
-        // the plaintext and HTML forms are stored so the reply can go out as multipart/alternative.
-        val settings = accountSettingsRepository.get(routing.accountId)
-        val sig = if (settings.signatureEnabled) {
-            SignatureBlock.of(signatureRepository.getDefault(routing.accountId))
-        } else {
-            SignatureBlock.EMPTY
+        // Fetching the original for a reply/forward is an interactive fetch (#355) — the user is waiting on
+        // the compose screen — so backfill yields to it. Released even if fetchForReply throws.
+        interactiveGate.withInteractive {
+            val routing = messageDao.getRouting(messageId) ?: error("Message not found")
+            val account = accountDao.getById(routing.accountId)?.toDomain() ?: error("Account not found")
+            val params = connectionFactory.imapParamsFor(account)
+            val context = imapClient.fetchForReply(params, routing.folder, uidOf(messageId))
+            val content = ReplyBuilder.build(context, mode, account.email)
+            // Bake the sending account's default signature into the reply/forward body — above the quoted
+            // original — so it round-trips as part of the draft (compose won't re-append for drafts). Both
+            // the plaintext and HTML forms are stored so the reply can go out as multipart/alternative.
+            val settings = accountSettingsRepository.get(routing.accountId)
+            val sig = if (settings.signatureEnabled) {
+                SignatureBlock.of(signatureRepository.getDefault(routing.accountId))
+            } else {
+                SignatureBlock.EMPTY
+            }
+            val draftId = UUID.randomUUID().toString()
+            saveDraft(
+                Draft(
+                    id = draftId,
+                    accountId = routing.accountId,
+                    to = content.to,
+                    cc = content.cc,
+                    subject = content.subject,
+                    body = sig.plain + content.body,
+                    updatedAt = System.currentTimeMillis(),
+                    bodyHtml = sig.html + content.bodyHtml,
+                    attachments = emptyList(),
+                ),
+            )
+            draftId
         }
-        val draftId = UUID.randomUUID().toString()
-        saveDraft(
-            Draft(
-                id = draftId,
-                accountId = routing.accountId,
-                to = content.to,
-                cc = content.cc,
-                subject = content.subject,
-                body = sig.plain + content.body,
-                updatedAt = System.currentTimeMillis(),
-                bodyHtml = sig.html + content.bodyHtml,
-                attachments = emptyList(),
-            ),
-        )
-        draftId
     }
 
     /**
