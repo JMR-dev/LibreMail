@@ -330,6 +330,7 @@ class MailSyncConcurrencyTest {
             batteryStatusProvider = fullBattery(),
             notifier = mockk(relaxed = true),
             mailRepository = mockk(relaxed = true),
+            throttleGate = AccountThrottleGate(),
         )
     }
 
@@ -359,6 +360,7 @@ class MailSyncConcurrencyTest {
             batteryStatusProvider = fullBattery(),
             mailRepository = mockk(relaxed = true),
             maintenanceGate = MailMaintenanceGate(),
+            throttleGate = AccountThrottleGate(),
         )
     }
 

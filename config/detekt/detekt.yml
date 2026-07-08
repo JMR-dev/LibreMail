@@ -70,6 +70,9 @@ style:
       - '**/data/sync/MailSyncConcurrencyTest.kt'
       - '**/data/sync/PruneWorkerTest.kt'
       - '**/data/sync/BackfillWorkerTest.kt'
+      # #360 throttle gate: onThrottle/onSuccess breadcrumb through AppLog, which forwards to
+      # android.util.Log (a throwing JVM stub), so this suite mockkStatic(Log) too.
+      - '**/data/sync/AccountThrottleGateTest.kt'
       # Reader-path perf logging (issue #358): the repository's openMessage and the reader ViewModel
       # log via AppLog, so their unit tests mockkStatic(Log) too.
       - '**/data/repository/MailRepositoryImplTest.kt'
