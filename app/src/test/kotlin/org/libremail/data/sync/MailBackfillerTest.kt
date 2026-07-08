@@ -13,6 +13,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import jakarta.mail.Folder
 import jakarta.mail.Message
+import jakarta.mail.MessagingException
 import jakarta.mail.Session
 import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeMessage
@@ -475,6 +476,54 @@ class MailBackfillerTest {
         )
     }
 
+    // --- issue #360: throttling backoff + graceful degradation ----------------------------------
+
+    /**
+     * When the server throttles the backfill (a `[THROTTLED]` / "too many connections" NO), the slice
+     * must record a backoff for that account and STOP paging it — not retry the page in a tight loop
+     * (which is exactly what makes provider throttling worse, `docs/perf/issue-125-*`). It also must not
+     * report more-work, so [BackfillWorker]'s slice-chaining loop stops rather than spinning.
+     */
+    @Test
+    fun `a throttling server pauses that account's backfill instead of hammering it`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        var calls = 0
+        val imapClient = mockk<ImapClient>()
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } answers {
+            calls++
+            throw MessagingException("A3 NO [THROTTLED] Too many simultaneous connections")
+        }
+        val gate = AccountThrottleGate()
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, throttleGate = gate).runBackfill()
+
+        assertFalse(moreWork, "a throttled account must not drive an immediate re-slice (no tight loop)")
+        assertTrue(gate.isThrottled("acct"), "the account is now backing off")
+        assertEquals(1, calls, "paging stops at the first throttle, it is not retried in a tight loop")
+        assertTrue(
+            logBuffer.snapshot().any { it.message.startsWith("throttled acct:") },
+            "a PII-free throttle breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * An account still inside its backoff window is skipped entirely — no server call at all — so a
+     * provider we were just throttled by is left alone until the window elapses (graceful degradation +
+     * per-account isolation).
+     */
+    @Test
+    fun `an account inside its backoff window is skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        val gate = AccountThrottleGate().apply { onThrottle("acct", ThrottleSignal(ThrottleKind.RATE_LIMIT)) }
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, throttleGate = gate).runBackfill()
+
+        assertFalse(moreWork, "a slice whose only account is throttled reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(logBuffer.snapshot().any { it.message.startsWith("backfill skip acct:") })
+    }
+
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
 
     @Test
@@ -553,6 +602,7 @@ class MailBackfillerTest {
         fetchPolicy: FetchPolicy = FetchPolicy.ON_DEMAND,
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
         imapClient: ImapClient = client,
+        throttleGate: AccountThrottleGate = AccountThrottleGate(),
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(accountEntity)
@@ -608,6 +658,7 @@ class MailBackfillerTest {
             batteryStatusProvider = batteryStatusProvider,
             mailRepository = mailRepository,
             maintenanceGate = MailMaintenanceGate(),
+            throttleGate = throttleGate,
         ).also {
             lastMessageDao = messageDao
             lastMailRepository = mailRepository

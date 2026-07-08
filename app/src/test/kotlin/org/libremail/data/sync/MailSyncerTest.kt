@@ -12,6 +12,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import jakarta.mail.MessagingException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -93,6 +94,7 @@ class MailSyncerTest {
         globalSettings: AppSettings = AppSettings(),
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
         fetched: List<FetchedMessage> = emptyList(),
+        throttleGate: AccountThrottleGate = AccountThrottleGate(),
     ): MailSyncer {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getById("acct") } returns account
@@ -121,6 +123,7 @@ class MailSyncerTest {
             batteryStatusProvider = batteryProvider(battery),
             notifier = mockk<MailNotifier>(relaxed = true),
             mailRepository = mailRepository,
+            throttleGate = throttleGate,
         )
     }
 
@@ -336,6 +339,7 @@ class MailSyncerTest {
             batteryStatusProvider = batteryProvider(BatteryStatus(percent = 100, isCharging = false)),
             notifier = notifier,
             mailRepository = mockk(relaxed = true),
+            throttleGate = AccountThrottleGate(),
         )
     }
 
@@ -418,6 +422,7 @@ class MailSyncerTest {
             batteryStatusProvider = batteryProvider(BatteryStatus(percent = 100, isCharging = false)),
             notifier = mockk(relaxed = true),
             mailRepository = mockk(relaxed = true),
+            throttleGate = AccountThrottleGate(),
         )
     }
 
@@ -483,6 +488,38 @@ class MailSyncerTest {
         assertTrue(entry.message.contains("IOException"), entry.message)
         assertFalse(entry.message.contains("no network"), entry.message)
         logBuffer.snapshot().forEach { assertNoPii(it.message) }
+    }
+
+    // --- issue #360: foreground sync feeds the throttle gate (interactive priority) -------------
+
+    /**
+     * A foreground sync that hits provider throttling records a per-account backoff (so the background
+     * backfill defers that account) but is itself never blocked — the failure still surfaces to the
+     * caller. This is the interactive-priority half of #360: interactive work informs the gate, it is
+     * never gated by it.
+     */
+    @Test
+    fun `a foreground sync hitting throttling records a backoff without being blocked`() = runTest {
+        val gate = AccountThrottleGate()
+        val syncer = syncer(FetchPolicy.ON_DEMAND, mockk(relaxed = true), throttleGate = gate)
+        coEvery { lastImapClient.fetchRecent(any(), any(), any()) } throws
+            MessagingException("A2 NO [THROTTLED] Too many requests")
+
+        val result = syncer.syncFolder("acct", "INBOX")
+
+        assertTrue(result.isFailure, "the throttle failure still surfaces to the caller")
+        assertTrue(gate.isThrottled("acct"), "and it records a backoff so background backfill defers")
+    }
+
+    /** An ordinary (non-throttle) sync failure must NOT arm a backoff. */
+    @Test
+    fun `a foreground sync failing on an ordinary error does not record a backoff`() = runTest {
+        val gate = AccountThrottleGate()
+        val syncer = syncer(FetchPolicy.ON_DEMAND, mockk(relaxed = true), throttleGate = gate)
+        coEvery { lastImapClient.fetchRecent(any(), any(), any()) } throws IOException("Connection reset")
+
+        assertTrue(syncer.syncFolder("acct", "INBOX").isFailure)
+        assertFalse(gate.isThrottled("acct"))
     }
 
     /** No test fixture's email address or host may ever reach a log line — the hard PII rule. */

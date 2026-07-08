@@ -3,6 +3,7 @@ package org.libremail.data.sync
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -56,6 +57,7 @@ class MailBackfiller @Inject constructor(
     private val batteryStatusProvider: BatteryStatusProvider,
     private val mailRepository: MailRepository,
     private val maintenanceGate: MailMaintenanceGate,
+    private val throttleGate: AccountThrottleGate,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
     private data class FolderResult(val batches: Int, val moreWork: Boolean)
@@ -72,6 +74,18 @@ class MailBackfiller @Inject constructor(
         var remaining = maxBatches
         var moreWork = false
         accounts@ for (account in accountDao.getAll().map { it.toDomain() }) {
+            // Graceful degradation + per-account isolation (#360): an account still inside its throttle
+            // backoff window is skipped this slice — we don't page a provider that just rate-limited or
+            // locked us (hammering it makes throttling worse, the on-device perf finding). The window
+            // elapses on its own, so a later scheduled slice resumes this account automatically. A skip
+            // deliberately does NOT set moreWork: a slice whose only outstanding work is a throttled
+            // account reports "done" so the worker's slice-chaining loop stops instead of tight-looping
+            // over the skip. Other accounts are untouched.
+            val backoffRemaining = throttleGate.remainingBackoffMillis(account.id)
+            if (backoffRemaining > 0L) {
+                AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: throttled, remaining=${backoffRemaining}ms")
+                continue@accounts
+            }
             val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: continue
             val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             for (folder in messageDao.syncedFolders(account.id)) {
@@ -81,15 +95,49 @@ class MailBackfiller @Inject constructor(
                     moreWork = true
                     break@accounts
                 }
-                // Per-folder failures (e.g. a transient server error) must not abort the whole slice.
-                val result = runCatching { backfillFolder(account, params, folder, policy, remaining) }
-                    .getOrElse { FolderResult(batches = 0, moreWork = true) }
+                // null == this folder throttled/locked the account (already recorded): stop paging the
+                // account for the rest of the slice — graceful degradation, not a hard failure, and not a
+                // moreWork spin against a server that just told us to slow down.
+                val result = pageFolder(account, params, folder, policy, remaining) ?: continue@accounts
                 remaining -= result.batches
+                // A page landed, so the account is healthy again — clear any lingering backoff (no-op and
+                // silent when it was never throttled).
+                if (result.batches > 0) throttleGate.onSuccess(account.id)
                 if (result.moreWork) moreWork = true
             }
         }
         AppLog.i(TAG, "backfill slice done: moreWork=$moreWork")
         moreWork
+    }
+
+    /**
+     * Pages one folder, translating a failure into the slice's control flow (issue #360). Returns the
+     * [FolderResult] on success — or, for an ordinary transient error, a zero-page result whose
+     * [FolderResult.moreWork] asks for a follow-up slice (unchanged behaviour). Returns **null** when the
+     * failure classifies as provider throttling/lockout ([ThrottleClassifier]): the backoff is recorded
+     * against the account (exponential + jitter, via [AccountThrottleGate]) and the caller stops paging
+     * this account for the rest of the slice, so we degrade gracefully instead of hammering a server that
+     * just told us to slow down (the on-device perf finding, `docs/perf/issue-125-*`). Cancellation
+     * propagates so a WorkManager stop / IDLE renewal ends the run promptly.
+     */
+    private suspend fun pageFolder(
+        account: Account,
+        params: ImapConnectionParams,
+        folder: String,
+        policy: RetentionPolicy,
+        maxBatches: Int,
+    ): FolderResult? = try {
+        backfillFolder(account, params, folder, policy, maxBatches)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        val signal = ThrottleClassifier.classify(e)
+        if (signal == null) {
+            FolderResult(batches = 0, moreWork = true)
+        } else {
+            throttleGate.onThrottle(account.id, signal)
+            null
+        }
     }
 
     private suspend fun backfillFolder(

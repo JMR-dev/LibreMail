@@ -40,6 +40,7 @@ class MailSyncer @Inject constructor(
     private val batteryStatusProvider: BatteryStatusProvider,
     private val notifier: MailNotifier,
     private val mailRepository: MailRepository,
+    private val throttleGate: AccountThrottleGate,
 ) : Syncer {
     // Serializes all syncing: syncAll/syncAccount/syncFolder are invoked concurrently by the periodic
     // worker, pull-to-refresh, one-shot syncs, folder opens, and one IDLE watcher per account. Without
@@ -156,6 +157,11 @@ class MailSyncer @Inject constructor(
             val folderLabel = logSafeFolderLabel(folder)
             AppLog.d(TAG, "sync ${accountLogRef(account.id)} folder=$folderLabel fetched=${fetched.size}")
             fetched.size
+        }.onFailure { error ->
+            // Interactive priority (#360): a foreground sync that hits provider throttling records it so
+            // the background backfill backs this account off — but the interactive sync itself is never
+            // blocked by the gate, so opening/refreshing mail is never queued behind a backfill backoff.
+            ThrottleClassifier.classify(error)?.let { throttleGate.onThrottle(account.id, it) }
         }
 
     /**
