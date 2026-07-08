@@ -213,4 +213,17 @@ class AccountPickerScreenJvmTest {
 
         composeTestRule.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertIsDisplayed()
     }
+
+    @Test
+    fun imapDisabledPrompt_showsTheDialog_andGotItDismisses() {
+        // Outlook OAuth can succeed while IMAP is off, surfacing the actionable dialog (#390) instead
+        // of the generic error snackbar; "Got it" clears the prompt via the view-model.
+        val vm = viewModel(AccountSetupUiState(imapDisabledPrompt = ImapDisabledPrompt("Outlook", helpUrl = null)))
+        setContent(vm)
+
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(string(R.string.imap_disabled_dismiss)).performClick()
+
+        verify { vm.dismissImapDisabledPrompt() }
+    }
 }

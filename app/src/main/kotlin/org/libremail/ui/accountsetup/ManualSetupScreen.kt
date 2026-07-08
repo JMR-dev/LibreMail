@@ -185,6 +185,11 @@ fun ManualSetupScreen(
                 Text(stringResource(R.string.manual_test_and_add))
             }
         }
+        // "IMAP is turned off" is one of the auth failures a manual account can hit; when the host maps
+        // to a known brand it even links that provider's enable-IMAP page (#390).
+        form.imapDisabledPrompt?.let { prompt ->
+            ImapDisabledDialog(prompt = prompt, onDismiss = viewModel::dismissImapDisabledPrompt)
+        }
     }
 }
 
