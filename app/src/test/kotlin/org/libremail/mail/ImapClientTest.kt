@@ -364,6 +364,77 @@ class ImapClientTest {
         assertTrue(archive.contains("Move me"), "archive=$archive")
     }
 
+    // --- issue #319: graceful fallback when the server lacks the UIDPLUS extension ---
+    //
+    // GreenMail always advertises UIDPLUS, so the "with UIDPLUS" case (a targeted UID EXPUNGE that spares
+    // unrelated \Deleted mail) is exercised by the default-client delete/move tests above. To drive the
+    // "without UIDPLUS" branch against the same real server, these tests inject a capability probe that
+    // reports no UIDPLUS while every EXPUNGE below still runs for real against GreenMail.
+
+    private val noUidPlusClient = ImapClient(reuseConnections = false, supportsUidPlus = { false })
+
+    @Test
+    fun `deleteMessages falls back to a safe plain expunge when the server lacks UIDPLUS`() = runTest {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Target", "delete this")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Keep", "no flag at all")
+        greenMail.waitForIncomingEmail(2)
+        val bySubject = client.fetchRecent(params(), "INBOX", limit = 50).associateBy { it.subject }
+
+        // No other \Deleted mail is present, so a plain EXPUNGE removes only the target — and must not throw.
+        noUidPlusClient.deleteMessages(params(), "INBOX", listOf(bySubject.getValue("Target").uid))
+
+        val remaining = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        assertFalse(remaining.contains("Target"), "the target must be expunged via the fallback, remaining=$remaining")
+        assertTrue(remaining.contains("Keep"), "an unflagged message must survive, remaining=$remaining")
+        assertTrue(
+            buffer.snapshot().any { it.message.contains("using safe plain EXPUNGE") },
+            "the no-UIDPLUS fallback decision must be logged, messages=${buffer.snapshot().map { it.message }}",
+        )
+    }
+
+    @Test
+    fun `deleteMessages without UIDPLUS refuses to expunge when other Deleted mail is present`() = runTest {
+        val buffer = RingLogBuffer()
+        AppLog.install(buffer)
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Target", "delete this")
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Bystander", "flagged elsewhere")
+        greenMail.waitForIncomingEmail(2)
+        val bySubject = client.fetchRecent(params(), "INBOX", limit = 50).associateBy { it.subject }
+        // A second client left "Bystander" flagged \Deleted but un-expunged; a plain EXPUNGE would drop it.
+        client.setFlag(params(), "INBOX", bySubject.getValue("Bystander").uid, Flags.Flag.DELETED, value = true)
+
+        // Without UIDPLUS there is no way to expunge only "Target" while sparing "Bystander": refuse loudly
+        // rather than destroy mail the user never selected (preserves the issue #295 invariant).
+        assertFailsWith<Exception> {
+            noUidPlusClient.deleteMessages(params(), "INBOX", listOf(bySubject.getValue("Target").uid))
+        }
+
+        val remaining = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        assertTrue(remaining.contains("Target"), "the refused target must NOT be expunged, remaining=$remaining")
+        assertTrue(remaining.contains("Bystander"), "unrelated \\Deleted mail must survive, remaining=$remaining")
+        assertTrue(
+            buffer.snapshot().any { it.message.contains("refusing plain EXPUNGE") },
+            "the refusal must be logged, messages=${buffer.snapshot().map { it.message }}",
+        )
+    }
+
+    @Test
+    fun `moveMessages falls back to a safe plain expunge when the server lacks UIDPLUS`() = runTest {
+        GreenMailUtil.sendTextEmailTest("alice@example.org", "bob@example.org", "Move me", "relocate this")
+        greenMail.waitForIncomingEmail(1)
+        appendMessage("Archive", "carol@example.org", "Seed", "Creates the Archive folder")
+        val uid = client.fetchRecent(params(), "INBOX", limit = 50).first { it.subject == "Move me" }.uid
+
+        noUidPlusClient.moveMessages(params(), "INBOX", listOf(uid), "Archive")
+
+        val inbox = client.fetchRecent(params(), "INBOX", limit = 50).map { it.subject }
+        val archive = client.fetchRecent(params(), "Archive", limit = 50).map { it.subject }
+        assertFalse(inbox.contains("Move me"), "the moved message must leave the source via the fallback, inbox=$inbox")
+        assertTrue(archive.contains("Move me"), "archive=$archive")
+    }
+
     @Test
     fun `fetchRecent returns empty for an empty folder`() = runTest {
         createFolder("Empty")

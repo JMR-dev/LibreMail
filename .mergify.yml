@@ -1,85 +1,65 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # ============================================================================
-#  Mergify configuration — PHASE 1: serial merge queue (issue #409).
+#  Mergify configuration — PHASE 2: batched merge queue (issue #410).
 #
 #  Spec:   docs/ci/mergify-integration-spec.md + docs/ci/mergify.yml.proposed
 #          (issues #407 / #408).
 #  Schema: https://docs.mergify.com/configuration/file-format/
-#          Verified against the LIVE Mergify docs on 2026-07-07 (file-format, queue
-#          rules, priority, merge-queue lifecycle/setup/batches, and the
-#          merge-protections auto-merge pages) — the config format evolves, so this is
+#          Verified against the LIVE Mergify docs (file-format, queue rules, priority,
+#          merge-queue batches) on 2026-07-08 — the config format evolves, so this is
 #          not from memory.
-#          2026-07-07 CHANGE: auto-queueing migrated OFF the `pull_request_rules`
-#          queue-action path (which no longer auto-queues — a green matching PR just
-#          reported "Merge queue is ready — use `@Mergifyio queue`" and sat there) ONTO
-#          `merge_protections_settings.auto_merge_conditions` (see that block below).
-#          The old `autoqueue`/queue-action auto path is DEPRECATED and "will stop
-#          working on 2026-07-16" (docs.mergify.com/merge-queue/rules). This changes only
-#          the TRIGGER; the queue's merge semantics (below) are untouched.
+#
+#  HISTORY
+#    Phase 1 (#409; landed #422, proven by #425/#426) ran a SERIAL queue — batch_size 1
+#    + max_parallel_checks 1 + queue_conditions == merge_conditions — which kept GitHub's
+#    "Require branches up to date before merging" checkbox LITERALLY on. It was proven
+#    end-to-end: mergify[bot] auto-merged #425/#426, and serialised #426 -> #427 by
+#    updating #427 onto the new `main` (incl. #426) and re-running CI before merging.
+#    Phase 2 (this file, #410) turns on BATCHING now that the queue is proven.
 # ============================================================================
 #
 #  WHAT THIS DOES
-#    A SERIAL merge queue that ends the manual serial-bump grind and supersedes the
-#    hand-rolled "poor-man's merge queue" (autoupdate.yml + ci-trigger.yml +
-#    traffic-control.yml — all already `disabled_manually`). Mergify updates each
-#    queued PR onto the latest `main`, re-runs CI, and merges it with a MERGE COMMIT
-#    when the single required gate — the "CI passed" check — is green. One PR at a
-#    time, in P0–P9 priority order.
+#    A BATCHED merge queue. Mergify takes up to `batch_size` queued PRs, builds ONE
+#    speculative branch = (latest `main` + all the batched PRs), runs CI on that combined
+#    branch ONCE, and — if green — merges the whole batch (each as a MERGE COMMIT) in
+#    P0-P9 priority order. That is ~`batch_size`x the throughput of Phase-1 serial (one CI
+#    cycle merges many PRs, not one) while STILL testing every PR against the latest `main`
+#    (they all ride the same speculative batch branch).
 #
-#  HARD INVARIANTS (do NOT relax without the trilemma decision recorded in the spec):
-#    * require-up-to-date STAYS ON. This is Phase 1 = batch_size 1 + merge_method:
-#      merge — the ONLY trilemma combination that keeps GitHub's "Require branches to
-#      be up to date before merging" LITERALLY enabled AND preserves the merge-commit
-#      policy. Mergify honours it by updating each PR onto the latest `main` and
-#      re-running CI before merging ("Updates PRs against the latest main before
-#      merging" — docs.mergify.com/merge-queue/setup). NO batching: batching would
-#      require turning that checkbox OFF (docs.mergify.com/merge-queue/batches) and is
-#      the blocked Phase 2 / issue #410 — explicitly OUT OF SCOPE here.
+#  THE require-up-to-date SWAP (the one hard change from Phase 1 — do not misread it):
+#    * Batching is INCOMPATIBLE with GitHub's "Require branches to be up to date before
+#      merging" (docs.mergify.com/merge-queue/batches): a batch branch is by construction
+#      "ahead of" its member PRs, so that per-PR linear check cannot pass. It is therefore
+#      turned OFF in the `main` ruleset (18347032 -> `required_status_checks
+#      .strict_required_status_checks_policy` = false). The required "CI passed" CHECK
+#      itself STAYS required — only the "must be up to date" part is dropped.
+#    * The INVARIANT that option protected — never merge code untested against the latest
+#      `main` — is NOT lost; it MOVES to Mergify. The speculative batch branch IS
+#      latest-`main`-plus-the-batch, so a green batch check IS the against-latest-main
+#      test. This is the sanctioned swap (invariant preserved, enforcement relocated),
+#      authorised ONLY because Phase 1 proved the queue actually performs that update+re-CI.
+#      Do NOT drop require-up-to-date for any reason that does NOT relocate the invariant.
 #    * The single required status check stays "CI passed" — the exact `name:` of the
-#      `ci-passed` job in .github/workflows/ci.yml. NOT "ci-passed". A wrong name means
-#      PRs queue but never merge.
-#    * IN-PLACE CHECKS, not speculative draft-PR checks. GitHub's strict
-#      `required_status_checks` ruleset (require-branches-up-to-date) rejects
-#      speculative checks outright — Mergify surfaced this as a "Configuration not
-#      compatible with `required_status_checks` ruleset rule" check on #422. The fix
-#      (per Mergify: docs.mergify.com/merge-queue/rules) is to make Mergify validate
-#      each PR IN PLACE, on the real PR branch, which requires ALL THREE of:
-#        (a) `merge_queue.max_parallel_checks: 1` (below),
-#        (b) every `queue_rules[].batch_size: 1` (below), and
-#        (c) `queue_rules.default.queue_conditions` IDENTICAL (same conditions, same
-#            order) to `queue_rules.default.merge_conditions` — i.e. no "two-step CI"
-#            where the conditions to ENTER the queue differ from the conditions to
-#            MERGE. Mergify runs three condition sets, sequentially:
-#            `merge_protections_settings.auto_merge_conditions` (TRIGGERS auto-queueing)
-#            → `queue_conditions` (validates a PR's queue ENTRY) → `merge_conditions`
-#            (validates the MERGE). Omitting `queue_conditions` — as this config first
-#            did — reads as a two-step-CI mismatch and re-trips the incompatibility
-#            check, so we keep all three lists identical. Do not let them drift apart.
+#      `ci-passed` job in .github/workflows/ci.yml. NOT "ci-passed".
 
 # ---------------------------------------------------------------------------
-# queue_rules — how a queued PR is validated and merged.
+# queue_rules — how a batch of queued PRs is validated and merged.
 # ---------------------------------------------------------------------------
 queue_rules:
   - name: default
-    # Final merge gate. Merge ONLY when the single required context is green (the exact
-    # same check branch protection requires), the PR targets `main`, is not a draft, has
-    # no merge conflicts, and is not flagged `broken`. NOTE: branch protection requires 0
-    # approvals here (the active repository ruleset sets required_approving_review_count
-    # = 0), so there is deliberately NO `#approved-reviews-by` condition — adding one
-    # would wedge the solo-maintainer flow, where nobody can approve their own PR.
+    # Merge a batch ONLY when the combined batch branch is green on the single required
+    # context ("CI passed"), every member PR targets `main`, is not a draft, has no merge
+    # conflict, and is not flagged `broken`. NOTE: the ruleset requires 0 approvals
+    # (required_approving_review_count = 0), so there is deliberately NO `#approved-reviews-by`
+    # condition — it would wedge the solo-maintainer flow (nobody can approve their own PR).
     #
-    # IN-PLACE CHECKS: `queue_conditions` (what a PR must satisfy to ENTER/stay in the
-    # queue) MUST be IDENTICAL (same conditions, same order) to `merge_conditions` (what
-    # it must satisfy to MERGE) below. When those two lists match — plus batch_size 1 and
-    # max_parallel_checks 1 — Mergify validates each PR IN PLACE on the real PR branch
-    # instead of running speculative draft-PR checks, which is what GitHub's strict
-    # `required_status_checks` ruleset (require-branches-up-to-date) demands. Omitting
-    # `queue_conditions` (as this config originally did) is treated as a "two-step CI"
-    # mismatch and Mergify flags the ruleset as incompatible. Keep the three lists here —
-    # `queue_conditions`, `merge_conditions`, and
-    # `merge_protections_settings.auto_merge_conditions` — all identical; if any diverge,
-    # Mergify's ruleset-compatibility check fails again.
+    # queue_conditions (queue ENTRY) are kept IDENTICAL — same conditions, same order — to
+    # merge_conditions (MERGE). Under Phase 1 this identity was REQUIRED for in-place-checks
+    # compatibility with the strict ruleset; with require-up-to-date now off, batching uses
+    # speculative batch checks and the identity is no longer mandatory — but it is kept so
+    # auto_merge_conditions / queue_conditions / merge_conditions remain one single source of
+    # truth (no reason for entry and merge gates to differ). Keep all three lists identical.
     queue_conditions:
       - base = main
       - -draft
@@ -92,31 +72,33 @@ queue_rules:
       - -conflict
       - label != broken
       - check-success = CI passed
-    # SERIAL: exactly one PR per merge. No batching (Phase 2 / #410). One merge commit
-    # per PR, which is what lets require-up-to-date stay literally ON.
-    batch_size: 1
-    # Merge commit — never squash / rebase / fast-forward (repo policy: merges use
-    # merge commits, never squash).
+    # BATCHING (Phase 2 / #410): validate up to 5 PRs together on ONE speculative branch, so
+    # a single ~15-min CI cycle can merge up to 5 PRs instead of 1. `batch_max_wait_time`
+    # bounds how long Mergify waits to fill a batch before starting CI on a partial one, so a
+    # lone PR is not left waiting for companions. Requires the require-up-to-date checkbox OFF
+    # (see the SWAP note in the header).
+    batch_size: 5
+    batch_max_wait_time: 5 min
+    # Merge commit — never squash / rebase / fast-forward (repo policy: merges use merge
+    # commits, never squash).
     merge_method: merge
 
 # ---------------------------------------------------------------------------
 # merge_queue — queue-wide options.
 # ---------------------------------------------------------------------------
 merge_queue:
-  # Validate ONE PR at a time — true serial, no speculative parallel checks. This is the
-  # strictest, unambiguously require-up-to-date-compatible setting: Mergify updates the
-  # REAL PR branch onto the latest `main`, runs CI on that branch, and merges on the real
-  # green "CI passed" — with no speculative temp-branch/real-branch check mismatch to
-  # reason about. It also caps the expensive, wedge-prone ~15-min E2E matrix at a single
-  # concurrent run. Raising this (speculative parallelism) is a throughput optimisation to
-  # weigh alongside the Phase 2 / #410 batching decision — not part of serial Phase 1.
+  # One batch validated at a time. `batch_size` (above) — not parallelism — is the Phase-2
+  # throughput lever: a single batch of up to 5 PRs merges per CI cycle, keeping the
+  # expensive/wedge-prone ~15-min E2E matrix to ONE concurrent run. Raising this would run
+  # multiple batches' CI concurrently (more runner load / cost) — a later tuning knob, not
+  # needed to get the batching win.
   max_parallel_checks: 1
 
 # ---------------------------------------------------------------------------
-# priority_rules — map the repo's P0–P9 labels onto queue priority.
+# priority_rules — map the repo's P0-P9 labels onto queue priority.
 # Higher number merges first (Mergify keywords: low=1000 / medium=2000 / high=3000;
-# numeric range 1–10000). P0 is emergency-only and outranks everything. PRs with no P-label
-# fall to Mergify's default `medium` (2000).
+# numeric range 1-10000). P0 is emergency-only and outranks everything. PRs with no P-label
+# fall to Mergify's default `medium` (2000). Priority also orders merges within a batch.
 # ---------------------------------------------------------------------------
 priority_rules:
   - name: p0-emergency
@@ -170,37 +152,14 @@ priority_rules:
 
 # ---------------------------------------------------------------------------
 # merge_protections_settings — WHICH PRs are AUTOMATICALLY added to the queue.
+# (Unchanged from Phase 1 — this is the auto-queue TRIGGER, orthogonal to batching.)
 #
-# This REPLACES the old `pull_request_rules` `queue` action. That action no longer
-# auto-queues in current Mergify: a green, matching PR just reported "Merge queue is
-# ready — use `@Mergifyio queue`" and sat there forever (never merged). Automatic
-# queueing now lives in `auto_merge_conditions` under `merge_protections_settings`. The
-# old `queue_rules[].autoqueue` field (and the queue-action auto path) is DEPRECATED and
-# "will stop working on 2026-07-16. Use `auto_merge_conditions` in
-# `merge_protections_settings` instead" (docs.mergify.com/merge-queue/rules).
+# Automatic queueing lives in `auto_merge_conditions` (the old `pull_request_rules` queue
+# action no longer auto-queues — deprecated 2026-07-16). Same audience as before: green on
+# "CI passed", targeting `main`, not a draft, no conflicts, not `broken`. A matched PR is
+# auto-QUEUED (not merged directly); the batched queue then routes + merges it.
 #
-# `auto_merge_conditions` accepts `true` (auto-queue every mergeable PR) or, as here,
-# "a list of conditions to restrict the audience" (docs.mergify.com/configuration/
-# file-format). We give the SAME set the old queue action used, so EXACTLY the same PRs
-# auto-queue: green on "CI passed", targeting `main`, not a draft, no conflicts, not
-# `broken`.
-#
-# WHY THIS PRESERVES require-up-to-date: this changes only the TRIGGER (manual →
-# automatic). It does NOT touch how the queue validates or merges — batch_size 1,
-# merge_method merge, and max_parallel_checks 1 above are unchanged — and those are the
-# settings that interact with require-up-to-date (only BATCHING, batch_size > 1, forces
-# that checkbox OFF; see the invariants header + docs.mergify.com/merge-queue/batches).
-# When a merge queue is configured, a matched PR is auto-QUEUED, not merged directly:
-# "Every PR is auto-queued. The merge queue then handles routing and merging"
-# (docs.mergify.com/merge-protections/auto-merge) — so it still goes through the serial
-# queue, gets updated onto the latest `main`, re-runs CI, and merges on the real green
-# "CI passed". Mergify also auto-reads GitHub branch protection (the required "CI passed"
-# check + require-up-to-date) and injects it as a merge condition, so the GitHub gate is
-# enforced on top of queue_rules.merge_conditions.
-#
-# This list MUST stay IDENTICAL (same conditions, same order) to
-# `queue_rules.default.queue_conditions` and `.merge_conditions` above — see the note
-# there and the IN-PLACE CHECKS hard invariant at the top of this file.
+# Kept IDENTICAL (same conditions, same order) to queue_conditions / merge_conditions above.
 # ---------------------------------------------------------------------------
 merge_protections_settings:
   auto_merge_conditions:

@@ -198,17 +198,15 @@ class MailBackfiller @Inject constructor(
         val toRefresh = entities.filter { it.id in preexisting }
         if (toRefresh.isNotEmpty()) {
             messageDao.markSynced(toRefresh.map { it.id })
-            toRefresh.forEach {
-                messageDao.updateHeaderContent(
-                    id = it.id,
-                    sender = it.sender,
-                    senderEmail = it.senderEmail,
-                    subject = it.subject,
-                    timestampMillis = it.timestampMillis,
-                    uid = it.uid,
-                )
-            }
+            // Refresh every pre-existing row's header in ONE transaction (issue #322) rather than a per-row
+            // UPDATE each in its own implicit transaction — the same batched path foreground sync uses
+            // (issue #310). N per-row commits fsync the journal once per message (amplified on the
+            // encrypted cache); routing the whole batch through updateHeaderContents collapses them into a
+            // single commit per page. Semantically identical: it applies updateHeaderContent to each row in
+            // list order, so the same rows get the same values (and the same casefold columns).
+            messageDao.updateHeaderContents(toRefresh)
         }
+        AppLog.d(TAG, "backfill persist: fetched=${entities.size} refreshed=${toRefresh.size}")
     }
 
     private suspend fun markComplete(accountId: String, folder: String, nextBeforeUid: Long) {

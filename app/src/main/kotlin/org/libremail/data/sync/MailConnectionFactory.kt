@@ -51,7 +51,7 @@ class MailConnectionFactory @Inject constructor(
 
     private suspend fun resolveSecret(account: Account): String = when (account.authType) {
         AuthType.PASSWORD_IMAP ->
-            credentialStore.loadSecret(account.id) ?: error("No stored credentials for ${account.email}")
+            credentialStore.loadSecret(account.id) ?: throw MissingCredentialsException()
         AuthType.OAUTH_OUTLOOK ->
             cachedAccessToken(account.id, SCOPE_OUTLOOK, outlookAuthManager::freshOutlookToken)
     }
@@ -70,7 +70,7 @@ class MailConnectionFactory @Inject constructor(
         // computeIfAbsent (not getOrPut) so concurrent first-callers share one mutex per account.
         return refreshMutexes.computeIfAbsent(accountId) { Mutex() }.withLock {
             validCachedToken(accountId, scope)?.let { return@withLock it }
-            val stored = credentialStore.loadSecret(accountId) ?: error("No stored credentials for $accountId")
+            val stored = credentialStore.loadSecret(accountId) ?: throw MissingCredentialsException()
             val fresh = refresh(stored)
             if (fresh.authStateJson != stored) credentialStore.saveSecret(accountId, fresh.authStateJson)
             tokenCache["$accountId|$scope"] = CachedToken(fresh.accessToken, fresh.accessTokenExpiry)

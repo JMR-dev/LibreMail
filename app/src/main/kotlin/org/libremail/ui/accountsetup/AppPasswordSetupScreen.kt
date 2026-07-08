@@ -214,6 +214,11 @@ fun AppPasswordSetupScreen(
                 Text(stringResource(R.string.app_password_test_and_add))
             }
         }
+        // A wrong app password and "IMAP is turned off" both fail auth, but only the latter is fixed by
+        // a provider toggle (e.g. Gmail's Enable IMAP); surface it as an actionable prompt (#390).
+        form.imapDisabledPrompt?.let { prompt ->
+            ImapDisabledDialog(prompt = prompt, onDismiss = viewModel::dismissImapDisabledPrompt)
+        }
     }
 }
 

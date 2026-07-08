@@ -74,6 +74,9 @@ style:
       # log via AppLog, so their unit tests mockkStatic(Log) too.
       - '**/data/repository/MailRepositoryImplTest.kt'
       - '**/data/repository/MailRepositoryImplCoverageTest.kt'
+      # Account-add breadcrumb (issue #403): addImapAccount/addOutlookAccount log via AppLog, so this
+      # suite mockkStatic(Log) so the calls don't crash on the throwing JVM stub.
+      - '**/data/repository/AccountRepositoryImplTest.kt'
       - '**/ui/reader/ReaderViewModelTest.kt'
       - '**/ui/reader/ReaderViewModelActionsTest.kt'
   MagicNumber:

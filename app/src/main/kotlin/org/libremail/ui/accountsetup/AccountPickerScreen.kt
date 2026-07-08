@@ -169,6 +169,12 @@ fun AccountPickerScreen(
                     CircularProgressIndicator()
                 }
             }
+            // Outlook OAuth can succeed while the IMAP AUTHENTICATE step is rejected because IMAP is
+            // off for the mailbox (#390); show the actionable "turn on IMAP" prompt instead of a
+            // generic auth-failure snackbar.
+            state.imapDisabledPrompt?.let { prompt ->
+                ImapDisabledDialog(prompt = prompt, onDismiss = viewModel::dismissImapDisabledPrompt)
+            }
         }
     }
 }
