@@ -205,6 +205,14 @@
     <string name="account_setup_other">Other (IMAP/SMTP)</string>
     <string name="account_setup_subtitle">Choose your email provider to get started.</string>
 
+    <!-- Reactive "IMAP is turned off" prompt shown when sign-in succeeds but the IMAP AUTHENTICATE
+         step is rejected because IMAP access is disabled on the account (#390) -->
+    <string name="imap_disabled_title">Turn on IMAP to continue</string>
+    <string name="imap_disabled_message">You signed in successfully, but %1$s rejected IMAP access for this account. Make sure IMAP is turned on in your account settings, then try again.</string>
+    <string name="imap_disabled_message_generic">You signed in successfully, but the mail server rejected IMAP access for this account. Make sure IMAP is turned on in your account settings, then try again.</string>
+    <string name="imap_disabled_help">How to turn on IMAP</string>
+    <string name="imap_disabled_dismiss">Got it</string>
+
     <!-- Onboarding: pre-auth Outlook IMAP-enablement notice, shown before Microsoft sign-in (#411) -->
     <string name="outlook_imap_title">Turn on IMAP for Outlook</string>
     <string name="outlook_imap_question">Have you enabled IMAP for your Outlook account?</string>

@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.libremail.domain.model.MailProvider
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.reporting.AppLog
+import org.libremail.reporting.accountLogRef
 import org.libremail.ui.navigation.Routes
 import javax.inject.Inject
 
@@ -23,6 +25,11 @@ data class AppPasswordForm(
     val error: String? = null,
     /** Set alongside [SetupStatus.DONE]: the id of the account that was just added. */
     val addedAccountId: String? = null,
+    /**
+     * Set instead of [error] when the failure was specifically an "IMAP is disabled" rejection (#390):
+     * the screen shows the actionable [ImapDisabledDialog] rather than the generic error snackbar.
+     */
+    val imapDisabledPrompt: ImapDisabledPrompt? = null,
 ) {
     val isValid: Boolean get() = email.isNotBlank() && appPassword.isNotBlank()
 }
@@ -53,6 +60,9 @@ class AppPasswordViewModel @Inject constructor(
     fun toggleAdvanced() = _form.update { it.copy(advancedExpanded = !it.advancedExpanded) }
     fun consumeError() = _form.update { it.copy(error = null) }
 
+    /** Clears the "IMAP is disabled" prompt after the user acknowledges it (issue #390). */
+    fun dismissImapDisabledPrompt() = _form.update { it.copy(imapDisabledPrompt = null) }
+
     fun testAndSave() {
         val provider = provider
         if (provider == null) {
@@ -72,14 +82,28 @@ class AppPasswordViewModel @Inject constructor(
                     _form.update { it.copy(status = SetupStatus.DONE, addedAccountId = account.id) }
                 },
                 onFailure = { e ->
-                    _form.update {
-                        it.copy(
-                            status = SetupStatus.IDLE,
-                            error = e.message ?: "Could not connect to the server",
+                    // App passwords are never XOAUTH2, so IMAP-disabled is inferred only from the
+                    // server's message text (e.g. Gmail's "not enabled for IMAP use"), not a token
+                    // signal (#390).
+                    val prompt = imapDisabledPromptFor(e, account, usedOAuth = false)
+                    if (prompt != null) {
+                        AppLog.i(
+                            TAG,
+                            "IMAP disabled on app-password setup (${accountLogRef(account.id)}); " +
+                                "prompting to enable IMAP",
                         )
+                        _form.update { it.copy(status = SetupStatus.IDLE, imapDisabledPrompt = prompt, error = null) }
+                    } else {
+                        _form.update {
+                            it.copy(status = SetupStatus.IDLE, error = e.message ?: "Could not connect to the server")
+                        }
                     }
                 },
             )
         }
+    }
+
+    private companion object {
+        const val TAG = "AppPasswordVM"
     }
 }

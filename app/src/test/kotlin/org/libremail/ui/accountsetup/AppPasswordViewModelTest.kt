@@ -4,8 +4,12 @@ package org.libremail.ui.accountsetup
 import androidx.lifecycle.SavedStateHandle
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import io.mockk.slot
+import io.mockk.unmockkAll
+import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -30,10 +34,22 @@ class AppPasswordViewModelTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
-    fun setUp() = Dispatchers.setMain(testDispatcher)
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        // The IMAP-disabled branch breadcrumbs via AppLog -> android.util.Log, a throwing stub under
+        // plain JVM tests. Mock it fully-qualified so this file never imports android.util.Log (which
+        // detekt's ForbiddenImport guard would flag).
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.i(any(), any()) } returns 0
+        every { android.util.Log.d(any(), any()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+    }
 
     @After
-    fun tearDown() = Dispatchers.resetMain()
+    fun tearDown() {
+        Dispatchers.resetMain()
+        unmockkAll()
+    }
 
     private fun viewModel(repo: AccountRepository, providerKey: String = MailProvider.GMAIL.key) = AppPasswordViewModel(
         SavedStateHandle(mapOf(Routes.APP_PASSWORD_ARG_PROVIDER to providerKey)),
@@ -100,6 +116,29 @@ class AppPasswordViewModelTest {
         assertEquals(SetupStatus.IDLE, vm.form.value.status)
         assertNull(vm.form.value.addedAccountId)
     }
+
+    @Test
+    fun `an IMAP-disabled failure surfaces the enable-IMAP prompt instead of a generic error`() =
+        runTest(testDispatcher) {
+            val repo = mockk<AccountRepository>()
+            coEvery { repo.addImapAccount(any(), any()) } returns
+                Result.failure(AuthenticationFailedException("Your account is not enabled for IMAP use"))
+            val vm = viewModel(repo) // Gmail preset
+
+            vm.onEmail("user@gmail.com")
+            vm.onAppPassword("app-pass")
+            vm.testAndSave()
+
+            val prompt = vm.form.value.imapDisabledPrompt
+            assertEquals(MailProvider.GMAIL.displayName, prompt?.brand)
+            assertTrue(prompt?.helpUrl?.startsWith("https://support.google.com/") == true)
+            assertNull(vm.form.value.error)
+            assertEquals(SetupStatus.IDLE, vm.form.value.status)
+            assertNull(vm.form.value.addedAccountId)
+
+            vm.dismissImapDisabledPrompt()
+            assertNull(vm.form.value.imapDisabledPrompt)
+        }
 
     @Test
     fun `an unknown provider key surfaces an error and never contacts the server`() = runTest(testDispatcher) {

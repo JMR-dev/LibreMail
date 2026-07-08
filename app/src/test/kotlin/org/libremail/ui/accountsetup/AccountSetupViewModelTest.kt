@@ -10,6 +10,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -189,6 +190,54 @@ class AccountSetupViewModelTest {
 
         assertEquals(SetupStatus.IDLE, vm.state.value.status)
         assertEquals("IMAP verification failed", vm.state.value.error)
+    }
+
+    @Test
+    fun `a token-OK but IMAP-disabled AUTHENTICATE failure surfaces the enable-IMAP prompt`() = runTest(dispatcher) {
+        // OAuth succeeds, then the IMAP AUTHENTICATE step is rejected (IMAP off for the mailbox):
+        // the actionable prompt replaces the generic error, and no account is marked added (#390).
+        val manager = mockk<OutlookAuthManager>(relaxed = true)
+        coEvery { manager.exchangeToken(any()) } returns
+            OAuthResult(email = "me@outlook.com", accessToken = "tok", authStateJson = "{}")
+        val accounts = mockk<AccountRepository>(relaxed = true)
+        coEvery { accounts.addOutlookAccount(any(), any(), any()) } returns
+            Result.failure(AuthenticationFailedException("AUTHENTICATE failed"))
+        val vm = viewModel(outlookAuthManager = manager, accountRepository = accounts)
+
+        vm.onOutlookResult(mockk<Intent>(relaxed = true))
+        advanceUntilIdle()
+
+        val prompt = vm.state.value.imapDisabledPrompt
+        assertEquals("Outlook", prompt?.brand)
+        assertTrue(prompt?.helpUrl?.startsWith("https://support.microsoft.com/") == true)
+        assertEquals(SetupStatus.IDLE, vm.state.value.status)
+        assertNull(vm.state.value.error)
+        assertNull(vm.state.value.addedAccountId)
+        // PII-free breadcrumb: the account is referenced by its hashed log ref, never the email.
+        val disabledLine = logBuffer.snapshot().single { it.message.contains("IMAP disabled on Outlook sign-in") }
+        assertEquals('I', disabledLine.level)
+        assertFalse(disabledLine.message.contains("@"), disabledLine.message)
+
+        vm.dismissImapDisabledPrompt()
+        assertNull(vm.state.value.imapDisabledPrompt)
+    }
+
+    @Test
+    fun `a wrong-password style AUTHENTICATE failure keeps the generic error, not the prompt`() = runTest(dispatcher) {
+        // A plain OAuth-path failure with no IMAP-disabled signal stays a generic error.
+        val manager = mockk<OutlookAuthManager>(relaxed = true)
+        coEvery { manager.exchangeToken(any()) } returns
+            OAuthResult(email = "me@outlook.com", accessToken = "tok", authStateJson = "{}")
+        val accounts = mockk<AccountRepository>(relaxed = true)
+        coEvery { accounts.addOutlookAccount(any(), any(), any()) } returns
+            Result.failure(RuntimeException("Could not reach the server"))
+        val vm = viewModel(outlookAuthManager = manager, accountRepository = accounts)
+
+        vm.onOutlookResult(mockk<Intent>(relaxed = true))
+        advanceUntilIdle()
+
+        assertNull(vm.state.value.imapDisabledPrompt)
+        assertEquals("Could not reach the server", vm.state.value.error)
     }
 
     @Test
