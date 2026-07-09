@@ -165,6 +165,21 @@ class MailboxScreenJvmTest {
         assertTrue(composeTestRule.onAllNodesWithText("b@example.org").fetchSemanticsNodes().isNotEmpty())
     }
 
+    // #362: an account whose auth circuit has latched carries a persisted authError; the mailbox shows a
+    // persistent (non-dismissable) banner with the "remove and re-add" message while that state holds.
+    @Test
+    fun erroredAccount_showsPersistentAuthErrorBanner() {
+        val errored = account.copy(
+            authError = string(R.string.account_auth_error_remove_readd),
+        )
+        setContent(accounts = listOf(errored), messages = listOf(message("1", subject = "Msg")))
+        waitForText("Msg")
+
+        composeTestRule
+            .onNodeWithText(string(R.string.account_auth_error_remove_readd))
+            .assertIsDisplayed()
+    }
+
     @Test
     fun draftsAndOutboxEntries_showAtInbox_andNavigate() {
         var openedDrafts = false

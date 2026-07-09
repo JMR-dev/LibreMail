@@ -44,9 +44,17 @@ class AuthBackoffException(remainingMillis: Long) :
  * (`host|port|username`), so one blocked account never stalls another, and every log line uses
  * [accountLogRef] over that key — a salted-looking hash, never the address or host.
  *
- * State lives only in-process (`@Singleton`); a process restart clears it and simply re-probes, which is
- * safe — the first attempt after restart is spaced from the previous run by however long the process was
- * down, and any real re-failure immediately re-arms the backoff.
+ * **Fail-loud latch (issue #362).** Past [AuthCadencePolicy.circuitOpenThreshold] consecutive failures the
+ * circuit **latches**: a wrong app-password does not fix itself, so instead of a self-clearing window we
+ * stop retrying *entirely* and hold the account blocked forever. The latch is surfaced to the user as a
+ * persisted account error ("remove and re-add") by
+ * [org.libremail.data.sync.markAccountErroredIfLatched], and is cleared only by a fresh account re-add
+ * ([onAccountReadded]) — never by time or a stray success.
+ *
+ * The in-memory latch itself lives only in-process (`@Singleton`); the durable stop is the persisted
+ * account error, which the sync/backfill loops honour across restarts, so a process restart does not
+ * quietly resume probing a latched account. Below the threshold, the in-memory ramp is transient — a
+ * restart there simply re-probes (spaced from the previous run), and any real re-failure re-arms it.
  */
 @Singleton
 class AuthThrottleGate internal constructor(
@@ -62,53 +70,109 @@ class AuthThrottleGate internal constructor(
         policyForHost = ProviderAuthPolicy::forHost,
     )
 
-    /** One account's auth state: consecutive failures, until when logins are blocked, the last wait, open? */
+    /**
+     * One account's auth state: consecutive failures, until when logins are blocked, the last computed
+     * wait, and whether the circuit has **latched** — a permanent fail-loud stop past the threshold that
+     * clears only on a fresh account re-add (issue #362), never by time or a success.
+     */
     private data class State(
         val failures: Int,
         val blockedUntilMillis: Long,
         val lastBlockMillis: Long,
-        val circuitOpen: Boolean,
+        val latched: Boolean,
     )
 
     private val states = ConcurrentHashMap<String, State>()
 
     /**
      * Records a failed authentication for [params]'s account and returns the resulting block in ms (0 when
-     * the host has no auth-lockout risk, so the call is a no-op). Escalates the consecutive-failure count
-     * so repeats back off exponentially, then extend into the fixed open-circuit window past the policy's
-     * threshold, and stamps the account blocked until `now + block`. Atomic per account. Logs a PII-free
-     * breadcrumb (failure count, block, and whether the circuit is now open).
+     * the host has no auth-lockout risk, so the call is a no-op). Below the threshold it escalates the
+     * consecutive-failure count so repeats back off exponentially and stamps the account blocked until
+     * `now + block`. At the threshold the circuit **latches**: a permanent block (fail-loud stop) that no
+     * further failure escalates and no success or elapsed time clears — only [onAccountReadded] does
+     * (issue #362). Atomic per account. Logs a PII-free breadcrumb (the latch transition once, or the
+     * failure count + block while ramping).
      */
     fun onAuthFailure(params: ImapConnectionParams): Long {
         val policy = policyForHost(params.host)
         if (!policy.enabled) return 0L
         val now = nowMillis()
+        var alreadyLatched = false
         val updated = states.compute(key(params)) { _, previous ->
+            // A latched circuit is a permanent stop: further failures neither escalate nor re-arm it (and
+            // the failure count stays frozen), so we never spam the log or drift the state once we give up.
+            if (previous?.latched == true) {
+                alreadyLatched = true
+                return@compute previous
+            }
             val failures = (previous?.failures ?: 0) + 1
             val block = AuthBackoff.blockMillis(policy, failures, random())
+            val latched = failures >= policy.circuitOpenThreshold
             State(
                 failures = failures,
-                blockedUntilMillis = now + block,
+                // Latched: block "forever" (Long.MAX_VALUE never elapses) so every subsequent login is
+                // skipped until a re-add — the fail-loud stop that replaced the old self-clearing window.
+                blockedUntilMillis = if (latched) Long.MAX_VALUE else now + block,
                 lastBlockMillis = block,
-                circuitOpen = failures >= policy.circuitOpenThreshold,
+                latched = latched,
             )
         }!!
-        AppLog.w(
-            TAG,
-            "auth backoff ${logRef(params)} failures=${updated.failures} block=${updated.lastBlockMillis}ms" +
-                if (updated.circuitOpen) " circuit=open" else "",
-        )
+        when {
+            alreadyLatched -> Unit // logged once when it first latched; stay silent thereafter
+            updated.latched -> AppLog.w(
+                TAG,
+                "auth circuit latched ${logRef(params)} after ${updated.failures} failure(s): " +
+                    "retries stopped, account will be errored",
+            )
+            else -> AppLog.w(
+                TAG,
+                "auth backoff ${logRef(params)} failures=${updated.failures} block=${updated.lastBlockMillis}ms",
+            )
+        }
         return updated.lastBlockMillis
     }
 
     /**
-     * Clears any auth-backoff state for [params]'s account after a successful login, so a recovered
-     * account resumes at full speed with the failure count reset. Silent no-op when the account was not
-     * blocked (or the host is not gated), so [ImapClient] can call it on every successful connect.
+     * Clears a *ramping* (not yet latched) auth-backoff for [params]'s account after a successful login, so
+     * a recovered account resumes at full speed with the failure count reset. A **latched** circuit is
+     * deliberately left intact — it is cleared only by a fresh account re-add ([onAccountReadded]), never by
+     * a success (issue #362); while latched no login is even attempted, so this is a defensive guard. Silent
+     * no-op when the account was not blocked (or the host is not gated), so [ImapClient] can call it on every
+     * successful connect.
      */
     fun onAuthSuccess(params: ImapConnectionParams) {
-        val previous = states.remove(key(params)) ?: return
-        AppLog.i(TAG, "auth recovered ${logRef(params)} after ${previous.failures} failure(s)")
+        var cleared: State? = null
+        states.compute(key(params)) { _, current ->
+            when {
+                current == null -> null
+                current.latched -> current // a latched circuit clears only on re-add, never on success
+                else -> {
+                    cleared = current
+                    null
+                }
+            }
+        }
+        cleared?.let { AppLog.i(TAG, "auth recovered ${logRef(params)} after ${it.failures} failure(s)") }
+    }
+
+    /**
+     * True once [params]'s account has permanently **latched** its auth circuit (issue #362) — the
+     * threshold of consecutive Yahoo/AOL auth failures reached — so it must be surfaced to the user as
+     * errored and no login retried until a fresh account re-add.
+     */
+    fun isAuthLatched(params: ImapConnectionParams): Boolean = states[key(params)]?.latched == true
+
+    /**
+     * Drops ALL auth state for [params]'s account — including a permanently latched circuit — because the
+     * user re-added the account with fresh credentials (issue #362). This is the single path that escapes a
+     * latch: the next login is then attempted clean. Called from
+     * [org.libremail.data.repository.AccountRepositoryImpl] on add (before the connection test), paired with
+     * clearing the persisted account error, so a re-add fully resumes sync.
+     */
+    fun onAccountReadded(params: ImapConnectionParams) {
+        if (states.remove(key(params)) != null) {
+            AppLog.i(TAG, "auth state reset ${logRef(params)}: account re-added, retries resume")
+        }
     }
 
     /**

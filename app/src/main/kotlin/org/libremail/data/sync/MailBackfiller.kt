@@ -78,6 +78,13 @@ class MailBackfiller @Inject constructor(
         var remaining = maxBatches
         var moreWork = false
         accounts@ for (account in accountDao.getAll().map { it.toDomain() }) {
+            // #362 fail-loud stop: an account whose proactive auth circuit latched is persisted as errored
+            // and must not be probed again — skip it entirely (no login), durably across restarts (reads the
+            // persisted authError, not just the in-memory gate), until the user re-adds it.
+            if (account.authError != null) {
+                AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: account errored, awaiting re-add")
+                continue@accounts
+            }
             // Skip an account backing off (throttle #360 / auth #362) or with unresolvable credentials —
             // a null return does NOT set moreWork, so a slice whose only work is a backing-off account
             // reports "done" instead of tight-looping over the skip. See [paramsForBackfill].
@@ -123,9 +130,14 @@ class MailBackfiller @Inject constructor(
             return null
         }
         val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: return null
+        // If the auth circuit latched (via any path) since the durable authError check in runBackfill, stamp
+        // the account error now (once, as a side effect); the block check below then skips it, since a latched
+        // circuit reports a "forever" remaining block — folding the latch skip into the existing backoff skip.
+        val latched = markAccountErroredIfLatched(authGate, accountDao, context, account, params)
         val authBlock = authGate.remainingAuthBlockMillis(params)
         if (authBlock > 0L) {
-            AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: auth backing off, remaining=${authBlock}ms")
+            val reason = if (latched) "auth circuit latched" else "auth backing off, remaining=${authBlock}ms"
+            AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: $reason")
             return null
         }
         return params

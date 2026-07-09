@@ -17,6 +17,13 @@ data class Account(
     val authType: AuthType,
     val imap: ServerConfig,
     val smtp: ServerConfig,
+    /**
+     * A user-facing error that has halted this account's sync, or null when healthy (issue #362). Carries
+     * the "remove and re-add this account" message once its Yahoo/AOL auth circuit latches after repeated
+     * authentication failures; the UI renders it on the account row and as a mailbox banner. Cleared by a
+     * fresh re-add. Defaulted so it is not a required field at construction (setup, tests).
+     */
+    val authError: String? = null,
 ) {
     companion object {
         private const val OUTLOOK_IMAP_PORT = 993

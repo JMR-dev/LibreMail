@@ -27,8 +27,11 @@ complexity:
     # plus folder-resolution / spam cases) already at detekt's LLOC boundary; the reader-path perf
     # logging (issue #358) added its required android.util.Log mock + one breadcrumb test, tipping it
     # over. Excluded rather than artificially split — same "operation-rich cohesive suite" rationale as
-    # the TooManyFunctions relaxation above.
-    excludes: ['**/data/repository/MailRepositoryImplTest.kt']
+    # the TooManyFunctions relaxation above. MailBackfillerTest is likewise one cohesive single-SUT
+    # backfill suite (a test per behaviour — resume, retention floors, throttle/auth/errored skips,
+    # batched persist); issue #362's fail-loud auth-error skip added its required errored/latched-skip
+    # tests, tipping it over the same boundary.
+    excludes: ['**/data/repository/MailRepositoryImplTest.kt', '**/data/sync/MailBackfillerTest.kt']
 
 naming:
   FunctionNaming:

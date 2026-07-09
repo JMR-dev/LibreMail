@@ -3,8 +3,11 @@ package org.libremail.ui.mailbox
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -13,6 +16,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -138,6 +142,16 @@ private fun AccountSwitcher(
                 overflow = TextOverflow.Ellipsis,
                 fontWeight = if (current.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
             )
+            // #362: flag the switched-to account when its auth circuit has latched (remove-and-re-add).
+            if (current.authError != null) {
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = stringResource(R.string.account_auth_error_icon_description),
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             Icon(Icons.Filled.ArrowDropDown, contentDescription = stringResource(R.string.drawer_switch_account))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -148,6 +162,18 @@ private fun AccountSwitcher(
                             account.email,
                             fontWeight = if (account.id in accountsWithUnread) FontWeight.Bold else FontWeight.Normal,
                         )
+                    },
+                    // #362: a red warning glyph marks any errored account in the switcher list too.
+                    trailingIcon = if (account.authError != null) {
+                        {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = stringResource(R.string.account_auth_error_icon_description),
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    } else {
+                        null
                     },
                     onClick = {
                         onSelect(account.id)

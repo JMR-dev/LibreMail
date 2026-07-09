@@ -63,6 +63,28 @@ class AccountMigrationTest {
         db.close()
     }
 
+    /**
+     * v2 -> v3 (issue #362): a nullable `accounts.authError` appears, and existing accounts migrate to NULL
+     * ("healthy — no error"). runMigrationsAndValidate confirms the resulting schema matches the exported v3
+     * JSON, so any drift between the plain ADD COLUMN and the entity would fail here, not at a user's first
+     * open.
+     */
+    @Test
+    fun migrate2To3_addsNullableAuthErrorDefaultingToNull() {
+        helper.createDatabase(TEST_DB, 2).apply {
+            insertAccount("a", "ada@example.org")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 3, true, ACCOUNT_MIGRATION_2_3)
+
+        db.query("SELECT authError FROM accounts WHERE id = 'a'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue("an existing account migrates to a null (healthy) authError", c.isNull(0))
+        }
+        db.close()
+    }
+
     private fun SupportSQLiteDatabase.insertAccount(id: String, email: String) {
         execSQL(
             "INSERT INTO accounts (id, email, displayName, authType, imap_host, imap_port, imap_security, " +

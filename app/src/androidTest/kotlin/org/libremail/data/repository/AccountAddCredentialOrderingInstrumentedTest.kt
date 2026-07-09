@@ -32,6 +32,7 @@ import org.libremail.domain.model.Account
 import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedFolder
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
@@ -78,6 +79,7 @@ class AccountAddCredentialOrderingInstrumentedTest {
             draftDao = mockk<DraftDao>(relaxed = true),
             credentialStore = credentialStore,
             imapClient = imapClient,
+            authGate = mockk<AuthThrottleGate>(relaxed = true),
             syncScheduler = mockk<SyncScheduler>(relaxed = true),
             accountSettingsRepository = mockk<AccountSettingsRepository>(relaxed = true),
             mailNotifier = mockk<MailNotifier>(relaxed = true),

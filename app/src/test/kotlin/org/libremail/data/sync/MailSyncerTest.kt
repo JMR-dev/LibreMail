@@ -28,9 +28,12 @@ import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.ImapConnectionParams
+import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
+import org.libremail.mail.ProviderAuthPolicy
 import org.libremail.notifications.MailNotifier
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
@@ -96,9 +99,10 @@ class MailSyncerTest {
         fetched: List<FetchedMessage> = emptyList(),
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
         bandwidthTracker: GmailBandwidthTracker = GmailBandwidthTracker(),
+        authGate: AuthThrottleGate = AuthThrottleGate(),
         accountEntity: AccountEntity = account,
     ): MailSyncer {
-        val accountDao = mockk<AccountDao>()
+        val accountDao = mockk<AccountDao>(relaxed = true)
         coEvery { accountDao.getById("acct") } returns accountEntity
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.getSyncedIds(any(), any()) } returns emptyList()
@@ -108,7 +112,7 @@ class MailSyncerTest {
         coEvery { imapClient.fetchRecent(any(), any(), any()) } returns fetched
         lastImapClient = imapClient
         val connectionFactory = mockk<MailConnectionFactory>()
-        coEvery { connectionFactory.imapParamsFor(any()) } returns mockk<ImapConnectionParams>()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns realParams()
         val settingsRepository = mockk<SettingsRepository>()
         coEvery { settingsRepository.fetchPolicy() } returns policy
         every { settingsRepository.settings } returns flowOf(globalSettings)
@@ -127,11 +131,70 @@ class MailSyncerTest {
             mailRepository = mailRepository,
             throttleGate = throttleGate,
             bandwidthTracker = bandwidthTracker,
+            authGate = authGate,
         )
     }
 
+    /** A real (non-mock) params object, so the proactive auth gate can key by host|port|username (#362). */
+    private fun realParams() = ImapConnectionParams(
+        host = "imap.example.org",
+        port = 993,
+        security = MailSecurity.SSL_TLS,
+        username = "a@example.org",
+        secret = "secret",
+        useXoauth2 = false,
+    )
+
     private fun batteryProvider(battery: BatteryStatus): BatteryStatusProvider =
         mockk<BatteryStatusProvider> { every { current() } returns battery }
+
+    /**
+     * Issue #362 fail-loud stop: an account already persisted as errored (its Yahoo/AOL auth circuit has
+     * latched) is skipped entirely — no login attempt, no fetch — durably across restarts, since the skip
+     * reads the persisted [AccountEntity.authError] rather than the in-memory gate. The sync still reports
+     * success (contributes 0) so a healthy sibling account is unaffected.
+     */
+    @Test
+    fun `an errored account is skipped without any fetch`() = runTest {
+        val syncer = syncer(
+            FetchPolicy.ON_DEMAND,
+            mockk(relaxed = true),
+            accountEntity = account.copy(authError = "Please remove and re-add this account with valid credentials"),
+        )
+
+        val result = syncer.syncFolder("acct", "INBOX")
+
+        assertEquals(0, result.getOrNull(), "an errored account contributes nothing and does not fail the sync")
+        coVerify(exactly = 0) { lastImapClient.fetchRecent(any(), any(), any()) }
+        assertTrue(
+            logBuffer.snapshot().any { it.message.startsWith("sync skip acct:") && it.message.contains("errored") },
+            "a PII-free skip breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * The mid-sync latch (#362): when the gate has already latched (e.g. via a prior IDLE/backfill failure)
+     * but the account row is not yet stamped, the next sync marks it errored via [markAccountErroredIfLatched]
+     * and skips the login rather than driving one the gate would only refuse.
+     */
+    @Test
+    fun `a freshly latched account is marked errored and skipped without a fetch`() = runTest {
+        val gate = AuthThrottleGate(
+            nowMillis = { 0L },
+            random = { 0.0 },
+            policyForHost = { ProviderAuthPolicy.forHost("imap.mail.yahoo.com") },
+        )
+        repeat(ProviderAuthPolicy.YAHOO_AUTH_CIRCUIT_OPEN_THRESHOLD) { gate.onAuthFailure(realParams()) }
+        val syncer = syncer(FetchPolicy.ON_DEMAND, mockk(relaxed = true), authGate = gate)
+
+        val result = syncer.syncFolder("acct", "INBOX")
+
+        assertEquals(0, result.getOrNull())
+        coVerify(exactly = 0) { lastImapClient.fetchRecent(any(), any(), any()) }
+        assertTrue(
+            logBuffer.snapshot().any { it.message.startsWith("sync skip acct:") && it.message.contains("latched") },
+        )
+    }
 
     @Test
     fun `ALWAYS policy prefetches unfetched messages after the header sync`() = runTest {
@@ -360,7 +423,7 @@ class MailSyncerTest {
             FetchedMessage("1", "Ada", "ada@example.org", "Hi", 1_000L, isRead = false, isFlagged = false),
         )
         val connectionFactory = mockk<MailConnectionFactory>()
-        coEvery { connectionFactory.imapParamsFor(any()) } returns mockk<ImapConnectionParams>()
+        coEvery { connectionFactory.imapParamsFor(any()) } returns realParams()
         val settingsRepository = mockk<SettingsRepository>()
         coEvery { settingsRepository.isNewMailNotificationsEnabled() } returns globalEnabled
         coEvery { settingsRepository.fetchPolicy() } returns FetchPolicy.ON_DEMAND
@@ -381,6 +444,7 @@ class MailSyncerTest {
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
             bandwidthTracker = GmailBandwidthTracker(),
+            authGate = AuthThrottleGate(),
         )
     }
 
@@ -445,7 +509,7 @@ class MailSyncerTest {
         )
         val connectionFactory = mockk<MailConnectionFactory>()
         coEvery { connectionFactory.imapParamsFor(match { it.id in failingIds }) } throws IOException("no network")
-        coEvery { connectionFactory.imapParamsFor(match { it.id !in failingIds }) } returns mockk()
+        coEvery { connectionFactory.imapParamsFor(match { it.id !in failingIds }) } returns realParams()
         val settingsRepository = mockk<SettingsRepository>()
         coEvery { settingsRepository.fetchPolicy() } returns FetchPolicy.ON_DEMAND
         coEvery { settingsRepository.isNewMailNotificationsEnabled() } returns false
@@ -465,6 +529,7 @@ class MailSyncerTest {
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
             bandwidthTracker = GmailBandwidthTracker(),
+            authGate = AuthThrottleGate(),
         )
     }
 

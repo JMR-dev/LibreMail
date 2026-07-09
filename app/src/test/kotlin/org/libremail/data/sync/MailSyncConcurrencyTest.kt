@@ -333,6 +333,7 @@ class MailSyncConcurrencyTest {
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
             bandwidthTracker = GmailBandwidthTracker(),
+            authGate = AuthThrottleGate(),
         )
     }
 

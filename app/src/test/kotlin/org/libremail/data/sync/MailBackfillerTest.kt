@@ -563,6 +563,58 @@ class MailBackfillerTest {
         )
     }
 
+    /**
+     * Issue #362 fail-loud stop: an account already persisted as errored (its Yahoo/AOL auth circuit has
+     * latched) is skipped entirely — no server call, no `moreWork` — durably across restarts, since the
+     * skip reads the persisted [AccountEntity.authError] rather than only the in-memory gate. It stays
+     * skipped until the user re-adds the account, which clears the error.
+     */
+    @Test
+    fun `an errored account is skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        val errored = accountEntity.copy(authError = "Please remove and re-add this account with valid credentials")
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, account = errored).runBackfill()
+
+        assertFalse(moreWork, "an errored account reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("errored")
+            },
+            "a PII-free errored-skip breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * The mid-slice latch (#362): a gate that has just latched (via any path) but whose account row is not
+     * yet stamped is marked errored (markAccountErroredIfLatched) and skipped — no page fetched, no more-work.
+     */
+    @Test
+    fun `a freshly latched account is marked errored and skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        val authGate = AuthThrottleGate(
+            nowMillis = { 0L },
+            random = { 0.0 },
+            policyForHost = { ProviderAuthPolicy.forHost("imap.mail.yahoo.com") },
+        )
+        repeat(ProviderAuthPolicy.YAHOO_AUTH_CIRCUIT_OPEN_THRESHOLD) { authGate.onAuthFailure(params()) }
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, authGate = authGate).runBackfill()
+
+        assertFalse(moreWork, "a latched account reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(authGate.isAuthLatched(params()), "the account is latched")
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("latched")
+            },
+            "a PII-free latched-skip breadcrumb is recorded",
+        )
+    }
+
     // --- issue #355: interactive-fetch priority -------------------------------------------------
 
     /**
@@ -776,6 +828,7 @@ class MailBackfillerTest {
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(account)
+        coEvery { accountDao.setAuthError(any(), any()) } returns 1
 
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.insertNew(any()) } answers {

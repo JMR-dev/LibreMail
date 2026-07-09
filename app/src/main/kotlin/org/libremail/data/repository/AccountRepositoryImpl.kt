@@ -22,6 +22,7 @@ import org.libremail.data.sync.SyncScheduler
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.AccountRepository
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import org.libremail.reporting.AppLog
@@ -39,6 +40,7 @@ class AccountRepositoryImpl @Inject constructor(
     private val draftDao: DraftDao,
     private val credentialStore: CredentialStore,
     private val imapClient: ImapClient,
+    private val authGate: AuthThrottleGate,
     private val syncScheduler: SyncScheduler,
     private val accountSettingsRepository: AccountSettingsRepository,
     private val mailNotifier: MailNotifier,
@@ -54,7 +56,13 @@ class AccountRepositoryImpl @Inject constructor(
     }
 
     override suspend fun addImapAccount(account: Account, password: String): Result<List<String>> = runCatching {
-        val folders = imapClient.listFolders(account.toImapParams(secret = password, useXoauth2 = false))
+        val params = account.toImapParams(secret = password, useXoauth2 = false)
+        // #362: a re-add is the ONE thing that clears a latched Yahoo/AOL auth circuit. Drop the in-memory
+        // latch BEFORE the connection test so the fresh credential gets a clean login (an un-reset gate would
+        // still refuse it); the account-row rewrite below then clears the persisted authError (a fresh domain
+        // Account carries authError = null, and insertAtEnd's in-place update writes that null).
+        authGate.onAccountReadded(params)
+        val folders = imapClient.listFolders(params)
         // Persist the credential BEFORE inserting the account row (#403). Both LibreMailApplication's
         // push collector and IdleService.reconcileWatchers react to the *accounts* table; committing the
         // secret first guarantees any watcher that observes the new row can already resolve it, instead
@@ -77,7 +85,11 @@ class AccountRepositoryImpl @Inject constructor(
         authStateJson: String,
     ): Result<List<String>> = runCatching {
         val account = Account.outlook(email)
-        val folders = imapClient.listFolders(account.toImapParams(secret = accessToken, useXoauth2 = true))
+        val params = account.toImapParams(secret = accessToken, useXoauth2 = true)
+        // #362: clear any latched auth circuit on re-add before the connection test, exactly as
+        // addImapAccount does — the account-row rewrite below clears the persisted authError.
+        authGate.onAccountReadded(params)
+        val folders = imapClient.listFolders(params)
         // Persist the durable AuthState BEFORE the account row (#403) — same ordering rationale as
         // addImapAccount: the push watchers observe the accounts table, so the secret must be committed
         // first for the newly-observed account to resolve. account_settings' FK still needs the row, so

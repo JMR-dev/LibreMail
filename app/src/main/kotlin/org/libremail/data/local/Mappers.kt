@@ -39,6 +39,7 @@ internal fun AccountEntity.toDomain(): Account = Account(
     authType = runCatching { AuthType.valueOf(authType) }.getOrDefault(AuthType.PASSWORD_IMAP),
     imap = ServerConfig(imap.host, imap.port, imap.security.toMailSecurity()),
     smtp = ServerConfig(smtp.host, smtp.port, smtp.security.toMailSecurity()),
+    authError = authError,
 )
 
 internal fun Account.toEntity(): AccountEntity = AccountEntity(
@@ -48,6 +49,7 @@ internal fun Account.toEntity(): AccountEntity = AccountEntity(
     authType = authType.name,
     imap = ServerConfigEmbedded(imap.host, imap.port, imap.security.name),
     smtp = ServerConfigEmbedded(smtp.host, smtp.port, smtp.security.name),
+    authError = authError,
 )
 
 internal fun AccountSettingsEntity.toDomain(): AccountSettings = AccountSettings(

@@ -86,6 +86,16 @@ interface AccountDao {
         orderedIds.forEachIndexed { index, id -> setSortOrder(id, index) }
     }
 
+    /**
+     * Records a user-facing [AccountEntity.authError] on the account (issue #362), returning the number of
+     * rows actually changed. The `authError IS NOT :message` guard makes it a **conditional** write: it
+     * updates only when the stored value differs (including from NULL), so a caller reconciling the auth
+     * circuit on every sync slice sets the error — and logs it — exactly once, never re-writing the same
+     * message. Pass a non-null message to mark errored.
+     */
+    @Query("UPDATE accounts SET authError = :message WHERE id = :id AND authError IS NOT :message")
+    suspend fun setAuthError(id: String, message: String): Int
+
     @Query("DELETE FROM accounts WHERE id = :id")
     suspend fun deleteById(id: String)
 }

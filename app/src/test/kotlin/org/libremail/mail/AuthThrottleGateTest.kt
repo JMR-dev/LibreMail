@@ -101,17 +101,52 @@ class AuthThrottleGateTest {
     }
 
     @Test
-    fun `the circuit opens after the threshold to a long fixed window and stays open`() {
+    fun `the circuit latches after the threshold and never self-clears`() {
         val gate = gate()
         val p = params()
 
-        var lastBlock = 0L
-        repeat(yahoo.circuitOpenThreshold) { lastBlock = gate.onAuthFailure(p) }
-        assertEquals(yahoo.circuitOpenMillis, lastBlock, "the threshold failure opens the fixed circuit window")
-
-        // A further failure stays open at the same fixed window (no runaway escalation).
-        assertEquals(yahoo.circuitOpenMillis, gate.onAuthFailure(p))
+        repeat(yahoo.circuitOpenThreshold) { gate.onAuthFailure(p) }
+        assertTrue(gate.isAuthLatched(p), "reaching the threshold latches the circuit")
         assertTrue(gate.isAuthBlocked(p))
+
+        // The OLD self-clearing open-circuit window is gone (issue #362): advancing far past what used to be
+        // the 30-min window must NOT unblock — a wrong app-password does not fix itself, so we stop for good.
+        now += yahoo.circuitOpenMillis * LATCH_ELAPSE_FACTOR
+        assertTrue(gate.isAuthBlocked(p), "a latched circuit never self-clears with time")
+        assertTrue(gate.isAuthLatched(p))
+
+        // A further failure neither escalates nor changes the latch — the state stays frozen.
+        gate.onAuthFailure(p)
+        assertTrue(gate.isAuthLatched(p))
+        assertTrue(gate.isAuthBlocked(p))
+    }
+
+    @Test
+    fun `a success does not clear a latched circuit`() {
+        val gate = gate()
+        val p = params()
+
+        repeat(yahoo.circuitOpenThreshold) { gate.onAuthFailure(p) }
+        assertTrue(gate.isAuthLatched(p))
+
+        // Defensive: even if a login somehow succeeded, a latched account stays errored until a re-add.
+        gate.onAuthSuccess(p)
+        assertTrue(gate.isAuthLatched(p), "only a re-add clears a latch, never a success")
+        assertTrue(gate.isAuthBlocked(p))
+    }
+
+    @Test
+    fun `re-adding the account clears a latched circuit`() {
+        val gate = gate()
+        val p = params()
+
+        repeat(yahoo.circuitOpenThreshold) { gate.onAuthFailure(p) }
+        assertTrue(gate.isAuthLatched(p))
+
+        gate.onAccountReadded(p)
+
+        assertFalse(gate.isAuthLatched(p), "a re-add drops the latch")
+        assertFalse(gate.isAuthBlocked(p), "and the account may attempt a fresh login again")
     }
 
     @Test
@@ -233,5 +268,8 @@ class AuthThrottleGateTest {
     private companion object {
         const val PORT = 993
         const val RAPID_FAILURES = 10
+
+        /** How many old open-circuit windows to fast-forward to prove a latch never self-clears. */
+        const val LATCH_ELAPSE_FACTOR = 10
     }
 }

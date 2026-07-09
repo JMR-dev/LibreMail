@@ -53,15 +53,27 @@ class AuthThrottleGateInstrumentedTest {
     }
 
     @Test
-    fun theCircuitOpensToAFixedWindowPastTheThreshold() {
+    fun theCircuitLatchesPastTheThresholdAndNeverSelfClears() {
         val gate = gate()
         val p = params()
 
-        var last = 0L
-        repeat(yahoo.circuitOpenThreshold) { last = gate.onAuthFailure(p) }
+        repeat(yahoo.circuitOpenThreshold) { gate.onAuthFailure(p) }
+        assertTrue("reaching the threshold latches the circuit", gate.isAuthLatched(p))
+        assertTrue(gate.isAuthBlocked(p))
 
-        assertEquals("the threshold failure opens the fixed circuit window", yahoo.circuitOpenMillis, last)
-        assertEquals("and it stays open at that window", yahoo.circuitOpenMillis, gate.onAuthFailure(p))
+        // Issue #362 fail-loud stop: the old self-clearing open-circuit window is gone — time never
+        // unblocks a latch, only a fresh account re-add does.
+        now += yahoo.circuitOpenMillis * LATCH_ELAPSE_FACTOR
+        assertTrue("a latched circuit never self-clears with time", gate.isAuthBlocked(p))
+
+        // A success does not clear a latch either (defensive: no login is attempted while latched).
+        gate.onAuthSuccess(p)
+        assertTrue("a success must not clear a latch", gate.isAuthLatched(p))
+
+        // Only a re-add drops it, letting a fresh credential log in again.
+        gate.onAccountReadded(p)
+        assertFalse("a re-add clears the latch", gate.isAuthLatched(p))
+        assertFalse(gate.isAuthBlocked(p))
     }
 
     @Test
@@ -101,5 +113,8 @@ class AuthThrottleGateInstrumentedTest {
         const val PORT = 993
         const val RAPID_FAILURES = 10
         const val ONE_HOUR_MS = 60 * 60_000L
+
+        /** How many old open-circuit windows to fast-forward to prove a latch never self-clears (#362). */
+        const val LATCH_ELAPSE_FACTOR = 10
     }
 }

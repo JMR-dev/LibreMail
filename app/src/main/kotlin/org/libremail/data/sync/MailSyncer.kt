@@ -12,13 +12,17 @@ import kotlinx.coroutines.withContext
 import org.libremail.BuildConfig
 import org.libremail.data.local.dao.AccountDao
 import org.libremail.data.local.dao.MessageDao
+import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.settings.effectiveRetention
 import org.libremail.domain.model.Account
+import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.AuthThrottleGate
+import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import org.libremail.power.BatteryStatusProvider
@@ -42,6 +46,7 @@ class MailSyncer @Inject constructor(
     private val mailRepository: MailRepository,
     private val throttleGate: AccountThrottleGate,
     private val bandwidthTracker: GmailBandwidthTracker,
+    private val authGate: AuthThrottleGate,
 ) : Syncer {
     // Serializes all syncing: syncAll/syncAccount/syncFolder are invoked concurrently by the periodic
     // worker, pull-to-refresh, one-shot syncs, folder opens, and one IDLE watcher per account. Without
@@ -92,9 +97,26 @@ class MailSyncer @Inject constructor(
         return result
     }
 
-    private suspend fun syncFolderHeaders(account: Account, folder: String, notify: Boolean): Result<Int> =
-        runCatching {
-            val params = connectionFactory.imapParamsFor(account)
+    private suspend fun syncFolderHeaders(account: Account, folder: String, notify: Boolean): Result<Int> {
+        // #362 fail-loud stop: an account whose proactive auth circuit latched is persisted as errored
+        // (markAccountErroredIfLatched) and must not be probed again — skip it entirely, no login attempt, so
+        // a locked-out Yahoo/AOL account is never nudged further. Durable across restarts: it reads the
+        // persisted account error, not just the in-memory gate.
+        if (account.authError != null) {
+            AppLog.i(TAG, "sync skip ${accountLogRef(account.id)}: account errored, awaiting re-add")
+            return Result.success(0)
+        }
+        // Captured the moment params resolve so onFailure can reconcile the auth circuit without re-resolving
+        // them (which for OAuth would redeem a fresh token); null means no login was attempted.
+        var attemptedParams: ImapConnectionParams? = null
+        return runCatching {
+            val params = connectionFactory.imapParamsFor(account).also { attemptedParams = it }
+            // The circuit may have latched via another path (backfill/IDLE) since the durable check above:
+            // stamp the account error now and skip rather than drive a login the gate would only refuse.
+            if (markAccountErroredIfLatched(authGate, accountDao, context, account, params)) {
+                AppLog.i(TAG, "sync skip ${accountLogRef(account.id)}: auth circuit latched")
+                return@runCatching 0
+            }
             val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             // Never fetch more of the recent window than device-only retention (#13) would keep. Without
             // this, a count limit BELOW the window would make foreground sync re-download the same rows
@@ -109,52 +131,9 @@ class MailSyncer @Inject constructor(
             val entities = fetched.map { it.toEntity(account.id, folder) }
                 .let { mapped -> if (cutoff == null) mapped else mapped.filter { it.timestampMillis >= cutoff } }
 
-            // Persist and notify atomically with respect to cancellation: an IDLE renewal that cancels
-            // mid-sync must not drop a notification (the rows would then look "already seen" next time).
-            withContext(NonCancellable) {
-                val existingIds = messageDao.getSyncedIds(account.id, folder).toHashSet()
-                // Don't notify on the very first sync of a folder (would announce everything in it).
-                val newMessages = if (existingIds.isEmpty()) {
-                    emptyList()
-                } else {
-                    entities.filter { it.id !in existingIds && !it.isRead }
-                }
-
-                if (fetched.isEmpty()) {
-                    // An empty recent window means the server folder itself is empty, so nothing (not
-                    // even backfilled history) should remain cached for it. Keyed on the raw fetch, not the
-                    // age-filtered set: a folder holding only mail older than the age cutoff is NOT empty on
-                    // the server, so its stale local rows are left to the pruner rather than wiped here.
-                    messageDao.deleteSyncedByAccountFolder(account.id, folder)
-                } else {
-                    val ids = entities.map { it.id }
-                    messageDao.insertNew(entities)
-                    // Mark every fetched message as synced (upgrades any former search-only row) and refresh
-                    // its display fields — without touching cached bodies or optimistic read/star flags. The
-                    // per-row refreshes run in a single transaction (issue #310) so a whole recent window
-                    // costs one commit instead of one fsync per message (amplified on the encrypted cache).
-                    messageDao.markSynced(ids)
-                    messageDao.updateHeaderContents(entities)
-                    // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older
-                    // history paged in by the background backfill (issue #12) survives each foreground sync
-                    // instead of being wiped by a whole-folder "not in the recent 50" delete. Bound the
-                    // window by the lowest POSITIVE fetched UID: a message whose UID couldn't be resolved
-                    // (UIDFolder.getUID returns -1) must not collapse the bound to <= 0 and turn this into a
-                    // whole-folder delete that wipes the backfilled history below the window.
-                    val minWindowUid = entities.mapNotNull { entity -> entity.uid.takeIf { it > 0L } }.minOrNull()
-                    if (minWindowUid != null) {
-                        messageDao.deleteSyncedInWindowNotIn(account.id, folder, minWindowUid, ids)
-                    }
-                }
-
-                val shouldNotify = notify &&
-                    newMessages.isNotEmpty() &&
-                    settingsRepository.isNewMailNotificationsEnabled() &&
-                    accountSettingsRepository.get(account.id).notificationsEnabled
-                if (shouldNotify) {
-                    notifier.notifyNewMail(account, newMessages.sortedByDescending { it.timestampMillis })
-                }
-            }
+            // Persist the fetched window and notify about new inbox mail, atomically w.r.t. cancellation
+            // (extracted to [persistSyncedWindow] to stay under the complexity gate; behavior-preserving).
+            persistSyncedWindow(account, folder, notify, fetched, entities)
             val folderLabel = logSafeFolderLabel(folder)
             AppLog.d(TAG, "sync ${accountLogRef(account.id)} folder=$folderLabel fetched=${fetched.size}")
             fetched.size
@@ -163,7 +142,68 @@ class MailSyncer @Inject constructor(
             // the background backfill backs this account off — but the interactive sync itself is never
             // blocked by the gate, so opening/refreshing mail is never queued behind a backfill backoff.
             ThrottleClassifier.classify(error)?.let { throttleGate.onThrottle(account.id, it) }
+            // #362: if this very failure crossed the auth-latch threshold, error the account (once) so the
+            // UI shows the "remove and re-add" state instead of silently retrying a doomed credential.
+            attemptedParams?.let { markAccountErroredIfLatched(authGate, accountDao, context, account, it) }
         }
+    }
+
+    /**
+     * Persists a freshly-fetched recent window and notifies about genuinely new inbox mail, atomically with
+     * respect to cancellation: an IDLE renewal that cancels mid-sync must not drop a notification (the rows
+     * would then look "already seen" next time). Extracted from [syncFolderHeaders] to keep it under the
+     * complexity gate — behavior-preserving.
+     */
+    private suspend fun persistSyncedWindow(
+        account: Account,
+        folder: String,
+        notify: Boolean,
+        fetched: List<FetchedMessage>,
+        entities: List<MessageEntity>,
+    ) = withContext(NonCancellable) {
+        val existingIds = messageDao.getSyncedIds(account.id, folder).toHashSet()
+        // Don't notify on the very first sync of a folder (would announce everything in it).
+        val newMessages = if (existingIds.isEmpty()) {
+            emptyList()
+        } else {
+            entities.filter { it.id !in existingIds && !it.isRead }
+        }
+
+        if (fetched.isEmpty()) {
+            // An empty recent window means the server folder itself is empty, so nothing (not even
+            // backfilled history) should remain cached for it. Keyed on the raw fetch, not the age-filtered
+            // set: a folder holding only mail older than the age cutoff is NOT empty on the server, so its
+            // stale local rows are left to the pruner rather than wiped here.
+            messageDao.deleteSyncedByAccountFolder(account.id, folder)
+        } else {
+            val ids = entities.map { it.id }
+            messageDao.insertNew(entities)
+            // Mark every fetched message as synced (upgrades any former search-only row) and refresh its
+            // display fields — without touching cached bodies or optimistic read/star flags. The per-row
+            // refreshes run in a single transaction (issue #310) so a whole recent window costs one commit
+            // instead of one fsync per message (amplified on the encrypted cache).
+            messageDao.markSynced(ids)
+            messageDao.updateHeaderContents(entities)
+            // Reconcile server-side deletions ONLY within the fetched recent-UID window, so older history
+            // paged in by the background backfill (issue #12) survives each foreground sync instead of being
+            // wiped by a whole-folder "not in the recent 50" delete. Bound the window by the lowest POSITIVE
+            // fetched UID: a message whose UID couldn't be resolved (UIDFolder.getUID returns -1) must not
+            // collapse the bound to <= 0 and turn this into a whole-folder delete that wipes the backfilled
+            // history below the window.
+            val minWindowUid = entities.mapNotNull { entity -> entity.uid.takeIf { it > 0L } }.minOrNull()
+            if (minWindowUid != null) {
+                messageDao.deleteSyncedInWindowNotIn(account.id, folder, minWindowUid, ids)
+            }
+        }
+
+        val shouldNotify = notify &&
+            newMessages.isNotEmpty() &&
+            settingsRepository.isNewMailNotificationsEnabled() &&
+            accountSettingsRepository.get(account.id).notificationsEnabled
+        if (shouldNotify) {
+            notifier.notifyNewMail(account, newMessages.sortedByDescending { it.timestampMillis })
+        }
+    }
 
     /**
      * Aggressively pre-caches each not-yet-fetched message's full content (body + attachments) per the

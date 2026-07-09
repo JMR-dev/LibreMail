@@ -23,6 +23,14 @@ data class AccountEntity(
      * a migrated one (the folders `specialUse` pattern).
      */
     @ColumnInfo(defaultValue = "0") val sortOrder: Int = 0,
+    /**
+     * A user-facing sync/auth error that has halted this account, or null when healthy (issue #362). Set
+     * to the "remove and re-add" message once the proactive auth circuit **latches** — the account's login
+     * has failed enough consecutive times that a credential fix, not a retry, is required — so the account
+     * list and the mailbox banner can surface it. Nullable with an implicit NULL default, so existing rows
+     * migrate to "no error" and a fresh add (which rewrites the row) clears it.
+     */
+    val authError: String? = null,
 )
 
 /** Embedded host/port/security columns (prefixed per server in [AccountEntity]). */

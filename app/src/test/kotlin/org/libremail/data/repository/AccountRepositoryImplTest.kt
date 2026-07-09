@@ -38,12 +38,14 @@ import org.libremail.domain.model.AuthType
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.model.ServerConfig
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedFolder
 import org.libremail.mail.ImapClient
 import org.libremail.notifications.MailNotifier
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -62,6 +64,7 @@ class AccountRepositoryImplTest {
     private val draftDao = mockk<DraftDao>(relaxed = true)
     private val credentialStore = mockk<CredentialStore>(relaxed = true)
     private val imapClient = mockk<ImapClient>()
+    private val authGate = mockk<AuthThrottleGate>(relaxed = true)
     private val syncScheduler = mockk<SyncScheduler>(relaxed = true)
     private val accountSettingsRepository = mockk<AccountSettingsRepository>(relaxed = true)
     private val mailNotifier = mockk<MailNotifier>(relaxed = true)
@@ -76,6 +79,7 @@ class AccountRepositoryImplTest {
         draftDao = draftDao,
         credentialStore = credentialStore,
         imapClient = imapClient,
+        authGate = authGate,
         syncScheduler = syncScheduler,
         accountSettingsRepository = accountSettingsRepository,
         mailNotifier = mailNotifier,
@@ -168,6 +172,27 @@ class AccountRepositoryImplTest {
             credentialStore.saveSecret(account.id, "app-password")
             accountDao.insertAtEnd(any())
         }
+    }
+
+    @Test
+    fun `addImapAccount resets a latched auth circuit before the test and clears the account error`() = runTest {
+        val account = account()
+        val entity = slot<AccountEntity>()
+        coEvery { imapClient.listFolders(any()) } returns listOf(
+            FetchedFolder("INBOX", "INBOX", emptyList(), selectable = true),
+        )
+        coEvery { accountDao.insertAtEnd(capture(entity)) } just Runs
+
+        repository.addImapAccount(account, "app-password").getOrThrow()
+
+        // #362: the in-memory latch is dropped BEFORE the connection test, so a fresh credential logs in
+        // cleanly instead of being refused by a still-latched gate.
+        coVerifyOrder {
+            authGate.onAccountReadded(any())
+            imapClient.listFolders(any())
+        }
+        // ...and the (re)written account row carries a null authError, clearing any persisted error state.
+        assertNull(entity.captured.authError, "a re-add clears the persisted account error")
     }
 
     @Test
