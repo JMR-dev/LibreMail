@@ -98,9 +98,9 @@ class AccountDataMigrator @Inject constructor(
         private val TABLES = listOf("accounts", "credentials", "account_settings", "signatures")
 
         /**
-         * DDL for the account tables in [AccountDatabase] v2, copied verbatim from the exported Room
-         * schema (`schemas/org.libremail.data.local.AccountDatabase/2.json` — v2 added `accounts.sortOrder`,
-         * issue #164). It MUST stay byte-for-byte identical to what Room generates for those entities, or
+         * DDL for the account tables in [AccountDatabase] v3, copied verbatim from the exported Room
+         * schema (`schemas/org.libremail.data.local.AccountDatabase/3.json` — v3 added `accounts.authError`,
+         * issue #362). It MUST stay byte-for-byte identical to what Room generates for those entities, or
          * Room silently accepts a subtly wrong schema (its identity check only compares the hash it writes,
          * not the pre-existing tables).
          * `AccountDataMigratorTest.migratorDdlMatchesExportedAccountDatabaseSchema` guards it against the
@@ -110,7 +110,7 @@ class AccountDataMigrator @Inject constructor(
             "accounts" to
                 "CREATE TABLE IF NOT EXISTS `accounts` (`id` TEXT NOT NULL, `email` TEXT NOT NULL, " +
                 "`displayName` TEXT NOT NULL, `authType` TEXT NOT NULL, " +
-                "`sortOrder` INTEGER NOT NULL DEFAULT 0, `imap_host` TEXT NOT NULL, " +
+                "`sortOrder` INTEGER NOT NULL DEFAULT 0, `authError` TEXT, `imap_host` TEXT NOT NULL, " +
                 "`imap_port` INTEGER NOT NULL, `imap_security` TEXT NOT NULL, `smtp_host` TEXT NOT NULL, " +
                 "`smtp_port` INTEGER NOT NULL, `smtp_security` TEXT NOT NULL, PRIMARY KEY(`id`))",
             "credentials" to

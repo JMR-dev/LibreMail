@@ -275,7 +275,7 @@ class AccountDataMigratorTest {
     fun migratorDdlMatchesExportedAccountDatabaseSchema() {
         val schema = JSONObject(
             InstrumentationRegistry.getInstrumentation().context.assets
-                .open("org.libremail.data.local.AccountDatabase/2.json")
+                .open("org.libremail.data.local.AccountDatabase/3.json")
                 .bufferedReader().use { it.readText() },
         ).getJSONObject("database")
         val entities = schema.getJSONArray("entities")
