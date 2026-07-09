@@ -365,6 +365,7 @@ class MailSyncConcurrencyTest {
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = AccountThrottleGate(),
             interactiveGate = InteractiveImapGate(),
+            icloudConnectionLimiter = IcloudConnectionLimiter(),
             bandwidthTracker = GmailBandwidthTracker(),
             authGate = AuthThrottleGate(),
         )

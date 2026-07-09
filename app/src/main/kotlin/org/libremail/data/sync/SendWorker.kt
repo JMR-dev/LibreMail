@@ -21,6 +21,7 @@ import org.libremail.domain.model.OutgoingAttachment
 import org.libremail.domain.model.OutgoingMessage
 import org.libremail.mail.GraphSendException
 import org.libremail.mail.GraphSender
+import org.libremail.mail.IcloudSendLimits
 import org.libremail.mail.SendableAttachment
 import org.libremail.mail.SmtpSender
 import org.libremail.reporting.AppLog
@@ -112,6 +113,10 @@ class SendWorker @AssistedInject constructor(
             if (account.authType == AuthType.OAUTH_OUTLOOK) {
                 sendOutlook(connectionFactory, account, message, attachments)
             } else {
+                // iCloud-specific size guard (#363): Apple caps outgoing message size, so this fails fast,
+                // locally, and cleanly (caught by the runCatching below) before smtpSender ever opens a
+                // connection — a no-op for every other provider.
+                IcloudSendLimits.requireWithinLimit(account, message, attachments)
                 smtpSender.send(
                     connectionFactory.smtpParamsFor(account),
                     from = account.email,
