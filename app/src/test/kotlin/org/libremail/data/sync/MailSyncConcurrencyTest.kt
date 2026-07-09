@@ -331,6 +331,7 @@ class MailSyncConcurrencyTest {
             notifier = mockk(relaxed = true),
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
+            bandwidthTracker = GmailBandwidthTracker(),
         )
     }
 
@@ -363,6 +364,7 @@ class MailSyncConcurrencyTest {
             throttleGate = AccountThrottleGate(),
             interactiveGate = InteractiveImapGate(),
             icloudConnectionLimiter = IcloudConnectionLimiter(),
+            bandwidthTracker = GmailBandwidthTracker(),
         )
     }
 

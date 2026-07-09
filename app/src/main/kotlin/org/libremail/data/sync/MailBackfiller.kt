@@ -61,6 +61,7 @@ class MailBackfiller @Inject constructor(
     private val interactiveGate: InteractiveImapGate,
     // iCloud-specific connection cap (#363); a no-op for every other provider — see its own KDoc.
     private val icloudConnectionLimiter: IcloudConnectionLimiter,
+    private val bandwidthTracker: GmailBandwidthTracker,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
     private data class FolderResult(val batches: Int, val moreWork: Boolean)
@@ -317,6 +318,17 @@ class MailBackfiller @Inject constructor(
             battery = batteryStatusProvider.current(),
         )
         if (!shouldPrefetch) return
+        // Gmail-specific proactive bandwidth pacing (#361): once this account's tracked downloads for
+        // today reach Gmail's documented daily budget, defer body/attachment prefetch for the rest of
+        // the day instead of continuing to spend it — header paging above is unaffected, and a fresh
+        // cycle resumes automatically once the day rolls over (GmailBandwidthTracker). Orthogonal to
+        // the #360 throttle skip above (which only fires once the provider actually rejects a request)
+        // and #356's BackfillPacer (which paces slice cadence, not bytes) — same graceful-degradation
+        // shape as both, composing rather than duplicating either.
+        if (GmailSyncLimits.appliesTo(account) && bandwidthTracker.isOverDailyBudget(account.id)) {
+            AppLog.i(TAG, "prefetch deferred ${accountLogRef(account.id)}: Gmail daily download budget reached")
+            return
+        }
         for (id in ids) {
             currentCoroutineContext().ensureActive()
             icloudConnectionLimiter.withPermit(account) { mailRepository.prefetchMessage(id) }

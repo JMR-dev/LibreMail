@@ -203,6 +203,7 @@ class MailMaintenanceGateTest {
             throttleGate = AccountThrottleGate(),
             interactiveGate = InteractiveImapGate(),
             icloudConnectionLimiter = IcloudConnectionLimiter(),
+            bandwidthTracker = GmailBandwidthTracker(),
         )
     }
 

@@ -39,6 +39,8 @@ import org.libremail.data.local.toOutgoingAttachments
 import org.libremail.data.local.toOutgoingAttachmentsJson
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.GmailBandwidthTracker
+import org.libremail.data.sync.GmailSyncLimits
 import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.data.sync.SendScheduler
@@ -81,6 +83,7 @@ class MailRepositoryImpl @Inject constructor(
     private val signatureRepository: SignatureRepository,
     private val attachmentUriGrants: AttachmentUriGrants,
     private val interactiveGate: InteractiveImapGate,
+    private val bandwidthTracker: GmailBandwidthTracker,
 ) : MailRepository {
 
     // Application-lifetime scope for fire-and-forget server pushes that must outlive the caller — e.g.
@@ -253,7 +256,7 @@ class MailRepositoryImpl @Inject constructor(
                     // fetch just omits that image, leaving a broken <img> rather than failing the open.
                     val file = runCatching {
                         ensureAttachmentFile(messageId, routing.accountId, routing.folder, row.partIndex, row.filename)
-                    }.getOrNull() ?: return@mapNotNull null
+                    }.getOrNull()?.file ?: return@mapNotNull null
                     InlineImage(contentId = row.contentId!!, mimeType = row.mimeType, bytes = file.readBytes())
                 }
             }
@@ -275,10 +278,17 @@ class MailRepositoryImpl @Inject constructor(
                         routing.folder,
                         partIndex,
                         meta?.filename ?: "attachment",
-                    )
+                    ).file
                 }
             }
         }
+
+    /**
+     * [ensureAttachmentFile]'s outcome: the cached [file] plus the bytes actually pulled over the
+     * network THIS call — `0` on a cache hit. [downloadedBytes] feeds Gmail's bandwidth accounting
+     * (issue #361, see [prefetchMessage]); a cache hit costs nothing so it must not be double-counted.
+     */
+    private class AttachmentFetch(val file: File, val downloadedBytes: Long)
 
     /**
      * Returns the on-disk file for one attachment part, downloading and caching it on first use so it
@@ -292,16 +302,16 @@ class MailRepositoryImpl @Inject constructor(
         folder: String,
         partIndex: Int,
         filename: String,
-    ): File {
+    ): AttachmentFetch {
         val target = attachmentFile(messageId, partIndex, filename)
         // Reuse a previously downloaded (or pre-fetched) file so it opens instantly and offline.
-        if (target.exists() && target.length() > 0L) return target
+        if (target.exists() && target.length() > 0L) return AttachmentFetch(target, downloadedBytes = 0L)
         val account = accountDao.getById(accountId)?.toDomain() ?: error("Account not found")
         val params = connectionFactory.imapParamsFor(account)
         val downloaded = imapClient.fetchAttachment(params, folder, uidOf(messageId), partIndex)
         target.parentFile?.mkdirs()
         target.outputStream().use { it.write(downloaded.bytes) }
-        return target
+        return AttachmentFetch(target, downloadedBytes = downloaded.bytes.size.toLong())
     }
 
     override suspend fun downloadedAttachmentParts(messageId: String): Set<Int> = withContext(Dispatchers.IO) {
@@ -317,12 +327,17 @@ class MailRepositoryImpl @Inject constructor(
     override suspend fun prefetchMessage(messageId: String): Result<Unit> = runCatching {
         val routing = messageDao.getRouting(messageId) ?: return@runCatching
         val account = accountDao.getById(routing.accountId)?.toDomain() ?: return@runCatching
+        // Bytes actually pulled over the network this call (0 on an all-cache-hit prefetch), fed to
+        // Gmail's daily download-budget tracker below (issue #361) — the proactive pacing that composes
+        // with #360's reactive AccountThrottleGate and #356's BackfillPacer without modifying either.
+        var downloadedBytes = 0L
         // Cache the body (peek, so prefetching never marks the message read) and its attachment metadata.
         if (!routing.bodyFetched) {
             val params = connectionFactory.imapParamsFor(account)
             val content = imapClient.fetchBodyPeek(params, routing.folder, uidOf(messageId))
             messageDao.updateBody(messageId, content.body, content.isHtml, Snippet.of(content.body, content.isHtml))
             attachmentDao.replaceForMessage(messageId, content.attachments.map { it.toEntity(messageId) })
+            downloadedBytes += content.body.toByteArray(Charsets.UTF_8).size.toLong()
         }
         // Auto-download every attachment's bytes into the persistent per-part cache (skips ones present).
         // This is BACKGROUND work driven by the backfill, so it goes straight to ensureAttachmentFile and
@@ -338,7 +353,13 @@ class MailRepositoryImpl @Inject constructor(
                     attachment.partIndex,
                     attachment.filename,
                 )
-            }
+            }.getOrNull()?.let { downloadedBytes += it.downloadedBytes }
+        }
+        // Gmail-specific bandwidth accounting (issue #361): only tracked for Gmail, since that is the
+        // only provider whose daily download budget is enforced today (see GmailSyncLimits.appliesTo /
+        // MailBackfiller.prefetchIfEnabled / MailSyncer.prefetchIfEnabled for the deferral this feeds).
+        if (downloadedBytes > 0L && GmailSyncLimits.appliesTo(account)) {
+            bandwidthTracker.recordDownload(account.id, downloadedBytes)
         }
     }
 
