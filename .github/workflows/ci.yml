@@ -632,12 +632,20 @@ jobs:
           for attempt in 1 2; do boot_emulator "$attempt" && { booted=1; break; }; done
           [ "$booted" = "1" ] || { echo "::error::API ${{ matrix.api-level }} emulator failed to boot after 2 attempts"; exit 1; }
 
-          # NON-FATAL unlock (the boot-race fix) + disable animations for deterministic UI tests
-          # (parity with the replaced android-emulator-runner `disable-animations: true`).
-          adb shell input keyevent 82 || true
-          adb shell settings put global window_animation_scale 0.0 || true
-          adb shell settings put global transition_animation_scale 0.0 || true
-          adb shell settings put global animator_duration_scale 0.0 || true
+          # Focus/readiness gate (issue #468): the durable fix for the intermittent app-window-
+          # focus flake. Occasionally the launched activity window has has-window-focus=false for
+          # the WHOLE run, so Espresso's RootViewPicker (onView().check(), Intents.intended(),
+          # pressBack(), focus-dependent clipboard) times out after 10s and fails EVERY
+          # focus-dependent test at once while the ~280 pure-Compose tests pass (evidence: a
+          # failing E2E leg's logcat had has-window-focus=true ZERO times, both attempt + retry).
+          # The single `input keyevent 82` here was too weak (MENU no longer dismisses the modern
+          # keyguard, and races SystemUI coming up). This shared helper WAKES the display, dismisses
+          # + disables the keyguard, keeps the screen on, disables animations (parity with the
+          # replaced `disable-animations: true`), then WAITS until a real window holds input focus
+          # before the suite runs. It is the IDENTICAL mechanism the e2e-preview job and the local
+          # preflight runners invoke, so the fix cannot drift between jobs. Non-fatal (`|| true`),
+          # preserving #454's guarantee that the unlock never aborts the boot.
+          python3 .github/scripts/emulator_focus_gate.py --label "api${{ matrix.api-level }}" || true
 
           # WEDGE (hang) smoking-gun capture (#404, restored to the matrix by #421). On the wrapper
           # `timeout` below (exit 124), grab the smoking gun WHILE this hand-provisioned emulator is
@@ -968,7 +976,13 @@ jobs:
           for attempt in 1 2; do boot_emulator "$attempt" && { booted=1; break; }; done
           [ "$booted" = "1" ] || { echo "::error::API 37 preview emulator failed to boot after 2 attempts"; exit 1; }
 
-          adb shell input keyevent 82 || true
+          # Focus/readiness gate (issue #468) -- the IDENTICAL shared mechanism the `e2e` matrix job
+          # (and the local preflight runners) invoke, so the fix can't drift: wake the display,
+          # dismiss + disable the keyguard, keep the screen on, disable animations, then WAIT until a
+          # real window holds input focus before the suite runs. This replaces the lone `input
+          # keyevent 82` and, applied UNIFORMLY, also gives this preview job the animation-disable
+          # the matrix already had. Non-fatal (`|| true`) -- the unlock must never abort the boot.
+          python3 .github/scripts/emulator_focus_gate.py --label "api37-shard${{ matrix.shard }}" || true
 
           # WEDGE (hang) smoking-gun capture (#404). On the wrapper `timeout` below (exit 124), grab
           # the smoking gun WHILE this hand-provisioned emulator is still alive (it stays up until the
