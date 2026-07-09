@@ -25,6 +25,7 @@ import org.libremail.data.settings.effectiveRetention
 import org.libremail.domain.model.Account
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatusProvider
 import org.libremail.reporting.AppLog
@@ -62,6 +63,7 @@ class MailBackfiller @Inject constructor(
     // iCloud-specific connection cap (#363); a no-op for every other provider — see its own KDoc.
     private val icloudConnectionLimiter: IcloudConnectionLimiter,
     private val bandwidthTracker: GmailBandwidthTracker,
+    private val authGate: AuthThrottleGate,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
     private data class FolderResult(val batches: Int, val moreWork: Boolean)
@@ -78,19 +80,17 @@ class MailBackfiller @Inject constructor(
         var remaining = maxBatches
         var moreWork = false
         accounts@ for (account in accountDao.getAll().map { it.toDomain() }) {
-            // Graceful degradation + per-account isolation (#360): an account still inside its throttle
-            // backoff window is skipped this slice — we don't page a provider that just rate-limited or
-            // locked us (hammering it makes throttling worse, the on-device perf finding). The window
-            // elapses on its own, so a later scheduled slice resumes this account automatically. A skip
-            // deliberately does NOT set moreWork: a slice whose only outstanding work is a throttled
-            // account reports "done" so the worker's slice-chaining loop stops instead of tight-looping
-            // over the skip. Other accounts are untouched.
-            val backoffRemaining = throttleGate.remainingBackoffMillis(account.id)
-            if (backoffRemaining > 0L) {
-                AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: throttled, remaining=${backoffRemaining}ms")
+            // #362 fail-loud stop: an account whose proactive auth circuit latched is persisted as errored
+            // and must not be probed again — skip it entirely (no login), durably across restarts (reads the
+            // persisted authError, not just the in-memory gate), until the user re-adds it.
+            if (account.authError != null) {
+                AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: account errored, awaiting re-add")
                 continue@accounts
             }
-            val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: continue
+            // Skip an account backing off (throttle #360 / auth #362) or with unresolvable credentials —
+            // a null return does NOT set moreWork, so a slice whose only work is a backing-off account
+            // reports "done" instead of tight-looping over the skip. See [paramsForBackfill].
+            val params = paramsForBackfill(account) ?: continue@accounts
             val policy = accountSettingsRepository.effectiveRetention(settingsRepository, account.id)
             for (folder in messageDao.syncedFolders(account.id)) {
                 if (remaining <= 0) {
@@ -112,6 +112,37 @@ class MailBackfiller @Inject constructor(
         }
         AppLog.i(TAG, "backfill slice done: moreWork=$moreWork")
         moreWork
+    }
+
+    /**
+     * Resolves [account] to its IMAP connection params for this slice, or **null when the account must be
+     * skipped without paging** — it is inside a reactive throttle-backoff window (#360) or a proactive
+     * auth-backoff window (#362), or its credentials could not be resolved. Both backoffs are graceful
+     * degradation with per-account isolation: we don't page a provider that just rate-limited or locked us
+     * (hammering makes throttling worse — the on-device perf finding), and we don't drive a login that
+     * [org.libremail.mail.ImapClient] would only skip anyway, nudging a Yahoo/AOL account toward its
+     * ~1-hour lockout. Each window elapses on its own so a later scheduled slice resumes; a skip logs a
+     * PII-free breadcrumb and its caller does NOT set moreWork, so a slice whose only outstanding work is a
+     * backing-off account reports "done" rather than tight-looping over the skip.
+     */
+    private suspend fun paramsForBackfill(account: Account): ImapConnectionParams? {
+        val throttleRemaining = throttleGate.remainingBackoffMillis(account.id)
+        if (throttleRemaining > 0L) {
+            AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: throttled, remaining=${throttleRemaining}ms")
+            return null
+        }
+        val params = runCatching { connectionFactory.imapParamsFor(account) }.getOrNull() ?: return null
+        // If the auth circuit latched (via any path) since the durable authError check in runBackfill, stamp
+        // the account error now (once, as a side effect); the block check below then skips it, since a latched
+        // circuit reports a "forever" remaining block — folding the latch skip into the existing backoff skip.
+        val latched = markAccountErroredIfLatched(authGate, accountDao, context, account, params)
+        val authBlock = authGate.remainingAuthBlockMillis(params)
+        if (authBlock > 0L) {
+            val reason = if (latched) "auth circuit latched" else "auth backing off, remaining=${authBlock}ms"
+            AppLog.i(TAG, "backfill skip ${accountLogRef(account.id)}: $reason")
+            return null
+        }
+        return params
     }
 
     /**

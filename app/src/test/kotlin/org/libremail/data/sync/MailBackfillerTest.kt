@@ -46,8 +46,10 @@ import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailProvider
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
+import org.libremail.mail.ProviderAuthPolicy
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
 import org.libremail.reporting.AppLog
@@ -532,6 +534,89 @@ class MailBackfillerTest {
         assertTrue(logBuffer.snapshot().any { it.message.startsWith("backfill skip acct:") })
     }
 
+    /**
+     * Issue #362 composes with #360/#356 by reusing the same skip: an account inside its proactive
+     * *auth*-backoff window is skipped exactly as a reactively-throttled one is — no server call, no
+     * `moreWork` (so [BackfillPacer] does not spin a cooldown on it), and the account is left alone so
+     * backfill never nudges a Yahoo/AOL account toward its ~1-hour lockout.
+     */
+    @Test
+    fun `an account inside its auth-backoff window is skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        // Treat the (127.0.0.1) test host as a gated Yahoo/AOL account and arm the backoff on its identity.
+        val authGate = AuthThrottleGate(
+            nowMillis = { 0L },
+            random = { 0.0 },
+            policyForHost = { ProviderAuthPolicy.forHost("imap.mail.yahoo.com") },
+        )
+        authGate.onAuthFailure(params())
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, authGate = authGate).runBackfill()
+
+        assertFalse(moreWork, "a slice whose only account is auth-blocked reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(authGate.isAuthBlocked(params()), "the account is still auth-backing-off")
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("auth backing off")
+            },
+            "a PII-free auth-skip breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * Issue #362 fail-loud stop: an account already persisted as errored (its Yahoo/AOL auth circuit has
+     * latched) is skipped entirely — no server call, no `moreWork` — durably across restarts, since the
+     * skip reads the persisted [AccountEntity.authError] rather than only the in-memory gate. It stays
+     * skipped until the user re-adds the account, which clears the error.
+     */
+    @Test
+    fun `an errored account is skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        val errored = accountEntity.copy(authError = "Please remove and re-add this account with valid credentials")
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, account = errored).runBackfill()
+
+        assertFalse(moreWork, "an errored account reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("errored")
+            },
+            "a PII-free errored-skip breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * The mid-slice latch (#362): a gate that has just latched (via any path) but whose account row is not
+     * yet stamped is marked errored (markAccountErroredIfLatched) and skipped — no page fetched, no more-work.
+     */
+    @Test
+    fun `a freshly latched account is marked errored and skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        val authGate = AuthThrottleGate(
+            nowMillis = { 0L },
+            random = { 0.0 },
+            policyForHost = { ProviderAuthPolicy.forHost("imap.mail.yahoo.com") },
+        )
+        repeat(ProviderAuthPolicy.YAHOO_AUTH_CIRCUIT_OPEN_THRESHOLD) { authGate.onAuthFailure(params()) }
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, authGate = authGate).runBackfill()
+
+        assertFalse(moreWork, "a latched account reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(authGate.isAuthLatched(params()), "the account is latched")
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("latched")
+            },
+            "a PII-free latched-skip breadcrumb is recorded",
+        )
+    }
+
     // --- issue #363: iCloud Mail connection cap --------------------------------------------------
 
     /**
@@ -829,10 +914,12 @@ class MailBackfillerTest {
         interactiveGate: InteractiveImapGate = InteractiveImapGate(),
         icloudConnectionLimiter: IcloudConnectionLimiter = IcloudConnectionLimiter(),
         bandwidthTracker: GmailBandwidthTracker = GmailBandwidthTracker(),
+        authGate: AuthThrottleGate = AuthThrottleGate(),
         account: AccountEntity = accountEntity,
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(account)
+        coEvery { accountDao.setAuthError(any(), any()) } returns 1
 
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.insertNew(any()) } answers {
@@ -889,6 +976,7 @@ class MailBackfillerTest {
             interactiveGate = interactiveGate,
             icloudConnectionLimiter = icloudConnectionLimiter,
             bandwidthTracker = bandwidthTracker,
+            authGate = authGate,
         ).also {
             lastMessageDao = messageDao
             lastMailRepository = mailRepository

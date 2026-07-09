@@ -6,11 +6,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -67,6 +71,7 @@ internal fun AccountReorderList(
             AccountReorderRow(
                 id = account.id,
                 email = account.email,
+                authError = account.authError,
                 dragging = dragging,
                 offsetY = if (dragging) dragOffsetY.roundToInt() else 0,
                 onMeasured = { rowHeightPx = it },
@@ -107,6 +112,7 @@ internal fun commitDrag(current: List<Account>, id: String, dragOffsetY: Float, 
 private fun AccountReorderRow(
     id: String,
     email: String,
+    authError: String?,
     dragging: Boolean,
     offsetY: Int,
     onMeasured: (Int) -> Unit,
@@ -146,7 +152,30 @@ private fun AccountReorderRow(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = email, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = email, style = MaterialTheme.typography.bodyLarge)
+                // #362: a latched Yahoo/AOL auth failure surfaces here as a persistent red error line, so
+                // the user sees which account is broken (and that removing + re-adding it is the fix).
+                if (authError != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Warning,
+                            contentDescription = stringResource(R.string.account_auth_error_icon_description),
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = authError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
             Icon(
                 imageVector = Icons.Filled.Menu,
                 contentDescription = stringResource(R.string.account_reorder_handle),

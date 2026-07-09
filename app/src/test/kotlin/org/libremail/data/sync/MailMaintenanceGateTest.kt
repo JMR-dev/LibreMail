@@ -29,6 +29,7 @@ import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
 import org.libremail.power.BatteryStatus
@@ -204,6 +205,7 @@ class MailMaintenanceGateTest {
             interactiveGate = InteractiveImapGate(),
             icloudConnectionLimiter = IcloudConnectionLimiter(),
             bandwidthTracker = GmailBandwidthTracker(),
+            authGate = AuthThrottleGate(),
         )
     }
 

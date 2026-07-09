@@ -54,6 +54,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -121,6 +122,7 @@ fun MailboxScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val isSyncingFolder by viewModel.isSyncingFolder.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val accountAuthError by viewModel.accountAuthError.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val pendingConfirm by viewModel.pendingConfirm.collectAsStateWithLifecycle()
     val currentFolderRole by viewModel.currentFolderRole.collectAsStateWithLifecycle()
@@ -265,6 +267,9 @@ fun MailboxScreen(
                     val accountsById = remember(accounts) { accounts.associateBy { it.id } }
                     val showAccount = selectedAccountId == null && accounts.size >= 2
                     Column(Modifier.fillMaxSize()) {
+                        // #362: a persistent, non-dismissable banner while the shown account's auth circuit
+                        // is latched — mirrors the DB error state, so it clears only when a re-add does.
+                        accountAuthError?.let { AccountErrorBanner(message = it) }
                         if (accounts.size >= 2 && selectedFolder == INBOX) {
                             AccountFilterRow(
                                 accounts = accounts,
@@ -404,6 +409,34 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
         },
     )
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+}
+
+/**
+ * A persistent, non-dismissable error banner shown atop the mailbox when the displayed account's auth
+ * circuit has latched (issue #362). Renders the "remove and re-add" message from the account's persisted
+ * error state, so it is present whenever that state is and disappears the moment a re-add clears it — never
+ * a transient snackbar. Uses the error-container role so it reads as an alert in light and dark themes.
+ */
+@Composable
+private fun AccountErrorBanner(message: String) {
+    Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
 }
 
 @Composable

@@ -116,6 +116,19 @@ class MailboxViewModel @Inject constructor(
         .map { counts -> counts.filter { it.count > 0 }.map { it.accountId }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
+    /**
+     * #362: the persistent auth-error message shown as a banner atop the mailbox, or null when the
+     * relevant account(s) are healthy. In a per-account view it is the selected account's error; in the
+     * unified view it surfaces the first errored account's message (identical across accounts), so a
+     * latched Yahoo/AOL account is visible whichever way the mailbox is filtered. Sourced from the same
+     * `accounts` flow the row indicators use, so it clears the instant a re-add wipes the error.
+     */
+    val accountAuthError: StateFlow<String?> =
+        combine(accounts, _selectedAccountId) { accts, selectedId ->
+            val relevant = if (selectedId == null) accts else accts.filter { it.id == selectedId }
+            relevant.firstNotNullOfOrNull { it.authError }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     private val _searchActive = MutableStateFlow(false)
     val searchActive: StateFlow<Boolean> = _searchActive.asStateFlow()
 

@@ -31,3 +31,16 @@ val ACCOUNT_MIGRATION_1_2 = object : Migration(1, 2) {
         )
     }
 }
+
+/**
+ * AccountDatabase v2 -> v3 (issue #362): add the nullable [AccountEntity.authError], a user-facing sync/auth
+ * error surfaced on the account row and as a mailbox banner. The column is nullable with no default, so
+ * every existing account migrates to NULL ("no error, healthy") — matching the entity's `authError: String?
+ * = null` — and the proactive auth circuit later stamps the "remove and re-add" message onto an account
+ * whose Yahoo/AOL login has latched. A plain ADD COLUMN suffices; nothing is backfilled.
+ */
+val ACCOUNT_MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `authError` TEXT")
+    }
+}

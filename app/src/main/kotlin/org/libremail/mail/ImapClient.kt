@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package org.libremail.mail
 
+import jakarta.mail.AuthenticationFailedException
 import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
@@ -114,6 +115,12 @@ class ImapClient internal constructor(
      * no-UIDPLUS fallback path on its own.
      */
     private val supportsUidPlus: (IMAPFolder) -> Boolean = ::probeUidPlusCapability,
+    /**
+     * Proactive auth circuit-breaker (issue #362): consulted before every real `LOGIN` so a Yahoo/AOL
+     * account never accumulates the rapid failed logins that trip its ~1-hour lockout. A no-op for every
+     * other host. Defaulted here so the test/harness seam constructs one without extra wiring.
+     */
+    private val authGate: AuthThrottleGate = AuthThrottleGate(),
 ) {
 
     /**
@@ -125,7 +132,10 @@ class ImapClient internal constructor(
      * `false` (a build-config change, no code edit) restores connect-per-operation if a server
      * misbehaves with a kept-alive socket. The internal constructor is the test/harness seam.
      */
-    @Inject constructor() : this(reuseConnections = BuildConfig.IMAP_CONNECTION_REUSE)
+    @Inject constructor(authGate: AuthThrottleGate) : this(
+        reuseConnections = BuildConfig.IMAP_CONNECTION_REUSE,
+        authGate = authGate,
+    )
 
     /**
      * Per-account keep-alive cache; allocated only when reuse is enabled, so a reuse-disabled build
@@ -540,9 +550,13 @@ class ImapClient internal constructor(
      * connection to unblock idle()) or a connection error is thrown, leaving reconnection to the caller.
      */
     suspend fun idle(params: ImapConnectionParams, onActivity: suspend () -> Unit) = withContext(Dispatchers.IO) {
+        // Proactive auth circuit-breaker (issue #362): the IDLE reconnect loop (IdleService) is the fastest
+        // login repeater — an unguarded auth failure there would storm Yahoo/AOL into their ~1-hour lockout
+        // — so skip the LOGIN while backing off, and feed the gate exactly as the connect-per-op path does.
+        guardAuthBackoff(params, op = "IDLE login")
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
         val store = Session.getInstance(buildProps(protocol, params)).getStore(protocol)
-        store.connect(params.host, params.port, params.username, params.secret)
+        connectRecordingAuth(store, params)
         // Close the just-connected store if opening the folder fails, so a failed connect in the
         // IDLE reconnect loop can't leak connections until the server's per-account limit is hit.
         val inbox = try {
@@ -715,12 +729,49 @@ class ImapClient internal constructor(
         }
     }
 
-    /** Builds and authenticates a fresh [Store] (`CONNECT + TLS + LOGIN`); the caller owns closing it. */
+    /**
+     * Builds and authenticates a fresh [Store] (`CONNECT + TLS + LOGIN`); the caller owns closing it.
+     *
+     * Gated by the proactive auth circuit-breaker (issue #362): while the account is inside its
+     * auth-backoff window the `LOGIN` is *skipped* ([guardAuthBackoff] throws [AuthBackoffException])
+     * rather than attempted, so a Yahoo/AOL account never accumulates the rapid failed logins that trip
+     * its ~1-hour lockout. An authentication failure feeds [AuthThrottleGate.onAuthFailure]; a success
+     * clears it. A transient (non-auth) connect error is rethrown untouched, never arming the backoff.
+     */
     private fun openConnectedStore(params: ImapConnectionParams): Store {
+        guardAuthBackoff(params, op = "login")
         val protocol = if (params.security == MailSecurity.SSL_TLS) "imaps" else "imap"
         val store = Session.getInstance(buildProps(protocol, params, reuse = reuseConnections)).getStore(protocol)
-        store.connect(params.host, params.port, params.username, params.secret)
+        connectRecordingAuth(store, params)
         return store
+    }
+
+    /**
+     * Skips a login while the account is auth-backing-off (issue #362) by throwing [AuthBackoffException],
+     * so no `LOGIN` reaches the provider. Logged at INFO — an expected, protective skip, not an error.
+     * A no-op for non-gated (non-Yahoo/AOL) hosts, whose [AuthThrottleGate.remainingAuthBlockMillis] is 0.
+     */
+    private fun guardAuthBackoff(params: ImapConnectionParams, op: String) {
+        val remaining = authGate.remainingAuthBlockMillis(params)
+        if (remaining > 0L) {
+            AppLog.i(TAG, "$op skipped ${authGate.logRef(params)}: auth backing off ${remaining}ms")
+            throw AuthBackoffException(remaining)
+        }
+    }
+
+    /**
+     * Runs the actual `store.connect` (`CONNECT + TLS + LOGIN`) and feeds the issue-#362 auth
+     * circuit-breaker: a rejected LOGIN ([isAuthFailure]) arms the backoff via [AuthThrottleGate], a
+     * success clears it, and a transient (non-auth) error is rethrown untouched — never arming it.
+     */
+    private fun connectRecordingAuth(store: Store, params: ImapConnectionParams) {
+        try {
+            store.connect(params.host, params.port, params.username, params.secret)
+        } catch (e: Throwable) {
+            if (isAuthFailure(e)) authGate.onAuthFailure(params)
+            throw e
+        }
+        authGate.onAuthSuccess(params)
     }
 
     /**
@@ -798,6 +849,23 @@ private const val CAP_UIDPLUS = "UIDPLUS"
 private fun probeUidPlusCapability(folder: IMAPFolder): Boolean = runCatching {
     folder.doCommand { protocol -> protocol.hasCapability(CAP_UIDPLUS) } as? Boolean
 }.getOrNull() ?: false
+
+/**
+ * True when [error] (or anything in its cause chain) is an [AuthenticationFailedException] — a rejected
+ * `LOGIN`, the only signal the issue-#362 auth circuit-breaker counts. Deliberately narrow: a transient
+ * network/socket error is NOT an auth failure and must never arm the backoff. Guards against a cyclic
+ * cause chain with an identity-based visited check, mirroring [ImapAuthError]'s walk.
+ */
+private fun isAuthFailure(error: Throwable): Boolean {
+    val seen = mutableListOf<Throwable>()
+    var current: Throwable? = error
+    while (current != null && seen.none { it === current }) {
+        if (current is AuthenticationFailedException) return true
+        seen.add(current)
+        current = current.cause
+    }
+    return false
+}
 
 /**
  * True when [part] is a user-facing downloadable attachment: its `Content-Disposition` is

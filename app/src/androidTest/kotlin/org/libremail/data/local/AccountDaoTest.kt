@@ -86,4 +86,25 @@ class AccountDaoTest {
 
         assertNull(dao.getById("acct"))
     }
+
+    @Test
+    fun setAuthErrorStampsTheMessageIdempotentlyAndAReAddClearsIt() = runBlocking {
+        dao.upsert(account("acct", "ada@example.org"))
+        assertNull("a fresh account carries no error", dao.getById("acct")?.authError)
+
+        // The conditional UPDATE stamps the message and reports one row changed (issue #362)...
+        assertEquals(1, dao.setAuthError("acct", MESSAGE))
+        assertEquals(MESSAGE, dao.getById("acct")?.authError)
+        // ...and is idempotent: re-writing the same message changes nothing (so the caller logs once).
+        assertEquals(0, dao.setAuthError("acct", MESSAGE))
+
+        // A re-add rewrites the row from a fresh (null-authError) entity, clearing the error — the
+        // clear-on-re-add path AccountRepositoryImpl relies on (insertAtEnd's in-place update).
+        dao.upsert(account("acct", "ada@example.org"))
+        assertNull("re-adding the account clears the persisted error", dao.getById("acct")?.authError)
+    }
+
+    private companion object {
+        const val MESSAGE = "Please remove and re-add this account with valid credentials"
+    }
 }

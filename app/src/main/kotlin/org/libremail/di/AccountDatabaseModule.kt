@@ -11,6 +11,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.runBlocking
 import org.libremail.data.local.ACCOUNT_MIGRATION_1_2
+import org.libremail.data.local.ACCOUNT_MIGRATION_2_3
 import org.libremail.data.local.AccountDatabase
 import org.libremail.data.local.CacheEncryptionUnavailableException
 import org.libremail.data.local.DatabaseFiles.ACCOUNTS_NAME
@@ -53,7 +54,7 @@ object AccountDatabaseModule {
         @ApplicationContext context: Context,
         provisioner: DatabaseProvisioner,
     ): AccountDatabase = Room.databaseBuilder(context, AccountDatabase::class.java, ACCOUNTS_NAME)
-        .addMigrations(ACCOUNT_MIGRATION_1_2)
+        .addMigrations(ACCOUNT_MIGRATION_1_2, ACCOUNT_MIGRATION_2_3)
         .openHelperFactory(
             DeferredOpenHelperFactory { configuration ->
                 try {

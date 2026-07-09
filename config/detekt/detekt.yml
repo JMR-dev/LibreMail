@@ -31,8 +31,8 @@ complexity:
     #
     # MailBackfillerTest is the same pattern: one cohesive single-SUT suite (a test per backfill concern
     # — #12 core paging, #94/#95 boundary edge cases, #322 batching, #360 throttle, #355 interactive
-    # priority, #329 logging) already at the boundary; the iCloud connection-cap wiring tests (issue
-    # #363) tipped it over.
+    # priority, #329 logging) already at the boundary; the iCloud connection-cap wiring tests (#363) and
+    # issue #362's fail-loud auth-error errored/latched-skip tests each tipped it further over.
     excludes: ['**/data/repository/MailRepositoryImplTest.kt', '**/data/sync/MailBackfillerTest.kt']
 
 naming:

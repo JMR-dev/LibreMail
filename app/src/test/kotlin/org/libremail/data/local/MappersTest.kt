@@ -46,6 +46,24 @@ class MappersTest {
     }
 
     @Test
+    fun `Account authError round-trips through the entity in both directions (issue 362)`() {
+        val healthy = Account(
+            id = "acct",
+            email = "ada@example.org",
+            displayName = "Ada",
+            authType = AuthType.PASSWORD_IMAP,
+            imap = ServerConfig("imap.example.org", 993, MailSecurity.SSL_TLS),
+            smtp = ServerConfig("smtp.example.org", 465, MailSecurity.SSL_TLS),
+        )
+        assertNull(healthy.toEntity().authError, "a healthy account carries no persisted error")
+        assertNull(healthy.toEntity().toDomain().authError)
+
+        val errored = healthy.copy(authError = "Please remove and re-add this account with valid credentials")
+        assertEquals(errored.authError, errored.toEntity().authError, "the error is persisted")
+        assertEquals(errored, errored.toEntity().toDomain(), "and reads back intact")
+    }
+
+    @Test
     fun `AccountEntity toDomain falls back to safe defaults for unknown persisted enum names`() {
         val entity = AccountEntity(
             id = "acct",

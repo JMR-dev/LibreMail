@@ -288,6 +288,12 @@
     <string name="account_reorder_handle">Long-press and drag to reorder account</string>
     <string name="account_remove">Remove account</string>
 
+    <!-- Account auth error (#362): shown on the account row (Settings, drawer switcher) and as a banner
+         atop the mailbox once an account's Yahoo/AOL login has failed enough consecutive times that a
+         credential fix, not a retry, is required. Cleared when the user removes and re-adds the account. -->
+    <string name="account_auth_error_remove_readd">Please remove and re-add this account with valid credentials</string>
+    <string name="account_auth_error_icon_description">Account error</string>
+
     <!-- Backup -->
     <string name="settings_backup">Settings Backup</string>
     <string name="settings_backup_include">Include settings in Android Backup</string>
