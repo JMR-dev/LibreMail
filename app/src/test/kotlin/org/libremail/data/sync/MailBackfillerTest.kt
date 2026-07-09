@@ -639,6 +639,57 @@ class MailBackfillerTest {
         coVerify(atLeast = 1) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
     }
 
+    // --- issue #361: Gmail bandwidth-aware prefetch pacing ----------------------------------------
+
+    /**
+     * Once a Gmail account's tracked downloads for today reach the documented daily budget, backfill's
+     * body/attachment prefetch is deferred for the rest of the day — but header paging (the history
+     * itself) is untouched, the same "prefetch-only" gating shape as the low-battery (#89) and
+     * fetch-gate (#393) tests above.
+     */
+    @Test
+    fun `gmail prefetch defers once the daily download budget is reached, but header paging is unaffected`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+        val gmailAccount = accountEntity.copy(imap = ServerConfigEmbedded("imap.gmail.com", 993, "SSL_TLS"))
+        val tracker = GmailBandwidthTracker().apply {
+            recordDownload("acct", GmailSyncLimits.DAILY_DOWNLOAD_BUDGET_BYTES)
+        }
+
+        backfiller(
+            AccountSettings("acct"),
+            fetchPolicy = FetchPolicy.ALWAYS,
+            bandwidthTracker = tracker,
+            account = gmailAccount,
+        ).runBackfill()
+
+        assertEquals(60, distinctCachedUids().size, "header paging itself is not budget-gated")
+        coVerify(exactly = 0) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+        assertTrue(
+            logBuffer.snapshot().any { it.message.startsWith("prefetch deferred acct:") },
+            "a PII-free deferral breadcrumb is recorded",
+        )
+    }
+
+    /**
+     * The Gmail bandwidth budget is provider-scoped, not a blanket cap: an over-budget tracker entry
+     * for the same account id must not affect a non-Gmail account's prefetch.
+     */
+    @Test
+    fun `a non-gmail account's prefetch is unaffected by an over-budget gmail bandwidth tracker`() = runTest {
+        appendMessages(60)
+        seedForegroundWindow()
+        val tracker = GmailBandwidthTracker().apply {
+            recordDownload("acct", GmailSyncLimits.DAILY_DOWNLOAD_BUDGET_BYTES)
+        }
+
+        // account defaults to the fixture's non-Gmail (127.0.0.1) host.
+        backfiller(AccountSettings("acct"), fetchPolicy = FetchPolicy.ALWAYS, bandwidthTracker = tracker)
+            .runBackfill()
+
+        coVerify(atLeast = 1) { requireNotNull(lastMailRepository).prefetchMessage(any()) }
+    }
+
     // --- issue #329: AppLog breadcrumbs ---------------------------------------------------------
 
     @Test
@@ -719,10 +770,12 @@ class MailBackfillerTest {
         imapClient: ImapClient = client,
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
         interactiveGate: InteractiveImapGate = InteractiveImapGate(),
+        bandwidthTracker: GmailBandwidthTracker = GmailBandwidthTracker(),
         authGate: AuthThrottleGate = AuthThrottleGate(),
+        account: AccountEntity = accountEntity,
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
-        coEvery { accountDao.getAll() } returns listOf(accountEntity)
+        coEvery { accountDao.getAll() } returns listOf(account)
 
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.insertNew(any()) } answers {
@@ -777,6 +830,7 @@ class MailBackfillerTest {
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = throttleGate,
             interactiveGate = interactiveGate,
+            bandwidthTracker = bandwidthTracker,
             authGate = authGate,
         ).also {
             lastMessageDao = messageDao

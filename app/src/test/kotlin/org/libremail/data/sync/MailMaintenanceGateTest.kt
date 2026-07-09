@@ -203,6 +203,7 @@ class MailMaintenanceGateTest {
             maintenanceGate = gate,
             throttleGate = AccountThrottleGate(),
             interactiveGate = InteractiveImapGate(),
+            bandwidthTracker = GmailBandwidthTracker(),
             authGate = AuthThrottleGate(),
         )
     }

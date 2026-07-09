@@ -60,6 +60,7 @@ class MailBackfiller @Inject constructor(
     private val maintenanceGate: MailMaintenanceGate,
     private val throttleGate: AccountThrottleGate,
     private val interactiveGate: InteractiveImapGate,
+    private val bandwidthTracker: GmailBandwidthTracker,
     private val authGate: AuthThrottleGate,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
@@ -233,7 +234,7 @@ class MailBackfiller @Inject constructor(
             }
             beforeUid = nextBeforeUid
             backfillProgressDao.upsert(BackfillProgressEntity(account.id, folder, beforeUid, complete = false))
-            prefetchIfEnabled(entities.map { it.id })
+            prefetchIfEnabled(account, entities.map { it.id })
             // Breathe between pages so a large mailbox doesn't hammer the server.
             delay(BACKFILL_BATCH_DELAY_MS)
         }
@@ -312,7 +313,7 @@ class MailBackfiller @Inject constructor(
      * Best-effort and cancellable between messages so an interruption stops promptly; anything not
      * fetched is filled in lazily when the message is opened.
      */
-    private suspend fun prefetchIfEnabled(ids: List<String>) {
+    private suspend fun prefetchIfEnabled(account: Account, ids: List<String>) {
         // Debug-only fetch gate (issue #393): pause proactive body prefetch so a later open is a genuine
         // uncached fetch. Header paging above is untouched (its own gate is the BackfillWorker entry), so
         // history still lands; a skipped body is filled in lazily on open. Compiled out of release
@@ -327,6 +328,17 @@ class MailBackfiller @Inject constructor(
             battery = batteryStatusProvider.current(),
         )
         if (!shouldPrefetch) return
+        // Gmail-specific proactive bandwidth pacing (#361): once this account's tracked downloads for
+        // today reach Gmail's documented daily budget, defer body/attachment prefetch for the rest of
+        // the day instead of continuing to spend it — header paging above is unaffected, and a fresh
+        // cycle resumes automatically once the day rolls over (GmailBandwidthTracker). Orthogonal to
+        // the #360 throttle skip above (which only fires once the provider actually rejects a request)
+        // and #356's BackfillPacer (which paces slice cadence, not bytes) — same graceful-degradation
+        // shape as both, composing rather than duplicating either.
+        if (GmailSyncLimits.appliesTo(account) && bandwidthTracker.isOverDailyBudget(account.id)) {
+            AppLog.i(TAG, "prefetch deferred ${accountLogRef(account.id)}: Gmail daily download budget reached")
+            return
+        }
         for (id in ids) {
             currentCoroutineContext().ensureActive()
             mailRepository.prefetchMessage(id)
