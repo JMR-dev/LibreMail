@@ -38,6 +38,7 @@ import org.libremail.reporting.AppLog
 import org.libremail.reporting.RingLogBuffer
 import org.libremail.reporting.accountLogRef
 import java.io.File
+import java.io.RandomAccessFile
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -219,6 +220,47 @@ class SendWorkerTest {
         val messages = logBuffer.snapshot().map { it.message }
         assertTrue(messages.contains("send failed for ${accountLogRef("acct")}; will retry"), "messages=$messages")
         messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
+    }
+
+    // --- issue #363: iCloud message-size cap -----------------------------------------------------
+
+    private fun icloudAccount(id: String = "acct") =
+        account(id, "PASSWORD_IMAP").copy(imap = ServerConfigEmbedded("imap.mail.me.com", 993, "SSL_TLS"))
+
+    /** A sparse file of exactly [bytes] — allocates the size without writing content (fast, no disk churn). */
+    private fun stageFileOfSize(messageId: String, index: Int, name: String, bytes: Long) {
+        val file = File(cacheDir, "outbox/$messageId/$index").apply { mkdirs() }.resolve(name)
+        RandomAccessFile(file, "rw").use { it.setLength(bytes) }
+    }
+
+    @Test
+    fun `an oversized iCloud message fails cleanly without ever attempting to send (issue #363)`() = runTest {
+        stageFileOfSize("m1", index = 0, name = "big.bin", bytes = 21L * 1024 * 1024) // over the 20 MB cap
+        val attachmentsJson = listOf(OutgoingAttachment(uri = "content://1", name = "big.bin"))
+            .toOutgoingAttachmentsJson()
+        coEvery { outboxDao.getAll() } returns listOf(entity(attachments = attachmentsJson))
+        coEvery { accountDao.getById("acct") } returns icloudAccount()
+        coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
+
+        assertEquals(Result.retry(), worker().doWork())
+
+        coVerify(exactly = 0) { smtpSender.send(any(), any(), any(), any()) }
+        coVerify { outboxDao.setError("m1", match { it.contains("iCloud Mail") && it.contains("MB") }) }
+        coVerify(exactly = 0) { outboxDao.delete(any()) }
+        val messages = logBuffer.snapshot().map { it.message }
+        messages.forEach { assertFalse(it.contains("acct@example.org"), it) }
+    }
+
+    @Test
+    fun `an iCloud message within the size cap sends normally`() = runTest {
+        coEvery { outboxDao.getAll() } returns listOf(entity())
+        coEvery { accountDao.getById("acct") } returns icloudAccount()
+        coEvery { connectionFactory.smtpParamsFor(any()) } returns mockk<SmtpParams>()
+
+        assertEquals(Result.success(), worker().doWork())
+
+        coVerify { smtpSender.send(any(), "acct@example.org", any(), any()) }
+        coVerify { outboxDao.delete("m1") }
     }
 
     @Test

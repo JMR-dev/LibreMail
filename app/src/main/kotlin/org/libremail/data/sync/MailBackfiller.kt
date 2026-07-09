@@ -59,6 +59,8 @@ class MailBackfiller @Inject constructor(
     private val maintenanceGate: MailMaintenanceGate,
     private val throttleGate: AccountThrottleGate,
     private val interactiveGate: InteractiveImapGate,
+    // iCloud-specific connection cap (#363); a no-op for every other provider — see its own KDoc.
+    private val icloudConnectionLimiter: IcloudConnectionLimiter,
     private val bandwidthTracker: GmailBandwidthTracker,
 ) {
     /** One folder's slice outcome: pages fetched, and whether an immediate follow-up slice has work to do. */
@@ -184,7 +186,11 @@ class MailBackfiller @Inject constructor(
                 complete = true
                 break
             }
-            val fetched = imapClient.fetchOlderThan(params, folder, beforeUid, BACKFILL_BATCH_SIZE)
+            // iCloud-specific connection cap (#363): waits for a free permit rather than opening past the
+            // account's documented ceiling; a no-op for every other provider (IcloudConnectionLimiter).
+            val fetched = icloudConnectionLimiter.withPermit(account) {
+                imapClient.fetchOlderThan(params, folder, beforeUid, BACKFILL_BATCH_SIZE)
+            }
             batches++
             val entities = fetched.map { it.toEntity(account.id, folder) }
             // Stop at the genuine end of the folder, or at the age floor (#13): a page ENTIRELY older
@@ -292,7 +298,10 @@ class MailBackfiller @Inject constructor(
      * and backfill content paths can never disagree (#88/#89). Header paging above is not gated here:
      * WorkManager's battery-not-low constraint on the backfill work is the scheduler-level control.
      * Best-effort and cancellable between messages so an interruption stops promptly; anything not
-     * fetched is filled in lazily when the message is opened.
+     * fetched is filled in lazily when the message is opened. Each message's prefetch (its body plus
+     * every attachment) is routed through [icloudConnectionLimiter] for an iCloud [account] — issue
+     * #363's "K + attachments" share of the per-page connection count the ticket describes — and is a
+     * no-op passthrough for every other provider.
      */
     private suspend fun prefetchIfEnabled(account: Account, ids: List<String>) {
         // Debug-only fetch gate (issue #393): pause proactive body prefetch so a later open is a genuine
@@ -322,7 +331,7 @@ class MailBackfiller @Inject constructor(
         }
         for (id in ids) {
             currentCoroutineContext().ensureActive()
-            mailRepository.prefetchMessage(id)
+            icloudConnectionLimiter.withPermit(account) { mailRepository.prefetchMessage(id) }
         }
     }
 

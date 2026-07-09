@@ -28,7 +28,12 @@ complexity:
     # logging (issue #358) added its required android.util.Log mock + one breadcrumb test, tipping it
     # over. Excluded rather than artificially split — same "operation-rich cohesive suite" rationale as
     # the TooManyFunctions relaxation above.
-    excludes: ['**/data/repository/MailRepositoryImplTest.kt']
+    #
+    # MailBackfillerTest is the same pattern: one cohesive single-SUT suite (a test per backfill concern
+    # — #12 core paging, #94/#95 boundary edge cases, #322 batching, #360 throttle, #355 interactive
+    # priority, #329 logging) already at the boundary; the iCloud connection-cap wiring tests (issue
+    # #363) tipped it over.
+    excludes: ['**/data/repository/MailRepositoryImplTest.kt', '**/data/sync/MailBackfillerTest.kt']
 
 naming:
   FunctionNaming:
