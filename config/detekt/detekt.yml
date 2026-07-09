@@ -75,6 +75,9 @@ style:
       - '**/data/sync/AccountThrottleGateTest.kt'
       # #356 backfill pacer: cooldown/cap/skip breadcrumbs through AppLog, so this suite mockkStatic(Log) too.
       - '**/data/sync/BackfillPacerTest.kt'
+      # #361 Gmail bandwidth tracker: the daily-budget-crossing breadcrumb goes through AppLog, so this
+      # suite mockkStatic(Log) too.
+      - '**/data/sync/GmailBandwidthTrackerTest.kt'
       # Reader-path perf logging (issue #358): the repository's openMessage and the reader ViewModel
       # log via AppLog, so their unit tests mockkStatic(Log) too.
       - '**/data/repository/MailRepositoryImplTest.kt'

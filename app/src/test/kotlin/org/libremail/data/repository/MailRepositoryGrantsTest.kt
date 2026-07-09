@@ -16,6 +16,7 @@ import org.libremail.data.local.dao.DraftDao
 import org.libremail.data.local.dao.OutboxDao
 import org.libremail.data.local.entity.DraftEntity
 import org.libremail.data.local.entity.OutboxEntity
+import org.libremail.data.sync.GmailBandwidthTracker
 import org.libremail.data.sync.InteractiveImapGate
 import java.nio.file.Files
 
@@ -47,6 +48,7 @@ class MailRepositoryGrantsTest {
         signatureRepository = mockk(relaxed = true),
         attachmentUriGrants = attachmentUriGrants,
         interactiveGate = InteractiveImapGate(),
+        bandwidthTracker = GmailBandwidthTracker(),
     )
 
     @Test

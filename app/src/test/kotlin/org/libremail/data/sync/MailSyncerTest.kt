@@ -95,9 +95,11 @@ class MailSyncerTest {
         battery: BatteryStatus = BatteryStatus(percent = 100, isCharging = false),
         fetched: List<FetchedMessage> = emptyList(),
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
+        bandwidthTracker: GmailBandwidthTracker = GmailBandwidthTracker(),
+        accountEntity: AccountEntity = account,
     ): MailSyncer {
         val accountDao = mockk<AccountDao>()
-        coEvery { accountDao.getById("acct") } returns account
+        coEvery { accountDao.getById("acct") } returns accountEntity
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.getSyncedIds(any(), any()) } returns emptyList()
         coEvery { messageDao.getUnfetchedIds("acct", "INBOX") } returns listOf("acct:INBOX:1")
@@ -124,6 +126,7 @@ class MailSyncerTest {
             notifier = mockk<MailNotifier>(relaxed = true),
             mailRepository = mailRepository,
             throttleGate = throttleGate,
+            bandwidthTracker = bandwidthTracker,
         )
     }
 
@@ -282,6 +285,43 @@ class MailSyncerTest {
         coVerify { repo.prefetchMessage("acct:INBOX:1") }
     }
 
+    // --- issue #361: Gmail bandwidth-aware prefetch pacing ----------------------------------------
+
+    @Test
+    fun `gmail prefetch defers once the daily download budget is reached, leaving the header sync untouched`() =
+        runTest {
+            val repo = mockk<MailRepository>(relaxed = true)
+            val gmailAccount = account.copy(imap = ServerConfigEmbedded("imap.gmail.com", 993, "SSL_TLS"))
+            val tracker = GmailBandwidthTracker().apply {
+                recordDownload("acct", GmailSyncLimits.DAILY_DOWNLOAD_BUDGET_BYTES)
+            }
+
+            val result = syncer(
+                FetchPolicy.ALWAYS,
+                repo,
+                accountEntity = gmailAccount,
+                bandwidthTracker = tracker,
+            ).syncFolder("acct", "INBOX")
+
+            assertEquals(0, result.getOrNull()) // header sync still ran and succeeded
+            coVerify(exactly = 0) { repo.prefetchMessage(any()) }
+            assertTrue(logBuffer.snapshot().any { it.message.startsWith("prefetch deferred acct:") })
+        }
+
+    @Test
+    fun `a non-gmail account's prefetch is unaffected by an over-budget gmail bandwidth tracker`() = runTest {
+        val repo = mockk<MailRepository>()
+        coEvery { repo.prefetchMessage(any()) } returns Result.success(Unit)
+        val tracker = GmailBandwidthTracker().apply {
+            recordDownload("acct", GmailSyncLimits.DAILY_DOWNLOAD_BUDGET_BYTES)
+        }
+
+        // accountEntity defaults to the fixture's non-Gmail (imap.example.org) host.
+        syncer(FetchPolicy.ALWAYS, repo, bandwidthTracker = tracker).syncFolder("acct", "INBOX")
+
+        coVerify { repo.prefetchMessage("acct:INBOX:1") }
+    }
+
     @Test
     fun `notifies for new mail when both global and per-account notifications are enabled`() = runTest {
         val notifier = mockk<MailNotifier>(relaxed = true)
@@ -340,6 +380,7 @@ class MailSyncerTest {
             notifier = notifier,
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
+            bandwidthTracker = GmailBandwidthTracker(),
         )
     }
 
@@ -423,6 +464,7 @@ class MailSyncerTest {
             notifier = mockk(relaxed = true),
             mailRepository = mockk(relaxed = true),
             throttleGate = AccountThrottleGate(),
+            bandwidthTracker = GmailBandwidthTracker(),
         )
     }
 

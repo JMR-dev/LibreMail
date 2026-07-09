@@ -41,6 +41,7 @@ class MailSyncer @Inject constructor(
     private val notifier: MailNotifier,
     private val mailRepository: MailRepository,
     private val throttleGate: AccountThrottleGate,
+    private val bandwidthTracker: GmailBandwidthTracker,
 ) : Syncer {
     // Serializes all syncing: syncAll/syncAccount/syncFolder are invoked concurrently by the periodic
     // worker, pull-to-refresh, one-shot syncs, folder opens, and one IDLE watcher per account. Without
@@ -187,6 +188,17 @@ class MailSyncer @Inject constructor(
             battery = batteryStatusProvider.current(),
         )
         if (!shouldPrefetch) return
+        // Gmail-specific proactive bandwidth pacing (#361): once this account's tracked downloads for
+        // today reach Gmail's documented daily budget, defer body/attachment prefetch for the rest of
+        // the day instead of continuing to spend it — header sync above is unaffected, and a fresh
+        // cycle resumes automatically once the day rolls over (GmailBandwidthTracker). Orthogonal to
+        // #360's reactive AccountThrottleGate (only fires once the provider actually rejects a request)
+        // and #356's BackfillPacer (paces backfill slice cadence, not bytes) — same graceful-degradation
+        // shape as both, composing rather than duplicating either.
+        if (GmailSyncLimits.appliesTo(account) && bandwidthTracker.isOverDailyBudget(account.id)) {
+            AppLog.i(TAG, "prefetch deferred ${accountLogRef(account.id)}: Gmail daily download budget reached")
+            return
+        }
         for (id in messageDao.getUnfetchedIds(account.id, folder)) {
             currentCoroutineContext().ensureActive()
             mailRepository.prefetchMessage(id) // best-effort; swallows its own per-message failures
