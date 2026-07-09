@@ -40,6 +40,7 @@ import org.libremail.data.local.entity.MessageSummary
 import org.libremail.data.local.entity.ServerConfigEmbedded
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.SignatureRepository
+import org.libremail.data.sync.GmailBandwidthTracker
 import org.libremail.data.sync.InteractiveImapGate
 import org.libremail.data.sync.MailConnectionFactory
 import org.libremail.domain.model.AccountSettings
@@ -78,6 +79,9 @@ class MailRepositoryImplTest {
 
     // A real gate (cheap, no deps) so tests can observe the interactive-fetch counter it raises (#355).
     private val interactiveGate = InteractiveImapGate()
+
+    // A real tracker (cheap, no deps) so tests can observe Gmail's daily download-budget accounting (#361).
+    private val bandwidthTracker = GmailBandwidthTracker()
     private val repository = MailRepositoryImpl(
         context = context,
         messageDao = messageDao,
@@ -94,6 +98,7 @@ class MailRepositoryImplTest {
         // Grant-release wiring (deleteDraft / cancelOutboxMessage) is covered by MailRepositoryGrantsTest.
         attachmentUriGrants = mockk(relaxed = true),
         interactiveGate = interactiveGate,
+        bandwidthTracker = bandwidthTracker,
     )
 
     // openMessage now breadcrumbs via AppLog (issue #358); android.util.Log is a no-op stub under plain
@@ -409,6 +414,48 @@ class MailRepositoryImplTest {
 
         // No tag stripping for plain text — only whitespace collapsing (and the length cap) applies.
         assertEquals("Reply to <ada@example.org>: 3 < 5", snippet.captured)
+    }
+
+    // --- issue #361: Gmail bandwidth-aware prefetch pacing ----------------------------------------
+
+    @Test
+    fun `prefetchMessage records the fetched body and attachment bytes for a gmail account`() = runTest {
+        val cache = Files.createTempDirectory("attach").toFile()
+        every { context.cacheDir } returns cache
+        val id = "acct:INBOX:22"
+        val body = "Hello world"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns
+            accountEntity().copy(imap = ServerConfigEmbedded("imap.gmail.com", 993, "SSL_TLS"))
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "22") } returns MessageContent(body, isHtml = false)
+        coEvery { messageDao.updateBody(id, any(), any(), any()) } just Runs
+        coEvery { attachmentDao.getForMessage(id) } returns listOf(attachmentEntity(id, 0, "photo.jpg"))
+        coEvery { imapClient.fetchAttachment(any(), "INBOX", "22", 0) } returns
+            DownloadedAttachment("photo.jpg", "image/jpeg", ByteArray(500))
+
+        repository.prefetchMessage(id)
+
+        val expectedBytes = body.toByteArray(Charsets.UTF_8).size + 500
+        assertEquals(expectedBytes.toLong(), bandwidthTracker.bytesDownloadedToday("acct"))
+    }
+
+    @Test
+    fun `prefetchMessage does not track bytes for a non-gmail account`() = runTest {
+        val cache = Files.createTempDirectory("attach").toFile()
+        every { context.cacheDir } returns cache
+        val id = "acct:INBOX:23"
+        coEvery { messageDao.getRouting(id) } returns messageRouting(id, "INBOX")
+        coEvery { accountDao.getById("acct") } returns accountEntity() // non-Gmail host (imap.example.org)
+        coEvery { connectionFactory.imapParamsFor(any()) } returns imapParams()
+        coEvery { imapClient.fetchBodyPeek(any(), "INBOX", "23") } returns
+            MessageContent("Hello world", isHtml = false)
+        coEvery { messageDao.updateBody(id, any(), any(), any()) } just Runs
+        coEvery { attachmentDao.getForMessage(id) } returns emptyList()
+
+        repository.prefetchMessage(id)
+
+        assertEquals(0L, bandwidthTracker.bytesDownloadedToday("acct"))
     }
 
     @Test
