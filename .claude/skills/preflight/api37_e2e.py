@@ -365,10 +365,18 @@ def main() -> int:
         if not booted:
             raise RuntimeError("API 37 preview emulator failed to boot after 2 attempts.")
 
-        # 4. Dismiss the keyguard, then run the instrumented/E2E suite against the booted emulator.
-        subprocess.run(cmd(adb, "shell", "input", "keyevent", "82"), check=False)
-
+        # 4. Force the emulator to grant the app window focus, then GATE on it (the SAME shared
+        # helper CI's e2e / e2e-preview jobs invoke, issue #468), before running the suite: wake
+        # the display, dismiss + disable the keyguard, keep the screen on, disable animations, and
+        # wait for a focused window. Replaces the lone `input keyevent 82`. Best-effort: fall back
+        # to that legacy nudge if the shared helper is somehow missing.
         repo_root = Path(__file__).resolve().parents[3]
+        focus_gate = repo_root / ".github" / "scripts" / "emulator_focus_gate.py"
+        if focus_gate.is_file():
+            subprocess.run([sys.executable, str(focus_gate), "--adb", adb], check=False)
+        else:
+            subprocess.run(cmd(adb, "shell", "input", "keyevent", "82"), check=False)
+
         gradlew = repo_root / ("gradlew.bat" if IS_WINDOWS else "gradlew")
         print(f"Running :app:connectedDebugAndroidTest against {AVD_NAME}...")
         test_exit = subprocess.run(
