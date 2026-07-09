@@ -324,10 +324,17 @@ def wait_for_boot(adb: str, proc: subprocess.Popen, timeout: int) -> bool:
     return False
 
 
-def dismiss_keyguard(adb: str) -> None:
-    # Dismiss the keyguard (mirrors CI + api37_e2e.py). Best-effort: a cold -wipe-data boot
-    # rarely needs it, and the input service can lose a race right after boot.
-    _run_quiet(cmd(adb, "-s", SERIAL, "shell", "input", "keyevent", "82"))
+def prepare_focus(adb: str) -> None:
+    # Force the emulator to grant the app window focus BEFORE the suite, then gate on it -- the
+    # SAME shared helper CI's e2e / e2e-preview jobs invoke (issue #468), so local preflight
+    # exercises the identical fix. It wakes the display, dismisses + disables the keyguard, keeps
+    # the screen on, disables animations, and waits for a focused window. Best-effort: fall back
+    # to the legacy `input keyevent 82` nudge if the shared helper is somehow missing.
+    gate = REPO_ROOT / ".github" / "scripts" / "emulator_focus_gate.py"
+    if gate.is_file():
+        subprocess.run([sys.executable, str(gate), "--adb", adb, "--serial", SERIAL], check=False)
+    else:
+        _run_quiet(cmd(adb, "-s", SERIAL, "shell", "input", "keyevent", "82"))
 
 
 def run_tests(test_classes: str) -> int:
@@ -420,7 +427,7 @@ def main() -> int:
         proc = start_emulator(emulator)
         if wait_for_boot(adb, proc, BOOT_TIMEOUT):
             print("Emulator booted.")
-            dismiss_keyguard(adb)
+            prepare_focus(adb)
             _STATE.test_exit = run_tests(args.test_classes)
         else:
             warn(f"Emulator did not reach sys.boot_completed within {BOOT_TIMEOUT}s.")
