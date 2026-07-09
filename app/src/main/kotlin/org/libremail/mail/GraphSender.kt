@@ -7,10 +7,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.libremail.domain.model.OutgoingMessage
+import org.libremail.mail.graph.GraphHttpClient
+import org.libremail.mail.graph.GraphRequest
+import org.libremail.mail.graph.GraphThrottle
+import org.libremail.mail.graph.GraphTransportException
+import org.libremail.mail.graph.isHttpSuccess
 import org.libremail.reporting.AppLog
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
+import org.libremail.reporting.accountLogRef
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,9 +29,15 @@ class GraphSendException(message: String, val mayHaveSent: Boolean, cause: Throw
 /**
  * Sends mail via Microsoft Graph `me/sendMail` — Microsoft's preferred send path for Outlook /
  * Microsoft 365, used in place of SMTP. Authenticated with a Graph access token (Bearer).
+ *
+ * The request goes through [GraphThrottle] (issue #364), so a Graph 429/503 is honored — its
+ * `Retry-After` is respected and the send retried after that wait — and recorded against the account's
+ * shared reactive backoff gate (#360), which also cools that account's IMAP background work down. Only
+ * after the honored retry is exhausted does a throttled or rejected response surface as a
+ * [GraphSendException] (`mayHaveSent = false`, safe for the outbox to fall back to SMTP).
  */
 @Singleton
-class GraphSender @Inject constructor() {
+class GraphSender @Inject constructor(private val httpClient: GraphHttpClient, private val throttle: GraphThrottle) {
 
     suspend fun send(
         accessToken: String,
@@ -38,62 +47,60 @@ class GraphSender @Inject constructor() {
         // Guard before any attachment is read into memory: Graph sendMail carries attachment bytes inline
         // (base64) in a single ~4 MB request, so an oversized file would blow that request limit and risk
         // an OOM from readBytes(). Fail with mayHaveSent=false so the outbox falls back to SMTP, which
-        // streams attachments and handles far larger files (#298).
+        // streams attachments and handles far larger files (#298). (An over-4 MB attachment sent *through*
+        // Graph would need a draft + createUploadSession chunked upload — see GraphUploadSession — which
+        // requires the Mail.ReadWrite scope this send-only token does not hold; SMTP fallback is simpler.)
         attachments.firstOrNull { it.file.length() > MAX_ATTACHMENT_BYTES }?.let {
             AppLog.w(TAG, "Attachment over Graph sendMail size limit; not sending via Graph")
             throw GraphSendException("Attachment exceeds the Graph sendMail size limit", mayHaveSent = false)
         }
         val payload = buildSendMailPayload(message, attachments)
-        val connection = (URL(SEND_MAIL_URL).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $accessToken")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        val request = GraphRequest(
+            method = "POST",
+            url = SEND_MAIL_URL,
+            headers = mapOf(
+                "Authorization" to "Bearer $accessToken",
+                "Content-Type" to "application/json; charset=utf-8",
+            ),
+            body = payload.toByteArray(Charsets.UTF_8),
+        )
+        val response = try {
+            throttle.execute(message.accountId, httpClient, request, maxRetries = SEND_MAX_RETRIES)
+        } catch (e: GraphTransportException) {
+            // No HTTP response at all. A lost response means Graph may already have accepted+sent the
+            // message, so callers must NOT fall back (it would duplicate); a transmit failure is safe.
+            throw GraphSendException(
+                if (e.mayHaveSent) {
+                    "Graph sendMail sent but no response received"
+                } else {
+                    "Graph sendMail could not be transmitted"
+                },
+                mayHaveSent = e.mayHaveSent,
+                cause = e,
+            )
         }
-        try {
-            // Failure here means the request never reached Graph — safe to fall back/retry.
-            try {
-                connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-            } catch (e: IOException) {
-                throw GraphSendException("Graph sendMail could not be transmitted", mayHaveSent = false, cause = e)
-            }
-            // The request was fully sent; if we can't read the response, Graph may already have
-            // accepted and sent it — do not fall back to SMTP or the message would be duplicated.
-            val code = try {
-                connection.responseCode
-            } catch (e: IOException) {
-                throw GraphSendException(
-                    "Graph sendMail sent but no response received",
-                    mayHaveSent = true,
-                    cause = e,
-                )
-            }
-            if (code !in HTTP_OK_MIN..HTTP_OK_MAX) {
-                val body = (connection.errorStream ?: connection.inputStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                // An explicit non-2xx means Graph rejected (did not send) — safe to fall back.
-                throw GraphSendException(
-                    "Graph sendMail failed (HTTP $code): ${body.take(ERROR_BODY_LIMIT)}",
-                    mayHaveSent = false,
-                )
-            }
-        } finally {
-            connection.disconnect()
+        if (!isHttpSuccess(response.status)) {
+            // An explicit non-2xx (including a 429 the retry budget couldn't clear) means Graph did not
+            // send — safe for the outbox to fall back to SMTP.
+            throw GraphSendException(
+                "Graph sendMail failed (HTTP ${response.status}): ${response.body.take(ERROR_BODY_LIMIT)}",
+                mayHaveSent = false,
+            )
         }
+        AppLog.i(TAG, "graph sendMail ok ${accountLogRef(message.accountId)}")
     }
 
     private companion object {
         const val TAG = "GraphSender"
         const val SEND_MAIL_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
-        const val TIMEOUT_MS = 15_000
 
         // Per-file ceiling kept below Graph sendMail's ~4 MB whole-request cap, so one attachment can never
         // exceed the request limit or OOM when read into the base64 payload; larger files fall back to SMTP.
         const val MAX_ATTACHMENT_BYTES = 3L * 1024 * 1024
-        const val HTTP_OK_MIN = 200
-        const val HTTP_OK_MAX = 299
+
+        // One honored Retry-After retry for a user-initiated send: respect the provider's explicit
+        // "slow down" once, then fall back to SMTP rather than block the outbox drain for long.
+        const val SEND_MAX_RETRIES = 1
         const val ERROR_BODY_LIMIT = 500
     }
 }
