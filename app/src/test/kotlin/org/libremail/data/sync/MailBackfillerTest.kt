@@ -44,8 +44,10 @@ import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.ImapConnectionParams
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
+import org.libremail.mail.AuthThrottleGate
 import org.libremail.mail.FetchedMessage
 import org.libremail.mail.ImapClient
+import org.libremail.mail.ProviderAuthPolicy
 import org.libremail.power.BatteryStatus
 import org.libremail.power.BatteryStatusProvider
 import org.libremail.reporting.AppLog
@@ -530,6 +532,37 @@ class MailBackfillerTest {
         assertTrue(logBuffer.snapshot().any { it.message.startsWith("backfill skip acct:") })
     }
 
+    /**
+     * Issue #362 composes with #360/#356 by reusing the same skip: an account inside its proactive
+     * *auth*-backoff window is skipped exactly as a reactively-throttled one is — no server call, no
+     * `moreWork` (so [BackfillPacer] does not spin a cooldown on it), and the account is left alone so
+     * backfill never nudges a Yahoo/AOL account toward its ~1-hour lockout.
+     */
+    @Test
+    fun `an account inside its auth-backoff window is skipped, not paged`() = runTest {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        // Treat the (127.0.0.1) test host as a gated Yahoo/AOL account and arm the backoff on its identity.
+        val authGate = AuthThrottleGate(
+            nowMillis = { 0L },
+            random = { 0.0 },
+            policyForHost = { ProviderAuthPolicy.forHost("imap.mail.yahoo.com") },
+        )
+        authGate.onAuthFailure(params())
+
+        val moreWork = backfiller(AccountSettings("acct"), imapClient = imapClient, authGate = authGate).runBackfill()
+
+        assertFalse(moreWork, "a slice whose only account is auth-blocked reports done, not more-work")
+        coVerify(exactly = 0) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        assertTrue(authGate.isAuthBlocked(params()), "the account is still auth-backing-off")
+        assertTrue(
+            logBuffer.snapshot().any {
+                it.message.startsWith("backfill skip acct:") && it.message.contains("auth backing off")
+            },
+            "a PII-free auth-skip breadcrumb is recorded",
+        )
+    }
+
     // --- issue #355: interactive-fetch priority -------------------------------------------------
 
     /**
@@ -686,6 +719,7 @@ class MailBackfillerTest {
         imapClient: ImapClient = client,
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
         interactiveGate: InteractiveImapGate = InteractiveImapGate(),
+        authGate: AuthThrottleGate = AuthThrottleGate(),
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
         coEvery { accountDao.getAll() } returns listOf(accountEntity)
@@ -743,6 +777,7 @@ class MailBackfillerTest {
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = throttleGate,
             interactiveGate = interactiveGate,
+            authGate = authGate,
         ).also {
             lastMessageDao = messageDao
             lastMailRepository = mailRepository
