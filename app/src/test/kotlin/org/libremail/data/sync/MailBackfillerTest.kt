@@ -35,6 +35,7 @@ import org.libremail.data.local.entity.AccountEntity
 import org.libremail.data.local.entity.BackfillProgressEntity
 import org.libremail.data.local.entity.MessageEntity
 import org.libremail.data.local.entity.ServerConfigEmbedded
+import org.libremail.data.local.toDomain
 import org.libremail.data.local.toEntity
 import org.libremail.data.settings.AccountSettingsRepository
 import org.libremail.data.settings.AppSettings
@@ -42,6 +43,7 @@ import org.libremail.data.settings.FetchPolicy
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.domain.model.AccountSettings
 import org.libremail.domain.model.ImapConnectionParams
+import org.libremail.domain.model.MailProvider
 import org.libremail.domain.model.MailSecurity
 import org.libremail.domain.repository.MailRepository
 import org.libremail.mail.FetchedMessage
@@ -530,6 +532,94 @@ class MailBackfillerTest {
         assertTrue(logBuffer.snapshot().any { it.message.startsWith("backfill skip acct:") })
     }
 
+    // --- issue #363: iCloud Mail connection cap --------------------------------------------------
+
+    /**
+     * The core of #363: an iCloud account's page fetch is routed through [IcloudConnectionLimiter], so
+     * once its one connection permit is held elsewhere backfill's next page WAITS for it to free instead
+     * of opening past iCloud's documented cap — proven by holding the limiter's only permit externally
+     * and observing backfill park until it releases. Mirrors the #355 park/resume test's real-dispatcher
+     * hand-off idiom just below (a virtual-time `runTest` can't observe a real suspend shared by two
+     * launched coroutines across a [kotlinx.coroutines.sync.Semaphore]).
+     */
+    @Test
+    fun `an iCloud account's backfill waits for a connection permit instead of exceeding the cap`() =
+        runBlocking<Unit> {
+            cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+            val icloudEntity = accountEntity.copy(imap = ServerConfigEmbedded("imap.mail.me.com", 993, "SSL_TLS"))
+            val limiter = IcloudConnectionLimiter(maxConcurrentConnections = 1)
+            val fetched = CompletableDeferred<Unit>()
+            val imapClient = mockk<ImapClient>()
+            coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } coAnswers {
+                fetched.complete(Unit)
+                emptyList() // one page, then the folder completes and the slice ends
+            }
+
+            // Something else already holds the account's one iCloud connection permit.
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val holder = launch(Dispatchers.Default) {
+                limiter.withPermit(icloudEntity.toDomain()) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            entered.await()
+
+            val backfillJob = launch(Dispatchers.Default) {
+                backfiller(
+                    AccountSettings("acct"),
+                    imapClient = imapClient,
+                    icloudConnectionLimiter = limiter,
+                    account = icloudEntity,
+                ).runBackfill()
+            }
+            delay(PARK_PROBE_MS)
+            assertFalse(fetched.isCompleted, "backfill must wait for a free connection permit")
+
+            release.complete(Unit)
+            withTimeout(HAND_OFF_TIMEOUT_MS) { backfillJob.join() }
+            assertTrue(fetched.isCompleted, "backfill proceeds once a permit frees")
+            holder.join()
+        }
+
+    /**
+     * A non-iCloud account (the GreenMail fixture's host) is never gated by [IcloudConnectionLimiter]:
+     * exhausting the SAME limiter instance's one permit for an unrelated iCloud account must not affect
+     * it — the gate is iCloud-only policy, not a general connection pool (#361/#362/#364 are unaffected).
+     */
+    @Test
+    fun `a non-iCloud account's backfill is never gated by the iCloud connection limiter`() = runBlocking<Unit> {
+        cached += fetchedMessage(uid = "60").toEntity("acct", "INBOX")
+        val limiter = IcloudConnectionLimiter(maxConcurrentConnections = 1)
+        val imapClient = mockk<ImapClient>(relaxed = true)
+        coEvery { imapClient.fetchOlderThan(any(), any(), any(), any()) } returns emptyList()
+
+        // Hold the one permit for a DIFFERENT, genuinely-iCloud account.
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch(Dispatchers.Default) {
+            limiter.withPermit(MailProvider.ICLOUD.createAccount("other@icloud.com")) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        entered.await()
+
+        val moreWork = withTimeout(HAND_OFF_TIMEOUT_MS) {
+            backfiller(
+                AccountSettings("acct"),
+                imapClient = imapClient,
+                icloudConnectionLimiter = limiter,
+            ).runBackfill()
+        }
+
+        assertFalse(moreWork)
+        coVerify(atLeast = 1) { imapClient.fetchOlderThan(any(), any(), any(), any()) }
+        release.complete(Unit)
+        holder.join()
+    }
+
     // --- issue #355: interactive-fetch priority -------------------------------------------------
 
     /**
@@ -686,9 +776,11 @@ class MailBackfillerTest {
         imapClient: ImapClient = client,
         throttleGate: AccountThrottleGate = AccountThrottleGate(),
         interactiveGate: InteractiveImapGate = InteractiveImapGate(),
+        icloudConnectionLimiter: IcloudConnectionLimiter = IcloudConnectionLimiter(),
+        account: AccountEntity = accountEntity,
     ): MailBackfiller {
         val accountDao = mockk<AccountDao>()
-        coEvery { accountDao.getAll() } returns listOf(accountEntity)
+        coEvery { accountDao.getAll() } returns listOf(account)
 
         val messageDao = mockk<MessageDao>(relaxed = true)
         coEvery { messageDao.insertNew(any()) } answers {
@@ -743,6 +835,7 @@ class MailBackfillerTest {
             maintenanceGate = MailMaintenanceGate(),
             throttleGate = throttleGate,
             interactiveGate = interactiveGate,
+            icloudConnectionLimiter = icloudConnectionLimiter,
         ).also {
             lastMessageDao = messageDao
             lastMailRepository = mailRepository
