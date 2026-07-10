@@ -3,6 +3,9 @@ package org.libremail.data.local
 
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -15,7 +18,9 @@ import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import io.mockk.unmockkObject
 import io.mockk.verify
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
@@ -27,7 +32,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.libremail.data.local.entity.MessageEntity
+import org.libremail.data.security.DatabaseKeyCipher
 import org.libremail.data.security.DatabaseKeyStore
+import org.libremail.data.security.KeystoreCrypto
+import org.libremail.data.security.PassphraseSession
+import org.libremail.data.security.SealState
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import java.io.File
@@ -72,6 +81,8 @@ class DatabaseProvisionerInstrumentedTest {
         clean()
         coEvery { keyStore.isClearPending() } returns false
         coEvery { keyStore.resolvePassphrase(any()) } returns passphrase
+        coEvery { keyStore.hasAuthSealedPassphrase() } returns false
+        coEvery { keyStore.sealWithMaster() } just Runs
         coEvery { migrator.migrateIfNeeded() } just Runs
     }
 
@@ -180,6 +191,49 @@ class DatabaseProvisionerInstrumentedTest {
 
         assertEquals(CacheOpenMode.Plaintext, mode)
         assertFalse("the cache must be decrypted so the unkeyed open works", DatabaseEncryption.isEncrypted(dbFile))
+        openPlaintext().apply {
+            assertEquals("acct:1", messageDao().getById("acct:1")?.id)
+            close()
+        }
+    }
+
+    /**
+     * Issue #479, on real collaborators end to end: the transitional window — encryptCache already
+     * OFF, the cache still SQLCipher-encrypted on disk, the passphrase still auth-sealed — must not
+     * merely decrypt the file; it must also RELEASE the orphaned auth seal by resealing under the
+     * non-auth master key. Otherwise the app stays in the window indefinitely, where losing the
+     * auth-bound key (device-lock removal / re-enrollment) forces a needless cache wipe.
+     *
+     * Uses a REAL [DatabaseKeyStore] over a fresh test DataStore plus real Keystore crypto: the
+     * sealed-auth blob only needs to EXIST (sealState reads presence), and the passphrase itself
+     * comes from the unlocked [PassphraseSession] — exactly the state after a real authentication.
+     */
+    @Test
+    fun encryptionTurnedOffReleasesTheOrphanedAuthSealAfterDecrypting() = runBlocking<Unit> {
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = false, appLock = true))
+        seedPlaintextRow()
+        DatabaseEncryption.ensureEncrypted(dbFile, passphrase)
+        assertTrue("precondition: the cache starts encrypted", DatabaseEncryption.isEncrypted(dbFile))
+
+        val session = PassphraseSession().apply { unlock(passphrase) }
+        val realKeyStore = DatabaseKeyStore(appContext, KeystoreCrypto(), DatabaseKeyCipher(), session)
+        realKeyStore.dataStore = PreferenceDataStoreFactory.create(
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+        ) { File(appContext.cacheDir, "provisioner_seal_test_${System.nanoTime()}.preferences_pb") }
+        realKeyStore.dataStore.edit { it[stringPreferencesKey("sealed_db_key_auth")] = "sealed-by-auth-key" }
+        assertTrue("precondition: the passphrase is auth-sealed", realKeyStore.hasAuthSealedPassphrase())
+
+        val provisioner = DatabaseProvisioner(context, realKeyStore, settingsRepository, migrator, Dispatchers.IO)
+        val mode = provisioner.prepareCache()
+
+        assertEquals(CacheOpenMode.Plaintext, mode)
+        assertFalse("the cache was decrypted", DatabaseEncryption.isEncrypted(dbFile))
+        // The headline: no orphaned auth seal survives the conversion — it was resealed under the
+        // master key, so the passphrase stays recoverable WITHOUT authentication...
+        assertFalse("the auth seal must be released", realKeyStore.hasAuthSealedPassphrase())
+        assertEquals(SealState.MASTER, realKeyStore.sealState())
+        // ...and a later encryptCache re-enable reuses the very same passphrase (real Keystore round-trip).
+        assertEquals(passphrase, realKeyStore.passphrase())
         openPlaintext().apply {
             assertEquals("acct:1", messageDao().getById("acct:1")?.id)
             close()

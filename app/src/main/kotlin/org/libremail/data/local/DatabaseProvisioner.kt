@@ -3,6 +3,7 @@ package org.libremail.data.local
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -183,10 +184,34 @@ class DatabaseProvisioner internal constructor(
                 // Encryption was turned back off — decrypt so the default (unkeyed) open succeeds.
                 val passphrase = keyStore.resolvePassphrase(appLock)
                 DatabaseEncryption.ensurePlaintext(dbFile, passphrase)
+                releaseOrphanedAuthSeal()
                 CacheOpenMode.Plaintext
             }
 
             else -> CacheOpenMode.Plaintext
+        }
+    }
+
+    /**
+     * The cache is plaintext now, so a passphrase still sealed by the auth-bound key is an orphan:
+     * nothing needs it to open the database, but its presence keeps the app in the issue-#479
+     * transitional state ([org.libremail.data.security.SealState.AUTH] with `encryptCache` off) —
+     * where losing the auth key (device-lock removal / re-enrollment) forces a needless cache wipe.
+     * Reseal it under the non-auth master key (dropping the auth seal and its Keystore key) so the
+     * passphrase stays recoverable and a later `encryptCache` re-enable reuses it seamlessly.
+     * Best-effort: the session holds the just-used passphrase on this path, but if the reseal still
+     * fails the plaintext open must proceed — the lingering seal is handled defensively everywhere
+     * (EncryptedCacheGuard checks the file, the key-invalidation policy treats it as protected).
+     */
+    private suspend fun releaseOrphanedAuthSeal() {
+        if (!keyStore.hasAuthSealedPassphrase()) return
+        try {
+            keyStore.sealWithMaster()
+            AppLog.i(TAG, "released orphaned auth seal after decrypt-on-disable (resealed under master key)")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w(TAG, "failed to release orphaned auth seal after decrypt-on-disable", e)
         }
     }
 
