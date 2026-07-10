@@ -275,7 +275,7 @@ class AccountDataMigratorTest {
     fun migratorDdlMatchesExportedAccountDatabaseSchema() {
         val schema = JSONObject(
             InstrumentationRegistry.getInstrumentation().context.assets
-                .open("org.libremail.data.local.AccountDatabase/2.json")
+                .open(latestAccountDatabaseSchemaAsset())
                 .bufferedReader().use { it.readText() },
         ).getJSONObject("database")
         val entities = schema.getJSONArray("entities")
@@ -311,5 +311,29 @@ class AccountDataMigratorTest {
             (0 until entities.length()).map { entities.getJSONObject(it).getString("tableName") }.toSet(),
         )
         assertTrue("the signatures index must be present in the exported schema", checkedIndex)
+    }
+
+    /**
+     * The highest-versioned exported AccountDatabase schema shipped as an androidTest asset — i.e. the
+     * current schema. Resolved dynamically so a schema-version bump is validated automatically and no
+     * one has to remember to bump a hardcoded filename here (issue #477). Fails loudly if the schema
+     * assets are missing/mislocated rather than silently validating against nothing.
+     */
+    private fun latestAccountDatabaseSchemaAsset(): String {
+        val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        val latest = assets.list(ACCOUNT_DATABASE_SCHEMA_DIR).orEmpty()
+            .filter { it.endsWith(".json") }
+            .mapNotNull { it.removeSuffix(".json").toIntOrNull() }
+            .maxOrNull()
+        assertNotNull(
+            "No exported AccountDatabase schema JSON under assets/$ACCOUNT_DATABASE_SCHEMA_DIR — is " +
+                "schemas/ still wired as an androidTest asset srcDir in app/build.gradle.kts?",
+            latest,
+        )
+        return "$ACCOUNT_DATABASE_SCHEMA_DIR/$latest.json"
+    }
+
+    private companion object {
+        const val ACCOUNT_DATABASE_SCHEMA_DIR = "org.libremail.data.local.AccountDatabase"
     }
 }
