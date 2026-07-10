@@ -64,6 +64,7 @@ class DatabaseProvisionerTest {
         // detekt-forbidden, epic #324) so it does not throw "not mocked".
         mockkStatic(android.util.Log::class)
         every { android.util.Log.w(any<String>(), any<String>(), any()) } returns 0
+        every { android.util.Log.i(any(), any()) } returns 0
 
         every { context.getDatabasePath(any()) } returns File("libremail.db")
         every { DatabaseFiles.clear(any()) } just Runs
@@ -78,6 +79,8 @@ class DatabaseProvisionerTest {
         coEvery { keyStore.resetSealedPassphrase() } just Runs
         coEvery { keyStore.clearClearPending() } just Runs
         coEvery { keyStore.resolvePassphrase(any()) } returns PASSPHRASE
+        coEvery { keyStore.hasAuthSealedPassphrase() } returns false
+        coEvery { keyStore.sealWithMaster() } just Runs
         coEvery { accountDataMigrator.migrateIfNeeded() } just Runs
     }
 
@@ -278,6 +281,46 @@ class DatabaseProvisionerTest {
         assertEquals(CacheOpenMode.Plaintext, mode)
         verify(exactly = 1) { DatabaseEncryption.ensurePlaintext(any(), PASSPHRASE) }
         verify(exactly = 0) { DatabaseEncryption.ensureEncrypted(any(), any()) }
+        // No auth seal exists (the passphrase was master-sealed), so nothing must be resealed.
+        coVerify(exactly = 0) { keyStore.sealWithMaster() }
+    }
+
+    @Test
+    fun `decrypt-on-disable releases a lingering auth seal by resealing under the master key`() = runTest {
+        // Issue #479: after the decrypt-to-plaintext conversion the auth seal is an orphan — nothing
+        // needs it to open the DB, but its presence keeps the app in the transitional window where
+        // losing the auth-bound key forces a needless cache wipe. It must be resealed under the
+        // master key AFTER the file conversion (the passphrase is still in hand on this path).
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = false, appLock = true))
+        every { DatabaseEncryption.isEncrypted(any()) } returns true
+        coEvery { keyStore.hasAuthSealedPassphrase() } returns true
+
+        val mode = provisioner().prepareCache()
+
+        assertEquals(CacheOpenMode.Plaintext, mode)
+        coVerifyOrder {
+            keyStore.resolvePassphrase(true)
+            DatabaseEncryption.ensurePlaintext(any(), PASSPHRASE)
+            keyStore.sealWithMaster()
+        }
+    }
+
+    @Test
+    fun `a failed reseal after decrypt-on-disable is non-fatal and still opens plaintext`() = runTest {
+        // The reseal is best-effort: the cache is already plaintext, so a Keystore hiccup must not
+        // fail the open (the lingering seal is handled defensively by the guard and the policy).
+        every { settingsRepository.settings } returns flowOf(AppSettings(encryptCache = false, appLock = true))
+        every { DatabaseEncryption.isEncrypted(any()) } returns true
+        coEvery { keyStore.hasAuthSealedPassphrase() } returns true
+        coEvery { keyStore.sealWithMaster() } throws IllegalStateException("keystore busy")
+
+        val mode = provisioner().prepareCache()
+
+        assertEquals(CacheOpenMode.Plaintext, mode)
+        coVerify(exactly = 1) { keyStore.sealWithMaster() }
+        // Fail soft, never destructive: the seal is left alone rather than reset/wiped.
+        coVerify(exactly = 0) { keyStore.resetSealedPassphrase() }
+        verify(exactly = 0) { DatabaseFiles.clear(any()) }
     }
 
     @Test

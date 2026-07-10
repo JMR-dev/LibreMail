@@ -17,8 +17,9 @@ enum class LockAction {
     CLEAR_AND_REQUIRE_AUTH,
 
     /**
-     * The device no longer has a secure lock and there is nothing encrypted to protect: silently
-     * disable app-lock (there is no key to authenticate against) and proceed.
+     * The device no longer has a secure lock and there is nothing encrypted to protect — the
+     * encrypted-cache setting is off AND no auth-sealed passphrase exists: silently disable
+     * app-lock (there is no key to authenticate against) and proceed.
      */
     DISABLE_APP_LOCK,
 
@@ -31,22 +32,32 @@ enum class LockAction {
 }
 
 /**
- * Pure decision table reconciling the app-lock / encrypted-cache settings with the current device
+ * Pure decision table reconciling the app-lock / encrypted-cache state with the current device
  * security state and Keystore key validity. Extracted from any Android or crypto dependency so the
  * (security-critical) branch logic — in particular the "clear + re-sync, never corrupt" handling of
  * lock removal and biometric re-enrollment — is fully unit-tested.
  */
 object KeyInvalidationPolicy {
 
+    /**
+     * [encryptedCacheProtected] must reflect the ACTUAL protection state, not the `encryptCache`
+     * setting alone: the setting is written immediately but the on-disk conversion is deferred to
+     * the next cold start, so an auth-sealed (still encrypted) cache can outlive the setting being
+     * off. Callers derive it as `encryptCache setting || an auth-sealed passphrase exists`
+     * (issue #479); feeding the raw setting here silently disabled app-lock during that
+     * transitional window and stranded a permanently unreadable cache.
+     */
     fun decide(
         appLockEnabled: Boolean,
-        encryptCacheEnabled: Boolean,
+        encryptedCacheProtected: Boolean,
         deviceSecure: Boolean,
         keyInvalidated: Boolean,
     ): LockAction = when {
         !appLockEnabled -> LockAction.PROCEED
-        !deviceSecure -> if (encryptCacheEnabled) LockAction.CLEAR_AND_DISABLE else LockAction.DISABLE_APP_LOCK
-        keyInvalidated -> if (encryptCacheEnabled) LockAction.CLEAR_AND_REQUIRE_AUTH else LockAction.REQUIRE_AUTH
+        !deviceSecure ->
+            if (encryptedCacheProtected) LockAction.CLEAR_AND_DISABLE else LockAction.DISABLE_APP_LOCK
+        keyInvalidated ->
+            if (encryptedCacheProtected) LockAction.CLEAR_AND_REQUIRE_AUTH else LockAction.REQUIRE_AUTH
         else -> LockAction.REQUIRE_AUTH
     }
 }

@@ -142,9 +142,19 @@ class AppLockViewModel @Inject constructor(
             // renders before the (async) decision lands.
             if (_uiState.value == AppLockUiState.Unlocked) _uiState.value = AppLockUiState.Checking
             val action = withContext(defaultDispatcher) {
+                // Key the decision off the ACTUAL protection state, not the encryptCache setting
+                // alone: the setting flips immediately, but the on-disk decrypt runs at the next
+                // cold start, so an auth-sealed (still encrypted) cache can outlive
+                // `encryptCache == false`. Losing the auth key in that window must CLEAR (wipe +
+                // re-sync), never silently disable the lock and strand the seal — the same
+                // gate-on-the-seal fix SettingsViewModel.setAppLock already carries (issue #479).
+                val authSealed = databaseKeyStore.hasAuthSealedPassphrase()
+                if (authSealed && !settings.encryptCache) {
+                    AppLog.i(TAG, "encryptCache off but passphrase still auth-sealed; treating cache as protected")
+                }
                 KeyInvalidationPolicy.decide(
                     appLockEnabled = true,
-                    encryptCacheEnabled = settings.encryptCache,
+                    encryptedCacheProtected = settings.encryptCache || authSealed,
                     deviceSecure = appLockManager.isDeviceSecure(),
                     keyInvalidated = databaseKeyCipher.isInvalidated(),
                 )
@@ -155,6 +165,9 @@ class AppLockViewModel @Inject constructor(
                 LockAction.PROCEED -> _uiState.value = AppLockUiState.Unlocked
 
                 LockAction.DISABLE_APP_LOCK -> {
+                    // Only reachable when NO auth-sealed passphrase exists (encryptedCacheProtected
+                    // above ORs the seal in), so dropping the gate here can never orphan a seal or
+                    // strand a still-encrypted cache — those states land on CLEAR_AND_DISABLE.
                     settingsRepository.setAppLock(false)
                     _uiState.value = AppLockUiState.Unlocked
                 }

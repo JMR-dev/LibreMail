@@ -27,8 +27,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.libremail.data.security.DatabaseKeyStore
 import org.libremail.data.security.EncryptedCacheGuard
 import org.libremail.data.security.PassphraseSession
+import org.libremail.data.security.SealState
 import org.libremail.data.settings.AppSettings
 import org.libremail.data.settings.SettingsRepository
 import org.libremail.data.sync.BackfillPacer
@@ -162,11 +164,15 @@ class FetchGateReceiverInstrumentedTest {
         return requireNotNull(readBack[0]) { "receiver set no result data" }
     }
 
-    /** A real [EncryptedCacheGuard] reporting UNLOCKED (app-lock off) — so only the gate can defer. */
+    /** A real [EncryptedCacheGuard] reporting UNLOCKED (app-lock off, no seal) — so only the gate can defer. */
     private fun unlockedGuard(): EncryptedCacheGuard {
         val settingsRepository = mockk<SettingsRepository>()
         every { settingsRepository.settings } returns flowOf(AppSettings(appLock = false, encryptCache = true))
-        return EncryptedCacheGuard(settingsRepository, session)
+        // No seal exists (issue #479: the guard answers from the seal state, not the settings pair),
+        // so the un-armed cache never blocks and only the fetch gate can defer the worker.
+        val keyStore = mockk<DatabaseKeyStore>()
+        coEvery { keyStore.sealState() } returns SealState.NONE
+        return EncryptedCacheGuard(context, settingsRepository, keyStore, session)
     }
 
     private fun backfillWorkerFactory(lazyBackfiller: Lazy<MailBackfiller>, cacheGuard: EncryptedCacheGuard) =
